@@ -61,16 +61,14 @@ const colors = {
   inputBg: ansi.bg(40, 40, 60),
 };
 
-// Branch lane colors for graph visualization
-const branchPalette = [
-  ansi.fg(86, 194, 244),   // blue
-  ansi.fg(120, 220, 150),  // green
-  ansi.fg(255, 167, 89),   // orange
-  ansi.fg(224, 108, 117),  // red
-  ansi.fg(180, 130, 230),  // purple
-  ansi.fg(229, 192, 100),  // yellow
-  ansi.fg(90, 210, 200),   // teal
-  ansi.fg(240, 140, 180),  // pink
+// Serie-style branch lane colors (6 colors from serie's palette)
+const seriePalette = [
+  ansi.fg(224, 108, 118),  // red/coral
+  ansi.fg(152, 195, 121),  // green
+  ansi.fg(229, 192, 123),  // yellow
+  ansi.fg(97, 175, 239),   // blue
+  ansi.fg(198, 120, 221),  // purple
+  ansi.fg(86, 182, 194),   // cyan
 ];
 
 // ============================================================
@@ -298,18 +296,6 @@ function gitCommit(cwd, message) {
   }
 }
 
-function gitLogGraph(cwd, extraRefs) {
-  try {
-    const args = ['log', '--graph', '--all', '--oneline', '--decorate', '--color=never'];
-    if (extraRefs && extraRefs.length > 0) args.push(...extraRefs);
-    return execFileSync('git', args, {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    }).replace(/\r\n/g, '\n').trim();
-  } catch {
-    return '';
-  }
-}
-
 function gitStashRefs(cwd) {
   try {
     const raw = git(['stash', 'list', '--format=%H\t%h\t%gd'], cwd).trim();
@@ -340,6 +326,245 @@ function gitStashDiff(cwd, ref) {
 }
 
 // ============================================================
+// Serie-style Graph Engine
+// ============================================================
+function gitLogCommits(cwd, extraRefs, maxCount) {
+  try {
+    const args = ['log', '--all', '--topo-order', '--format=%H%x00%P%x00%D%x00%s'];
+    if (extraRefs && extraRefs.length > 0) args.push(...extraRefs);
+    if (maxCount) args.push('-' + maxCount);
+    const raw = execFileSync('git', args, {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    }).replace(/\r\n/g, '\n').trim();
+    if (!raw) return [];
+    return raw.split('\n').map(line => {
+      const parts = line.split('\0');
+      return {
+        hash: parts[0],
+        parents: parts[1] ? parts[1].split(' ') : [],
+        refs: parts[2] || '',
+        subject: parts[3] || '',
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function calcGraphRows(commits) {
+  const rows = [];
+  let lanes = [];
+  let maxLanes = 0;
+
+  for (const commit of commits) {
+    const { hash, parents } = commit;
+
+    let commitLane = lanes.indexOf(hash);
+    if (commitLane === -1) {
+      // Reuse a null (empty) lane slot to keep graph compact
+      commitLane = lanes.indexOf(null);
+      if (commitLane === -1) {
+        commitLane = lanes.length;
+        lanes.push(hash);
+      } else {
+        lanes[commitLane] = hash;
+      }
+    }
+
+    const merges = [];
+
+    if (parents.length === 0) {
+      lanes[commitLane] = null;
+    } else {
+      lanes[commitLane] = parents[0];
+      for (let p = 1; p < parents.length; p++) {
+        const existing = lanes.indexOf(parents[p]);
+        if (existing !== -1 && existing !== commitLane) {
+          merges.push({ lane: existing, isNew: false });
+        } else if (existing === -1) {
+          // Reuse a null lane slot or append
+          let newLane = lanes.indexOf(null);
+          if (newLane === -1) {
+            newLane = lanes.length;
+            lanes.push(parents[p]);
+          } else {
+            lanes[newLane] = parents[p];
+          }
+          merges.push({ lane: newLane, isNew: true });
+        }
+      }
+    }
+
+    const { chars, charColors } = buildGraphChars(commitLane, lanes, merges);
+    maxLanes = Math.max(maxLanes, lanes.length);
+
+    const shortHash = hash.substring(0, 7);
+    let decoration = '';
+    if (commit.refs) {
+      decoration = ' (' + commit.refs + ')';
+      const sRef = stashMap.get(shortHash);
+      if (sRef) decoration = decoration.replace(/\)$/, ', ' + sRef + ')');
+    } else {
+      const sRef = stashMap.get(shortHash);
+      if (sRef) decoration = ' (' + sRef + ')';
+    }
+
+    rows.push({ type: 'commit', chars, charColors, commitLane, ref: shortHash, decoration, subject: commit.subject });
+
+    // Collapse duplicate lanes (same hash tracked in two lanes)
+    // Set to null instead of splice to keep lane positions stable
+    let collapsed = true;
+    while (collapsed) {
+      collapsed = false;
+      for (let i = 0; i < lanes.length && !collapsed; i++) {
+        if (lanes[i] === null) continue;
+        for (let j = i + 1; j < lanes.length && !collapsed; j++) {
+          if (lanes[j] === lanes[i]) {
+            const cr = buildCollapseChars(i, j, lanes);
+            maxLanes = Math.max(maxLanes, lanes.length);
+            rows.push({ type: 'graph', chars: cr.chars, charColors: cr.charColors, commitLane: -1, ref: null, decoration: '', subject: '' });
+            lanes[j] = null;
+            collapsed = true;
+          }
+        }
+      }
+    }
+
+    // Only remove trailing null lanes (interior nulls are reused later)
+    while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+      lanes.pop();
+    }
+
+    // Emit vertical connector row between commits
+    if (lanes.some(l => l !== null)) {
+      const cw = lanes.length * 2;
+      const cc = new Array(cw).fill(' ');
+      const ccl = new Array(cw).fill(-1);
+      for (let i = 0; i < lanes.length; i++) {
+        if (lanes[i] !== null) {
+          cc[i * 2] = '\u2502';
+          ccl[i * 2] = i;
+        }
+      }
+      rows.push({ type: 'graph', chars: cc, charColors: ccl, commitLane: -1, ref: null, decoration: '', subject: '' });
+    }
+  }
+
+  // Post-process: align all rows to same width, add trailing ─ for commits
+  const graphWidth = maxLanes * 2;
+  for (const row of rows) {
+    // Extend chars/charColors to graphWidth
+    while (row.chars.length < graphWidth) {
+      row.chars.push(' ');
+      row.charColors.push(-1);
+    }
+
+    row.graphStr = renderGraphCharsFixed(row.chars, row.charColors, graphWidth);
+  }
+
+  return rows;
+}
+
+function buildGraphChars(commitLane, lanes, merges) {
+  const n = lanes.length;
+  const width = n * 2;
+  const chars = new Array(width).fill(' ');
+  const charColors = new Array(width).fill(-1);
+
+  for (let i = 0; i < n; i++) {
+    const col = i * 2;
+    if (i === commitLane) {
+      chars[col] = '\u25cf';
+      charColors[col] = commitLane;
+    } else if (lanes[i] !== null) {
+      chars[col] = '\u2502';
+      charColors[col] = i;
+    }
+  }
+
+  for (const merge of merges) {
+    const target = merge.lane;
+    fillHorizontal(chars, charColors, commitLane, target, lanes);
+    const targetCol = target * 2;
+    if (merge.isNew) {
+      chars[targetCol] = target > commitLane ? '\u256e' : '\u256d';
+    } else {
+      chars[targetCol] = target > commitLane ? '\u2524' : '\u251c';
+    }
+    charColors[targetCol] = target;
+  }
+
+  return { chars, charColors };
+}
+
+function buildCollapseChars(keepLane, removeLane, lanes) {
+  const n = lanes.length;
+  const width = n * 2;
+  const chars = new Array(width).fill(' ');
+  const charColors = new Array(width).fill(-1);
+
+  for (let i = 0; i < n; i++) {
+    if (i === keepLane || i === removeLane) continue;
+    if (lanes[i] !== null) {
+      chars[i * 2] = '\u2502';
+      charColors[i * 2] = i;
+    }
+  }
+
+  const keepCol = keepLane * 2;
+  chars[keepCol] = removeLane > keepLane ? '\u251c' : '\u2524';
+  charColors[keepCol] = keepLane;
+
+  const removeCol = removeLane * 2;
+  chars[removeCol] = removeLane > keepLane ? '\u256f' : '\u2570';
+  charColors[removeCol] = removeLane;
+
+  fillHorizontal(chars, charColors, keepLane, removeLane, lanes);
+
+  return { chars, charColors };
+}
+
+function fillHorizontal(chars, charColors, fromLane, toLane, lanes) {
+  const left = Math.min(fromLane, toLane);
+  const right = Math.max(fromLane, toLane);
+  const lineColor = toLane;
+
+  for (let col = left * 2 + 1; col < right * 2; col++) {
+    const isLanePos = (col % 2 === 0);
+    if (isLanePos) {
+      const laneIdx = col / 2 | 0;
+      if (laneIdx === fromLane || laneIdx === toLane) continue;
+      const existing = chars[col];
+      if (existing === '\u2502' || existing === '\u251c' || existing === '\u2524' || existing === '\u256e' || existing === '\u256d') {
+        chars[col] = '\u253c';
+      } else if (existing === ' ') {
+        chars[col] = '\u2500';
+        charColors[col] = lineColor;
+      }
+    } else {
+      if (chars[col] === ' ') {
+        chars[col] = '\u2500';
+        charColors[col] = lineColor;
+      }
+    }
+  }
+}
+
+function renderGraphCharsFixed(chars, charColors, width) {
+  let result = '';
+  for (let i = 0; i < width; i++) {
+    const ch = i < chars.length ? chars[i] : ' ';
+    const cc = i < charColors.length ? charColors[i] : -1;
+    if (cc >= 0) {
+      result += seriePalette[cc % seriePalette.length] + ch + ansi.reset;
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+// ============================================================
 // State
 // ============================================================
 const state = {
@@ -355,7 +580,7 @@ const state = {
   diffLines: [],
   diffScrollOffset: 0,
   rightView: 'diff',     // 'diff' | 'log'
-  logItems: [],           // [{ type:'stash'|'commit'|'header'|'graph', display, ref }]
+  logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
@@ -438,24 +663,41 @@ function refreshLog() {
   const stashRefList = gitStashRefs(state.cwd);
   stashMap = new Map();
   const stashHashes = [];
+  const stashFullHashes = new Set();
   for (const s of stashRefList) {
     stashMap.set(s.shortHash, s.ref);
     stashHashes.push(s.hash);
+    stashFullHashes.add(s.hash);
   }
 
-  // Graph log with stash commits included at their creation points
-  const graphRaw = gitLogGraph(state.cwd, stashHashes);
-  if (graphRaw) {
-    for (const line of graphRaw.split('\n')) {
-      if (!line) continue;
-      const match = line.match(/\*\s+([0-9a-f]{7,})\b/);
-      if (match) {
-        state.logSelectables.push(state.logItems.length);
-        state.logItems.push({ type: 'commit', ref: match[1], display: line });
-      } else {
-        state.logItems.push({ type: 'graph', ref: null, display: line });
+  const rawCommits = gitLogCommits(state.cwd, stashHashes);
+
+  // Filter stash sub-commits (index, untracked) to keep graph clean.
+  // Stash WIP commits are merge commits whose non-first parents are internal.
+  const stashSubHashes = new Set();
+  for (const c of rawCommits) {
+    if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
+      for (let i = 1; i < c.parents.length; i++) {
+        stashSubHashes.add(c.parents[i]);
       }
     }
+  }
+  const commits = stashSubHashes.size > 0
+    ? rawCommits
+        .filter(c => !stashSubHashes.has(c.hash))
+        .map(c => {
+          const fp = c.parents.filter(p => !stashSubHashes.has(p));
+          return fp.length === c.parents.length ? c : { ...c, parents: fp };
+        })
+    : rawCommits;
+
+  const graphRows = calcGraphRows(commits);
+
+  for (const row of graphRows) {
+    if (row.type === 'commit') {
+      state.logSelectables.push(state.logItems.length);
+    }
+    state.logItems.push(row);
   }
 
   if (state.logCursor >= state.logSelectables.length) {
@@ -773,13 +1015,14 @@ function buildLogPanel(w, h) {
 
     if (item.type === 'commit') {
       const prefix = isCursor ? (colors.cursorBg + colors.cursor + '\u25b8') : ' ';
-      const colorized = colorizeGraphLine(item.display, w - 2);
-      const line = prefix + colorized;
-      lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
+      const hashPart = colors.yellow + item.ref + ansi.reset;
+      const decoPart = item.decoration ? colors.cyan + item.decoration + ansi.reset : '';
+      const subjPart = colors.value + item.subject + ansi.reset;
+      const line = prefix + item.graphStr + ' ' + hashPart + decoPart + ' ' + subjPart;
+      lines.push((isCursor ? colors.cursorBg : '') + padRight(truncate(line, w), w) + ansi.reset);
     } else {
-      // graph-only line
-      const colorized = colorizeGraphLine(item.display, w - 2);
-      lines.push(' ' + colorized);
+      // graph-only line (collapse connectors)
+      lines.push(' ' + item.graphStr);
     }
   }
 
@@ -815,52 +1058,6 @@ function buildLogPanel(w, h) {
   }
 
   return lines;
-}
-
-function colorizeGraphChars(str) {
-  let result = '';
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
-    const lane = Math.floor(i / 2);
-    const c = branchPalette[lane % branchPalette.length];
-    switch (ch) {
-      case '*': result += c + '\u25cf' + ansi.reset; break;  // ●
-      case '|': result += c + '\u2502' + ansi.reset; break;  // │
-      case '/': result += c + '\u2571' + ansi.reset; break;  // ╱
-      case '\\': result += c + '\u2572' + ansi.reset; break; // ╲
-      case '_': result += c + '\u2500' + ansi.reset; break;  // ─
-      case '-': result += c + '\u2500' + ansi.reset; break;  // ─
-      default: result += ch; break;
-    }
-  }
-  return result;
-}
-
-function colorizeGraphLine(line, maxW) {
-  const match = line.match(/^([^*]*\*\s+)([0-9a-f]{7,})(\s+\([^)]+\))?\s*(.*)/);
-  if (!match) {
-    // Graph-only line (connectors like │ ╱ ╲)
-    return colorizeGraphChars(truncate(line, maxW));
-  }
-  const graphPart = colorizeGraphChars(match[1]);
-  const hash = match[2];
-  const hashPart = colors.yellow + hash + ansi.reset;
-
-  // Add stash decoration if this commit is a stash
-  let decoStr = match[3] || '';
-  const sRef = stashMap.get(hash);
-  if (sRef) {
-    if (decoStr) {
-      decoStr = decoStr.replace(/\)$/, ', ' + sRef + ')');
-    } else {
-      decoStr = ' (' + sRef + ')';
-    }
-  }
-  const decoPart = decoStr ? colors.cyan + decoStr + ansi.reset : '';
-
-  const usedLen = match[1].length + hash.length + decoStr.length + 1;
-  const subjPart = colors.value + truncate(match[4] || '', maxW - usedLen) + ansi.reset;
-  return graphPart + hashPart + decoPart + ' ' + subjPart;
 }
 
 function colorizeDiffLine(rawLine, w) {
