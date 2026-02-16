@@ -522,63 +522,49 @@ function render() {
   const buf = [];
   buf.push(ansi.clear + ansi.hideCursor);
 
-  // Border characters
-  const TL = '\u250c', TR = '\u2510', BL = '\u2514', BR = '\u2518';
-  const H = '\u2500', V = '\u2502';
-  const TJ = '\u252c', BJ = '\u2534', LJ = '\u251c', RJ = '\u2524', CROSS = '\u253c';
+  // Internal divider characters (outer border drawn by overlay system)
+  const H = '\u2500', V = '\u2502', CROSS = '\u253c';
 
   // Layout dimensions
   const leftW = Math.max(24, Math.floor(width * 0.35));
   const rightW = width - leftW - 1; // -1 for middle divider
-  const bodyH = height - 4; // -2 top/bottom border, -1 separator, -1 hint bar
-  const hintRow = startRow + height - 2;
-  const sepRow = startRow + height - 3;
-
-  // ── Top border ──
-  buf.push(
-    ansi.moveTo(startRow, startCol) +
-    colors.border +
-    TL + H.repeat(leftW) + TJ + H.repeat(rightW - 1) + TR +
-    ansi.reset
-  );
+  const bodyH = height - 2; // -1 title, -1 separator
+  const hintRow = startRow + height - 1;
+  const sepRow = startRow + height - 2;
 
   // ── Title row ──
   const titleL = ' Status';
   const titleR = state.rightView === 'log' ? ' Log' : ' Diff / Detail';
   buf.push(
-    ansi.moveTo(startRow + 1, startCol) +
-    colors.border + V + ansi.reset +
+    ansi.moveTo(startRow, startCol) +
     colors.title + ansi.bold + padRight(titleL, leftW) + ansi.reset +
     colors.border + V + ansi.reset +
-    colors.title + ansi.bold + padRight(titleR, rightW - 2) + ansi.reset +
-    colors.border + V + ansi.reset
+    colors.title + ansi.bold + padRight(titleR, rightW) + ansi.reset
   );
 
   // ── Title separator ──
   buf.push(
-    ansi.moveTo(startRow + 2, startCol) +
+    ansi.moveTo(startRow + 1, startCol) +
     colors.border +
-    LJ + H.repeat(leftW) + CROSS + H.repeat(rightW - 1) + RJ +
+    H.repeat(leftW) + CROSS + H.repeat(rightW) +
     ansi.reset
   );
 
   // ── Body ──
   const leftLines = buildLeftPanel(leftW, bodyH);
   const rightLines = state.rightView === 'log'
-    ? buildLogPanel(rightW - 2, bodyH)
-    : buildRightPanel(rightW - 2, bodyH);
+    ? buildLogPanel(rightW, bodyH)
+    : buildRightPanel(rightW, bodyH);
 
   for (let i = 0; i < bodyH; i++) {
-    const row = startRow + 3 + i;
+    const row = startRow + 2 + i;
     const lContent = i < leftLines.length ? leftLines[i] : '';
     const rContent = i < rightLines.length ? rightLines[i] : '';
     buf.push(
       ansi.moveTo(row, startCol) +
-      colors.border + V + ansi.reset +
       padRight(lContent, leftW) +
       colors.border + V + ansi.reset +
-      padRight(rContent, rightW - 2) +
-      colors.border + V + ansi.reset
+      padRight(rContent, rightW)
     );
   }
 
@@ -586,7 +572,7 @@ function render() {
   buf.push(
     ansi.moveTo(sepRow, startCol) +
     colors.border +
-    LJ + H.repeat(width - 2) + RJ +
+    H.repeat(width) +
     ansi.reset
   );
 
@@ -601,17 +587,7 @@ function render() {
   }
   buf.push(
     ansi.moveTo(hintRow, startCol) +
-    colors.border + V + ansi.reset +
-    padRight(hintContent, width - 2) +
-    colors.border + V + ansi.reset
-  );
-
-  // ── Bottom border ──
-  buf.push(
-    ansi.moveTo(hintRow + 1, startCol) +
-    colors.border +
-    BL + H.repeat(width - 2) + BR +
-    ansi.reset
+    padRight(hintContent, width)
   );
 
   process.stdout.write(buf.join(''));
@@ -622,7 +598,7 @@ function render() {
   // Record clickable areas for hint bar buttons
   clickableAreas = [];
   if (state.mode === 'normal' && !state.error) {
-    const contentStart = startCol + 2; // after │ and space
+    const contentStart = startCol + 1; // after space
     // Build plain text of hint line to find button positions
     let plainOffset = 0;
     for (let i = 0; i < hintButtons.length; i++) {
@@ -1220,13 +1196,13 @@ async function main() {
       // Scroll wheel
       if (cb === 64 || cb === 65) {
         const L = lastLayout;
-        const inLeft = cx > L.startCol && cx <= L.startCol + L.leftW;
-        const inRight = cx > L.startCol + L.leftW + 1 && cx < L.startCol + L.width;
-        const inBody = cy >= L.startRow + 3 && cy < L.startRow + 3 + L.bodyH;
+        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+        const inRight = cx > L.startCol + L.leftW && cx < L.startCol + L.width;
+        const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
         if (inBody && inRight) {
           if (state.rightView === 'log') {
             // Determine if mouse is in commit list or detail area
-            const rightRowIdx = cy - (L.startRow + 3);
+            const rightRowIdx = cy - (L.startRow + 2);
             if (rightRowIdx < lastLogListH) {
               // Scroll commit/stash list
               if (state.logSelectables.length > 0) {
@@ -1274,8 +1250,8 @@ async function main() {
         }
 
         // Click on left panel (file list)
-        const inLeft = cx > L.startCol && cx <= L.startCol + L.leftW;
-        const bodyRowIdx = cy - (L.startRow + 3);
+        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+        const bodyRowIdx = cy - (L.startRow + 2);
         if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
           if (bodyRowIdx < fileLineMap.length && fileLineMap[bodyRowIdx] >= 0) {
             state.cursor = fileLineMap[bodyRowIdx];
@@ -1287,7 +1263,7 @@ async function main() {
         }
 
         // Click on right panel
-        const inRight = cx > L.startCol + L.leftW + 1 && cx < L.startCol + L.width;
+        const inRight = cx > L.startCol + L.leftW && cx < L.startCol + L.width;
         if (inRight && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
           state.focusPanel = 'diff';
           if (state.rightView === 'log' && bodyRowIdx < lastLogListH) {
