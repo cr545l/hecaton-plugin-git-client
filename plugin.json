@@ -1,0 +1,16 @@
+{
+  "id": "git-client",
+  "name": "Git Client",
+  "version": "0.1.0",
+  "entry": "main.js",
+  "runtime": "node",
+  "apiVersion": { "major": 1, "minor": 0 },
+  "shortcut": { "key": "G", "mod": "ctrl+shift" },
+  "overlay": {
+    "mode": "floating",
+    "width": "70%",
+    "height": "70%",
+    "z_order": 50,
+    "maximizable": true
+  }
+}
