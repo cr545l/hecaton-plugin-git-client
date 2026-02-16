@@ -11,6 +11,8 @@
     "width": "70%",
     "height": "70%",
     "z_order": 50,
-    "maximizable": true
+    "maximizable": true,
+    "minimized_label": "Git",
+    "minimized_label_color": "#82B4FF"
   }
 }

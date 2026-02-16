@@ -899,9 +899,9 @@ function buildHintText() {
 
 function renderMinimized() {
   const cols = termCols;
-  let line = colors.title + ansi.bold + ' Git' + ansi.reset;
+  let line = '';
   if (state.branch) {
-    line += colors.dim + ' | ' + ansi.reset + colors.cyan + state.branch + ansi.reset;
+    line += colors.cyan + state.branch + ansi.reset;
   }
   const fileCount = state.staged.length + state.unstaged.length + state.untracked.length;
   if (fileCount > 0) {
@@ -1137,29 +1137,34 @@ async function main() {
   process.stdin.setEncoding('utf-8');
 
   process.stdin.on('data', (data) => {
-    // Check for RPC messages from host
-    if (data.startsWith('__HECA_RPC__')) {
-      try {
-        const json = JSON.parse(data.slice(12).trim());
-        // Notification from host (has method, no id response)
-        if (json.method === 'resize' && json.params) {
-          termCols = json.params.cols || termCols;
-          termRows = json.params.rows || termRows;
-          render();
-        } else if (json.method === 'minimize') {
-          state.minimized = true;
-          render();
-        } else if (json.method === 'maximize') {
-          // Host handles sizing; plugin just re-renders on resize
-        } else if (json.method === 'restore') {
-          state.minimized = false;
-          refresh();
-          render();
-        } else {
-          // RPC response
-          handleRpcResponse(json);
-        }
-      } catch { /* ignore */ }
+    // Check for RPC messages from host.
+    // Multiple RPCs can arrive in a single read (pipe buffering), so split and
+    // process each one separately.
+    if (data.indexOf('__HECA_RPC__') !== -1) {
+      const segments = data.split('__HECA_RPC__');
+      for (const seg of segments) {
+        const trimmed = seg.trim();
+        if (!trimmed) continue;
+        try {
+          const json = JSON.parse(trimmed);
+          if (json.method === 'resize' && json.params) {
+            termCols = json.params.cols || termCols;
+            termRows = json.params.rows || termRows;
+            render();
+          } else if (json.method === 'minimize') {
+            state.minimized = true;
+            render();
+          } else if (json.method === 'maximize') {
+            // Host handles sizing; plugin just re-renders on resize
+          } else if (json.method === 'restore') {
+            state.minimized = false;
+            refresh();
+            render();
+          } else {
+            handleRpcResponse(json);
+          }
+        } catch { /* ignore malformed segment */ }
+      }
       return;
     }
 
