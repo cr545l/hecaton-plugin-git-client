@@ -444,19 +444,7 @@ function calcGraphRows(commits) {
       lanes.pop();
     }
 
-    // Emit vertical connector row between commits
-    if (lanes.some(l => l !== null)) {
-      const cw = lanes.length * 2;
-      const cc = new Array(cw).fill(' ');
-      const ccl = new Array(cw).fill(-1);
-      for (let i = 0; i < lanes.length; i++) {
-        if (lanes[i] !== null) {
-          cc[i * 2] = '\u2502';
-          ccl[i * 2] = i;
-        }
-      }
-      rows.push({ type: 'graph', chars: cc, charColors: ccl, commitLane: -1, ref: null, decoration: '', subject: '' });
-    }
+    // (connector rows removed — one line per commit)
   }
 
   // Post-process: align all rows to same width, add trailing ─ for commits
@@ -960,16 +948,19 @@ function buildLeftPanel(w, h) {
   const fileList = buildFileList();
   let listIdx = 0;
 
+  const focused = state.focusPanel === 'status';
+
   // Staged
   pushLine(colors.sectionHeader + ansi.bold + ' Staged (' + state.staged.length + ')' + ansi.reset, -1);
   for (let i = 0; i < state.staged.length; i++) {
     const item = state.staged[i];
-    const isCursor = state.focusPanel === 'status' && state.cursor === listIdx;
-    if (isCursor) cursorLineIdx = lines.length;
-    const prefix = isCursor ? (colors.cursorBg + colors.cursor + ' \u25b8 ') : '   ';
+    const isSelected = state.cursor === listIdx;
+    if (isSelected) cursorLineIdx = lines.length;
+    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
+    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
     const statusColor = colors.green;
     const line = prefix + statusColor + item.status + ansi.reset + ' ' + truncate(item.file, innerW - 6);
-    pushLine((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset, listIdx);
+    pushLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
 
@@ -979,12 +970,13 @@ function buildLeftPanel(w, h) {
   pushLine(colors.sectionHeader + ansi.bold + ' Unstaged (' + state.unstaged.length + ')' + ansi.reset, -1);
   for (let i = 0; i < state.unstaged.length; i++) {
     const item = state.unstaged[i];
-    const isCursor = state.focusPanel === 'status' && state.cursor === listIdx;
-    if (isCursor) cursorLineIdx = lines.length;
-    const prefix = isCursor ? (colors.cursorBg + colors.cursor + ' \u25b8 ') : '   ';
+    const isSelected = state.cursor === listIdx;
+    if (isSelected) cursorLineIdx = lines.length;
+    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
+    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
     const statusColor = colors.red;
     const line = prefix + statusColor + item.status + ansi.reset + ' ' + truncate(item.file, innerW - 6);
-    pushLine((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset, listIdx);
+    pushLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
 
@@ -994,11 +986,12 @@ function buildLeftPanel(w, h) {
   pushLine(colors.sectionHeader + ansi.bold + ' Untracked (' + state.untracked.length + ')' + ansi.reset, -1);
   for (let i = 0; i < state.untracked.length; i++) {
     const item = state.untracked[i];
-    const isCursor = state.focusPanel === 'status' && state.cursor === listIdx;
-    if (isCursor) cursorLineIdx = lines.length;
-    const prefix = isCursor ? (colors.cursorBg + colors.cursor + ' \u25b8 ') : '   ';
+    const isSelected = state.cursor === listIdx;
+    if (isSelected) cursorLineIdx = lines.length;
+    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
+    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
     const line = prefix + colors.dim + '?' + ansi.reset + ' ' + truncate(item.file, innerW - 6);
-    pushLine((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset, listIdx);
+    pushLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
 
