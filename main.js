@@ -72,6 +72,187 @@ const seriePalette = [
 ];
 
 // ============================================================
+// Sixel Graph Rendering
+// ============================================================
+const SIXEL_ENABLED = true;
+const CELL_W = 8;
+const CELL_H = 16;
+const LINE_W = 2;
+const DOT_R = 3;
+const SIXEL_PALETTE = [
+  [224, 108, 118],
+  [152, 195, 121],
+  [229, 192, 123],
+  [97,  175, 239],
+  [198, 120, 221],
+  [86,  182, 194],
+];
+
+function pxSet(buf, w, h, x, y, c) { if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c; }
+
+function pxVLine(buf, w, h, x, y0, y1, c, t) {
+  const half = t >> 1;
+  for (let dx = -half; dx < t - half; dx++)
+    for (let y = y0; y <= y1; y++) pxSet(buf, w, h, x + dx, y, c);
+}
+
+function pxHLine(buf, w, h, x0, x1, y, c, t) {
+  const half = t >> 1;
+  for (let dy = -half; dy < t - half; dy++)
+    for (let x = x0; x <= x1; x++) pxSet(buf, w, h, x, y + dy, c);
+}
+
+function pxCircle(buf, w, h, cx, cy, r, c) {
+  const r2 = r * r;
+  for (let dy = -r; dy <= r; dy++)
+    for (let dx = -r; dx <= r; dx++)
+      if (dx * dx + dy * dy <= r2) pxSet(buf, w, h, cx + dx, cy + dy, c);
+}
+
+function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
+  const half = t >> 1;
+  const steps = 20;
+  for (let i = 0; i <= steps; i++) {
+    const s = i / steps, ms = 1 - s;
+    const px = Math.round(ms * ms * x0 + 2 * ms * s * x1 + s * s * x2);
+    const py = Math.round(ms * ms * y0 + 2 * ms * s * y1 + s * s * y2);
+    for (let bx = -half; bx < t - half; bx++)
+      for (let by = -half; by < t - half; by++)
+        pxSet(buf, w, h, px + bx, py + by, c);
+  }
+}
+
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevChars, nextChars) {
+  for (let i = 0; i < chars.length && i < numCols; i++) {
+    const ch = chars[i];
+    const cc = charColors[i];
+    if (cc < 0 || ch === ' ') continue;
+    const c = (cc % 6) + 1; // 1-6, 0 = transparent
+    const cx = i * CELL_W + (CELL_W >> 1); // center x of cell
+    const cy = yOff + (CELL_H >> 1);       // center y in combined image
+    const top = yOff, bot = yOff + CELL_H - 1;
+    const left = i * CELL_W, right = (i + 1) * CELL_W - 1;
+
+    switch (ch) {
+      case '\u2502': // │ vertical line
+        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
+        break;
+      case '\u25cf': { // ● commit dot
+        const hasAbove = prevChars && i < prevChars.length && prevChars[i] !== ' ';
+        const hasBelow = nextChars && i < nextChars.length && nextChars[i] !== ' ';
+        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - DOT_R - 1, c, LINE_W);
+        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + DOT_R + 1, bot, c, LINE_W);
+        pxCircle(buf, pw, ph, cx, cy, DOT_R, c);
+        break;
+      }
+      case '\u251c': // ├ vertical + right
+        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
+        pxHLine(buf, pw, ph, cx, right, cy, c, LINE_W);
+        break;
+      case '\u2524': // ┤ vertical + left
+        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
+        pxHLine(buf, pw, ph, left, cx, cy, c, LINE_W);
+        break;
+      case '\u256e': // ╮ bezier: left → down
+        pxBezier(buf, pw, ph, left, cy, cx, cy, cx, bot, c, LINE_W);
+        break;
+      case '\u256d': // ╭ bezier: right → down
+        pxBezier(buf, pw, ph, right, cy, cx, cy, cx, bot, c, LINE_W);
+        break;
+      case '\u256f': // ╯ bezier: up → left
+        pxBezier(buf, pw, ph, cx, top, cx, cy, left, cy, c, LINE_W);
+        break;
+      case '\u2570': // ╰ bezier: up → right
+        pxBezier(buf, pw, ph, cx, top, cx, cy, right, cy, c, LINE_W);
+        break;
+      case '\u2500': // ─ horizontal line
+        pxHLine(buf, pw, ph, left, right, cy, c, LINE_W);
+        break;
+      case '\u253c': // ┼ cross
+        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
+        pxHLine(buf, pw, ph, left, right, cy, c, LINE_W);
+        break;
+    }
+  }
+}
+
+function renderCombinedGraphPixels(graphRows, numCols) {
+  const pw = numCols * CELL_W;
+  const ph = graphRows.length * CELL_H;
+  if (pw <= 0 || ph <= 0) return null;
+  const buf = new Uint8Array(pw * ph);
+  for (let r = 0; r < graphRows.length; r++) {
+    const row = graphRows[r];
+    if (!row) continue;
+    const prev = r > 0 && graphRows[r - 1] ? graphRows[r - 1].chars : null;
+    const next = r < graphRows.length - 1 && graphRows[r + 1] ? graphRows[r + 1].chars : null;
+    renderGraphRowInto(buf, pw, ph, r * CELL_H, row.chars, row.charColors, numCols, prev, next);
+  }
+  return buf;
+}
+
+function encodeSixel(buf, w, h, palette) {
+  // DCS header: P0;1;0q  (Ps2=1 → transparent background)
+  let out = '\x1bP0;1;0q';
+  // Raster attributes
+  out += '"1;1;' + w + ';' + h;
+  // Palette definitions (RGB 0-100)
+  for (let i = 0; i < palette.length; i++) {
+    const [r, g, b] = palette[i];
+    out += '#' + (i + 1) + ';2;' + Math.round(r * 100 / 255) + ';' + Math.round(g * 100 / 255) + ';' + Math.round(b * 100 / 255);
+  }
+  // Pixel data: process 6 rows at a time (one sixel band)
+  for (let bandY = 0; bandY < h; bandY += 6) {
+    const bandH = Math.min(6, h - bandY);
+    let bandHasData = false;
+    for (let ci = 1; ci <= palette.length; ci++) {
+      // Build sixel row for this color
+      let row = '';
+      let runChar = '';
+      let runLen = 0;
+      for (let x = 0; x < w; x++) {
+        let bits = 0;
+        for (let dy = 0; dy < bandH; dy++) {
+          const y = bandY + dy;
+          if (buf[y * w + x] === ci) bits |= (1 << dy);
+        }
+        const ch = String.fromCharCode(63 + bits);
+        if (ch === runChar) {
+          runLen++;
+        } else {
+          if (runLen > 0) {
+            if (runLen >= 4) row += '!' + runLen + runChar;
+            else row += runChar.repeat(runLen);
+          }
+          runChar = ch;
+          runLen = 1;
+        }
+      }
+      if (runLen > 0) {
+        if (runLen >= 4) row += '!' + runLen + runChar;
+        else row += runChar.repeat(runLen);
+      }
+      // Skip color if entirely transparent (all '?' = 63+0)
+      if (row.replace(/[!0-9]/g, '').replace(/\?/g, '') === '') continue;
+      bandHasData = true;
+      out += '#' + ci + row + '$'; // $ = carriage return (same band, next color)
+    }
+    if (bandHasData) {
+      // Remove trailing $ and add - (next band / line feed)
+      if (out.endsWith('$')) out = out.slice(0, -1);
+    }
+    out += '-'; // - = next sixel line (band)
+  }
+  // Remove trailing -
+  if (out.endsWith('-')) out = out.slice(0, -1);
+  // String terminator
+  out += '\x1b\\';
+  return out;
+}
+
+let logSixelOverlay = null;  // single combined Sixel overlay
+
+// ============================================================
 // Terminal Size & Mouse State
 // ============================================================
 let termCols = parseInt(process.env.HECA_COLS || '80', 10);
@@ -457,7 +638,8 @@ function calcGraphRows(commits) {
 
   // Post-process: align all rows to same width, add trailing ─ for commits
   const graphWidth = maxLanes * 2;
-  for (const row of rows) {
+  for (let idx = 0; idx < rows.length; idx++) {
+    const row = rows[idx];
     // Extend chars/charColors to graphWidth
     while (row.chars.length < graphWidth) {
       row.chars.push(' ');
@@ -465,6 +647,8 @@ function calcGraphRows(commits) {
     }
 
     row.graphStr = renderGraphCharsFixed(row.chars, row.charColors, graphWidth);
+
+    // Sixel is now generated as a single combined image in buildLogPanel
   }
 
   return rows;
@@ -901,6 +1085,14 @@ function render() {
     padRight(hintContent, width)
   );
 
+  // Append single combined Sixel overlay (one DCS — survives pipe chunking)
+  if (SIXEL_ENABLED && logSixelOverlay && state.rightView === 'log') {
+    const graphCol = startCol + leftW + dividerW + 1; // +1 for prefix char
+    const screenRow = startRow + 2; // first body row
+    buf.push(ansi.moveTo(screenRow, graphCol) + logSixelOverlay);
+  }
+  logSixelOverlay = null;
+
   process.stdout.write(buf.join(''));
 
   // Record layout for mouse hit testing
@@ -1138,19 +1330,24 @@ function buildLogPanel(w, h) {
 
   // ── Item list ──
   const visibleItems = state.logItems.slice(state.logScrollOffset, state.logScrollOffset + listH);
+  const graphRows = []; // collect graph data for combined Sixel image
+  let graphWidth = 0;
   for (let i = 0; i < listH; i++) {
     const itemIdx = state.logScrollOffset + i;
     const item = visibleItems[i];
-    if (!item) { lines.push(''); continue; }
+    if (!item) { lines.push(''); graphRows.push(null); continue; }
 
     const isCursor = state.focusPanel === 'diff' && itemIdx === selectedItemIdx;
 
     if (item.type === 'commit') {
       const prefix = isCursor ? (colors.cursorBg + colors.cursor + '\u25b8') : ' ';
+      const graphVisLen = visLen(item.graphStr);
+      // Use spaces for graph area when Sixel is active (Sixel overlay will cover it)
+      const graphPart = SIXEL_ENABLED
+        ? ' '.repeat(graphVisLen) + ' '
+        : item.graphStr + ' ';
       // 고정 부분: prefix + graph + hash(7)
-      const graphPart = item.graphStr + ' ';
-      const hashStr = ' ' + item.ref;  // " abc1234"
-      const fixedLen = 1 + visLen(graphPart) + 7 + 1; // prefix(1) + graph + hash(7) + space(1)
+      const fixedLen = 1 + graphVisLen + 1 + 7 + 1; // prefix(1) + graph + space + hash(7) + space(1)
       const available = w - fixedLen;
       // decoration에서 괄호 제거: " (main, origin/main)" → "main, origin/main"
       const decoRaw = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
@@ -1165,11 +1362,9 @@ function buildLogPanel(w, h) {
         const subjNeed = visLen(item.subject);
         const decoNeed = visLen(decoRaw) + 1; // +1 for leading space
         if (subjNeed + decoNeed <= available) {
-          // 둘 다 들어감
           subjStr = item.subject;
           decoStr = ' ' + decoRaw;
         } else {
-          // 메시지 우선, 브랜치는 남는 공간에 잘려서 표시
           const subjW = Math.min(subjNeed, available - Math.min(decoNeed, Math.max(4, available - subjNeed)));
           subjStr = truncate(item.subject, subjW);
           const decoW = available - visLen(subjStr);
@@ -1184,14 +1379,26 @@ function buildLogPanel(w, h) {
       const subjPart = colors.value + subjStr + ansi.reset;
       const decoPart = decoStr ? colors.cyan + decoStr + ansi.reset : '';
       const hashPart = colors.yellow + item.ref + ansi.reset;
-      // 메시지+브랜치 뒤에 패딩 → 해시를 맨 오른쪽에 배치
-      const usedLen = 1 + visLen(graphPart) + visLen(subjStr) + visLen(decoStr);
+      const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoStr);
       const pad = Math.max(1, w - usedLen - 7);
       const line = prefix + graphPart + subjPart + decoPart + ' '.repeat(pad) + hashPart;
       lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
+      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
+      if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
     } else {
       // graph-only line (collapse connectors)
-      lines.push(' ' + item.graphStr);
+      const graphPart = SIXEL_ENABLED ? ' '.repeat(visLen(item.graphStr)) : item.graphStr;
+      lines.push(' ' + graphPart);
+      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
+      if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
+    }
+  }
+
+  // Generate combined Sixel image for the entire graph column
+  if (SIXEL_ENABLED && graphRows.length > 0 && graphWidth > 0) {
+    const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth);
+    if (pixBuf) {
+      logSixelOverlay = encodeSixel(pixBuf, graphWidth * CELL_W, graphRows.length * CELL_H, SIXEL_PALETTE);
     }
   }
 
