@@ -420,21 +420,29 @@ function calcGraphRows(commits) {
 
     rows.push({ type: 'commit', chars, charColors, commitLane, ref: shortHash, decoration, subject: commit.subject });
 
-    // Collapse duplicate lanes (same hash tracked in two lanes)
-    // Set to null instead of splice to keep lane positions stable
-    let collapsed = true;
-    while (collapsed) {
-      collapsed = false;
-      for (let i = 0; i < lanes.length && !collapsed; i++) {
-        if (lanes[i] === null) continue;
-        for (let j = i + 1; j < lanes.length && !collapsed; j++) {
-          if (lanes[j] === lanes[i]) {
-            const cr = buildCollapseChars(i, j, lanes);
-            maxLanes = Math.max(maxLanes, lanes.length);
-            rows.push({ type: 'graph', chars: cr.chars, charColors: cr.charColors, commitLane: -1, ref: null, decoration: '', subject: '' });
-            lanes[j] = null;
-            collapsed = true;
+    // Collapse duplicate lanes — merge visual into the commit row
+    const lastRow = rows[rows.length - 1];
+    for (let i = 0; i < lanes.length; i++) {
+      if (lanes[i] === null) continue;
+      for (let j = i + 1; j < lanes.length; j++) {
+        if (lanes[j] === lanes[i]) {
+          maxLanes = Math.max(maxLanes, lanes.length);
+          while (lastRow.chars.length < lanes.length * 2) {
+            lastRow.chars.push(' ');
+            lastRow.charColors.push(-1);
           }
+          const keepCol = i * 2;
+          const removeCol = j * 2;
+          if (lastRow.chars[removeCol] === '\u2502') {
+            lastRow.chars[removeCol] = j > i ? '\u256f' : '\u2570';
+            lastRow.charColors[removeCol] = j;
+          }
+          if (lastRow.chars[keepCol] === '\u2502') {
+            lastRow.chars[keepCol] = j > i ? '\u251c' : '\u2524';
+            lastRow.charColors[keepCol] = i;
+          }
+          fillHorizontal(lastRow.chars, lastRow.charColors, i, j, lanes);
+          lanes[j] = null;
         }
       }
     }
