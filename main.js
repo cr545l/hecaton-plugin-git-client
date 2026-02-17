@@ -1139,11 +1139,48 @@ function buildLogPanel(w, h) {
 
     if (item.type === 'commit') {
       const prefix = isCursor ? (colors.cursorBg + colors.cursor + '\u25b8') : ' ';
+      // 고정 부분: prefix + graph + hash(7)
+      const graphPart = item.graphStr + ' ';
+      const hashStr = ' ' + item.ref;  // " abc1234"
+      const fixedLen = 1 + visLen(graphPart) + 7 + 1; // prefix(1) + graph + hash(7) + space(1)
+      const available = w - fixedLen;
+      // decoration에서 괄호 제거: " (main, origin/main)" → "main, origin/main"
+      const decoRaw = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
+      let subjStr, decoStr;
+      if (available <= 0) {
+        subjStr = '';
+        decoStr = '';
+      } else if (!decoRaw) {
+        subjStr = truncate(item.subject, available);
+        decoStr = '';
+      } else {
+        const subjNeed = visLen(item.subject);
+        const decoNeed = visLen(decoRaw) + 1; // +1 for leading space
+        if (subjNeed + decoNeed <= available) {
+          // 둘 다 들어감
+          subjStr = item.subject;
+          decoStr = ' ' + decoRaw;
+        } else {
+          // 메시지 우선, 브랜치는 남는 공간에 잘려서 표시
+          const subjW = Math.min(subjNeed, available - Math.min(decoNeed, Math.max(4, available - subjNeed)));
+          subjStr = truncate(item.subject, subjW);
+          const decoW = available - visLen(subjStr);
+          if (decoW >= 4) {
+            decoStr = ' ' + truncate(decoRaw, decoW - 1);
+          } else {
+            subjStr = truncate(item.subject, available);
+            decoStr = '';
+          }
+        }
+      }
+      const subjPart = colors.value + subjStr + ansi.reset;
+      const decoPart = decoStr ? colors.cyan + decoStr + ansi.reset : '';
       const hashPart = colors.yellow + item.ref + ansi.reset;
-      const decoPart = item.decoration ? colors.cyan + item.decoration + ansi.reset : '';
-      const subjPart = colors.value + item.subject + ansi.reset;
-      const line = prefix + item.graphStr + ' ' + hashPart + decoPart + ' ' + subjPart;
-      lines.push((isCursor ? colors.cursorBg : '') + padRight(truncate(line, w), w) + ansi.reset);
+      // 메시지+브랜치 뒤에 패딩 → 해시를 맨 오른쪽에 배치
+      const usedLen = 1 + visLen(graphPart) + visLen(subjStr) + visLen(decoStr);
+      const pad = Math.max(1, w - usedLen - 7);
+      const line = prefix + graphPart + subjPart + decoPart + ' '.repeat(pad) + hashPart;
+      lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
     } else {
       // graph-only line (collapse connectors)
       lines.push(' ' + item.graphStr);
@@ -1168,19 +1205,28 @@ function buildLogPanel(w, h) {
 
   // ── Detail ──
   if (detailH > 0) {
+    const selItem = selectedLogRef();
     if (state.logDetailLines.length === 0) {
       lines.push(colors.dim + ' Select an item to view details' + ansi.reset);
       for (let i = 1; i < detailH; i++) lines.push('');
     } else {
-      const maxDetailScroll = Math.max(0, state.logDetailLines.length - detailH);
+      // 첫째줄: 선택된 리비전의 브랜치/refs
+      const refsRaw = selItem && selItem.decoration ? selItem.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
+      if (refsRaw) {
+        lines.push(colors.cyan + ' \u2387 ' + truncate(refsRaw, w - 4) + ansi.reset);
+      } else {
+        lines.push(colors.dim + ' (no refs)' + ansi.reset);
+      }
+      const contentH = detailH - 1;
+      const maxDetailScroll = Math.max(0, state.logDetailLines.length - contentH);
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
-      const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + detailH);
+      const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + contentH);
       for (const rawLine of visible) {
         lines.push(' ' + colorizeDiffLine(rawLine, w));
       }
-      if (state.logDetailLines.length > detailH && lines.length > listH + separatorH) {
+      if (state.logDetailLines.length > contentH && lines.length > listH + separatorH + 1) {
         const pct = Math.round((state.diffScrollOffset / maxDetailScroll) * 100);
-        const idx = listH + separatorH;
+        const idx = listH + separatorH + 1;
         lines[idx] = padRight(lines[idx], w - 6) + colors.dim + ` [${pct}%]` + ansi.reset;
       }
     }
