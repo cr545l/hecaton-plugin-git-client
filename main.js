@@ -80,9 +80,18 @@ let termRows = parseInt(process.env.HECA_ROWS || '24', 10);
 let clickableAreas = [];   // { row, colStart, colEnd, action }
 let hoveredAreaIndex = -1;
 let fileLineMap = [];       // maps visible left-panel line index → file list index (-1 = not a file)
-let lastLayout = { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, rightW: 0, bodyH: 0 };
+let lastLayout = { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, dividerW: 0, rightW: 0, bodyH: 0 };
 let lastLogListH = 0;      // number of rows in log commit list area
 let stashMap = new Map();  // shortHash → stash@{N}
+let verticalDividerRatio = 0.35;   // 세로 구분선 위치 (좌/우 비율)
+let logListRatio = 0.4;            // 로그뷰 가로 구분선 위치 (상/하 비율)
+let dragging = null;               // null | 'vertical' | 'horizontal'
+let leftPanelCollapsed = false;    // Status 패널 접힘 상태
+let rightTopCollapsed = false;     // 우측 상단 섹션 접힘 (History / Diff)
+let rightBottomCollapsed = false;  // 우측 하단 섹션 접힘 (Detail)
+let titleClickZones = [];          // { colStart, colEnd, action }
+let hoveredTitleZoneIndex = -1;
+let hoveredDivider = null;         // null | 'vertical' | 'horizontal'
 
 // ============================================================
 // RPC Communication
@@ -762,52 +771,116 @@ function render() {
   const startRow = 1;
 
   const buf = [];
-  buf.push(ansi.clear + ansi.hideCursor);
+  buf.push(ansi.hideCursor);
 
   // Internal divider characters (outer border drawn by overlay system)
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
 
   // Layout dimensions
-  const leftW = Math.max(24, Math.floor(width * 0.35));
-  const rightW = width - leftW - 1; // -1 for middle divider
+  const leftW = leftPanelCollapsed
+    ? 0
+    : Math.max(1, Math.min(width - 2, Math.floor(width * verticalDividerRatio)));
+  const dividerW = leftPanelCollapsed ? 0 : 1;
+  const rightW = width - leftW - dividerW;
   const bodyH = height - 2; // -1 title, -1 separator
   const hintRow = startRow + height - 1;
   const sepRow = startRow + height - 2;
 
   // ── Title row ──
-  const titleL = ' Status';
-  const titleR = state.rightView === 'log' ? ' Log' : ' Diff / Detail';
-  buf.push(
-    ansi.moveTo(startRow, startCol) +
-    colors.title + ansi.bold + padRight(titleL, leftW) + ansi.reset +
-    colors.border + V + ansi.reset +
-    colors.title + ansi.bold + padRight(titleR, rightW) + ansi.reset
-  );
+  titleClickZones = [];
+  {
+    let titleStr = ansi.moveTo(startRow, startCol);
+    let col = startCol;
+    let zoneIdx = 0;
+
+    // 호버 시 밝은 흰색+밑줄, 기본은 title 색상
+    const zoneStyle = (idx) => (idx === hoveredTitleZoneIndex)
+      ? colors.value + ansi.bold + CSI + '4m'   // underline
+      : colors.title + ansi.bold;
+
+    function pushZone(label, action) {
+      const si = zoneIdx++;
+      titleClickZones.push({ colStart: col, colEnd: col + visLen(label) - 1, action });
+      titleStr += zoneStyle(si) + label + ansi.reset;
+      col += visLen(label);
+    }
+
+    // Status 버튼 (항상 표시)
+    pushZone((leftPanelCollapsed ? ' + ' : ' - ') + 'Status', 'toggleStatus');
+
+    if (leftPanelCollapsed) {
+      // 구분선 없이 우측 타이틀 이어서 표시
+      titleStr += '  '; col += 2;
+    } else {
+      // 패딩 + 구분선
+      titleStr += ' '.repeat(Math.max(0, leftW - (col - startCol)));
+      col = startCol + leftW;
+      titleStr += colors.border + V + ansi.reset;
+      col += 1;
+    }
+
+    {
+      const topLabel = state.rightView === 'log' ? 'History' : 'Diff';
+      const rStart = col;
+      pushZone((rightTopCollapsed ? ' + ' : ' - ') + topLabel, 'toggleHistory');
+      titleStr += '  '; col += 2;
+      pushZone((rightBottomCollapsed ? ' + ' : ' - ') + 'Detail', 'toggleDetail');
+      if (!leftPanelCollapsed) {
+        titleStr += ' '.repeat(Math.max(0, rightW - (col - rStart)));
+      } else {
+        titleStr += ' '.repeat(Math.max(0, width - (col - startCol)));
+      }
+    }
+
+    buf.push(titleStr);
+  }
 
   // ── Title separator ──
-  buf.push(
-    ansi.moveTo(startRow + 1, startCol) +
-    colors.border +
-    H.repeat(leftW) + CROSS + H.repeat(rightW) +
-    ansi.reset
-  );
+  const vDivColor = hoveredDivider === 'vertical' ? colors.value : colors.border;
+  if (leftPanelCollapsed) {
+    buf.push(
+      ansi.moveTo(startRow + 1, startCol) +
+      colors.border +
+      H.repeat(width) +
+      ansi.reset
+    );
+  } else {
+    buf.push(
+      ansi.moveTo(startRow + 1, startCol) +
+      colors.border + H.repeat(leftW) + ansi.reset +
+      vDivColor + CROSS + ansi.reset +
+      colors.border + H.repeat(rightW) + ansi.reset
+    );
+  }
 
   // ── Body ──
-  const leftLines = buildLeftPanel(leftW, bodyH);
   const rightLines = state.rightView === 'log'
     ? buildLogPanel(rightW, bodyH)
     : buildRightPanel(rightW, bodyH);
 
-  for (let i = 0; i < bodyH; i++) {
-    const row = startRow + 2 + i;
-    const lContent = i < leftLines.length ? leftLines[i] : '';
-    const rContent = i < rightLines.length ? rightLines[i] : '';
-    buf.push(
-      ansi.moveTo(row, startCol) +
-      padRight(lContent, leftW) +
-      colors.border + V + ansi.reset +
-      padRight(rContent, rightW)
-    );
+  if (leftPanelCollapsed) {
+    for (let i = 0; i < bodyH; i++) {
+      const row = startRow + 2 + i;
+      const rContent = i < rightLines.length ? rightLines[i] : '';
+      buf.push(
+        ansi.moveTo(row, startCol) +
+        padRight(rContent, width)
+      );
+    }
+    fileLineMap = [];
+  } else {
+    const leftLines = buildLeftPanel(leftW, bodyH);
+    for (let i = 0; i < bodyH; i++) {
+      const row = startRow + 2 + i;
+      const lContent = i < leftLines.length ? leftLines[i] : '';
+      const rContent = i < rightLines.length ? rightLines[i] : '';
+      buf.push(
+        ansi.moveTo(row, startCol) +
+        padRight(lContent, leftW) +
+        vDivColor + V + ansi.reset +
+        padRight(rContent, rightW)
+      );
+    }
   }
 
   // ── Bottom separator ──
@@ -835,7 +908,7 @@ function render() {
   process.stdout.write(buf.join(''));
 
   // Record layout for mouse hit testing
-  lastLayout = { startRow, startCol, width, height, leftW, rightW, bodyH };
+  lastLayout = { startRow, startCol, width, height, leftW, dividerW, rightW, bodyH };
 
   // Record clickable areas for hint bar buttons
   clickableAreas = [];
@@ -957,20 +1030,62 @@ function buildRightPanel(w, h) {
     return lines;
   }
 
-  const maxScroll = Math.max(0, state.diffLines.length - h);
-  if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
+  // Diff(상단) / Detail(하단) 분할 — buildLogPanel과 동일 패턴
+  let diffH, detailH, separatorH;
+  if (rightTopCollapsed && rightBottomCollapsed) {
+    diffH = 0; separatorH = 0; detailH = 0;
+  } else if (rightTopCollapsed) {
+    diffH = 0; separatorH = 0; detailH = h;
+  } else if (rightBottomCollapsed) {
+    diffH = h; separatorH = 0; detailH = 0;
+  } else {
+    diffH = Math.min(Math.max(1, Math.floor(h * logListRatio)), h - 2);
+    separatorH = 1;
+    detailH = h - diffH - separatorH;
+  }
+  lastLogListH = diffH;
 
-  const visible = state.diffLines.slice(state.diffScrollOffset, state.diffScrollOffset + h);
-  for (const rawLine of visible) {
-    lines.push(' ' + colorizeDiffLine(rawLine, w));
+  // ── Diff 섹션 (상단) ──
+  if (diffH > 0) {
+    const maxScroll = Math.max(0, state.diffLines.length - diffH);
+    if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
+    const visible = state.diffLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+    for (const rawLine of visible) {
+      lines.push(' ' + colorizeDiffLine(rawLine, w));
+    }
+    if (state.diffLines.length > diffH) {
+      const pct = Math.round((state.diffScrollOffset / maxScroll) * 100);
+      const indicator = colors.dim + ` [${pct}%]` + ansi.reset;
+      if (lines.length > 0) {
+        lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 6) + indicator;
+      }
+    }
   }
 
-  // Scroll indicator
-  if (state.diffLines.length > h) {
-    const pct = Math.round((state.diffScrollOffset / maxScroll) * 100);
-    const indicator = colors.dim + ` [${pct}%]` + ansi.reset;
-    if (lines.length > 0) {
-      lines[0] = padRight(lines[0], w - 6) + indicator;
+  // ── Separator ──
+  if (separatorH > 0) {
+    const hDivColor = hoveredDivider === 'horizontal' ? colors.value : colors.border;
+    lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
+  }
+
+  // ── Detail 섹션 (하단: 선택 파일 정보) ──
+  if (detailH > 0) {
+    const item = selectedItem();
+    if (item) {
+      const statusMap = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked' };
+      lines.push(colors.label + ' File:   ' + ansi.reset + colors.value + truncate(item.file, w - 10) + ansi.reset);
+      lines.push(colors.label + ' Status: ' + ansi.reset + colors.value + (item.status || '?') + ' (' + (statusMap[item.type] || item.type) + ')' + ansi.reset);
+      // diff 통계
+      let adds = 0, dels = 0;
+      for (const l of state.diffLines) {
+        if (l.startsWith('+') && !l.startsWith('+++')) adds++;
+        else if (l.startsWith('-') && !l.startsWith('---')) dels++;
+      }
+      lines.push(colors.label + ' Lines:  ' + ansi.reset + colors.green + '+' + adds + ansi.reset + '  ' + colors.red + '-' + dels + ansi.reset);
+      for (let i = 3; i < detailH; i++) lines.push('');
+    } else {
+      lines.push(colors.dim + ' No file selected' + ansi.reset);
+      for (let i = 1; i < detailH; i++) lines.push('');
     }
   }
 
@@ -983,8 +1098,24 @@ function buildLogPanel(w, h) {
   }
 
   // Upper half: item list, lower half: detail
-  const listH = Math.min(Math.max(5, Math.floor(h * 0.4)), state.logItems.length + 1);
-  const detailH = h - listH - 1;
+  let listH, detailH, separatorH;
+  if (rightTopCollapsed && rightBottomCollapsed) {
+    listH = 0;
+    separatorH = 0;
+    detailH = 0;
+  } else if (rightTopCollapsed) {
+    listH = 0;
+    separatorH = 0;
+    detailH = h;
+  } else if (rightBottomCollapsed) {
+    listH = h;
+    separatorH = 0;
+    detailH = 0;
+  } else {
+    listH = Math.min(Math.max(1, Math.floor(h * logListRatio)), h - 2);
+    separatorH = 1;
+    detailH = h - listH - separatorH;
+  }
   lastLogListH = listH;
 
   const lines = [];
@@ -1027,7 +1158,7 @@ function buildLogPanel(w, h) {
   }
 
   // Scroll indicator for commit list
-  if (state.logItems.length > listH) {
+  if (listH > 0 && state.logItems.length > listH) {
     const maxScroll = Math.max(1, state.logItems.length - listH);
     const pct = Math.round((state.logScrollOffset / maxScroll) * 100);
     const indicator = colors.dim + ` [${pct}%]` + ansi.reset;
@@ -1037,23 +1168,28 @@ function buildLogPanel(w, h) {
   }
 
   // ── Separator ──
-  lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
+  if (separatorH > 0) {
+    const hDivColor = hoveredDivider === 'horizontal' ? colors.value : colors.border;
+    lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
+  }
 
   // ── Detail ──
-  if (state.logDetailLines.length === 0) {
-    lines.push(colors.dim + ' Select an item to view details' + ansi.reset);
-    for (let i = 1; i < detailH; i++) lines.push('');
-  } else {
-    const maxDetailScroll = Math.max(0, state.logDetailLines.length - detailH);
-    if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
-    const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + detailH);
-    for (const rawLine of visible) {
-      lines.push(' ' + colorizeDiffLine(rawLine, w));
-    }
-    if (state.logDetailLines.length > detailH && lines.length > listH + 1) {
-      const pct = Math.round((state.diffScrollOffset / maxDetailScroll) * 100);
-      const idx = listH + 1;
-      lines[idx] = padRight(lines[idx], w - 6) + colors.dim + ` [${pct}%]` + ansi.reset;
+  if (detailH > 0) {
+    if (state.logDetailLines.length === 0) {
+      lines.push(colors.dim + ' Select an item to view details' + ansi.reset);
+      for (let i = 1; i < detailH; i++) lines.push('');
+    } else {
+      const maxDetailScroll = Math.max(0, state.logDetailLines.length - detailH);
+      if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
+      const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + detailH);
+      for (const rawLine of visible) {
+        lines.push(' ' + colorizeDiffLine(rawLine, w));
+      }
+      if (state.logDetailLines.length > detailH && lines.length > listH + separatorH) {
+        const pct = Math.round((state.diffScrollOffset / maxDetailScroll) * 100);
+        const idx = listH + separatorH;
+        lines[idx] = padRight(lines[idx], w - 6) + colors.dim + ` [${pct}%]` + ansi.reset;
+      }
     }
   }
 
@@ -1108,7 +1244,7 @@ function renderMinimized() {
     if (state.untracked.length > 0) line += colors.dim + '?' + state.untracked.length + ansi.reset;
   }
   line += ' '.repeat(Math.max(0, cols - visLen(line)));
-  process.stdout.write(ansi.clear + ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
+  process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
 // ============================================================
@@ -1376,8 +1512,21 @@ async function main() {
       const cy = parseInt(mouseMatch[3], 10);
       const isRelease = mouseMatch[4] === 'm';
 
-      // Motion events (cb bit 5 set) → hover on hint buttons
+      // Motion events (cb bit 5 set) → drag resize / hover
       if ((cb & 32) !== 0) {
+        if (dragging === 'vertical') {
+          const L = lastLayout;
+          verticalDividerRatio = Math.max(1 / L.width, Math.min(1 - 2 / L.width, (cx - L.startCol) / L.width));
+          render();
+          continue;
+        }
+        if (dragging === 'horizontal') {
+          const L = lastLayout;
+          logListRatio = Math.max(1 / L.bodyH, Math.min(1 - 1 / L.bodyH, (cy - (L.startRow + 2)) / L.bodyH));
+          render();
+          continue;
+        }
+        const L = lastLayout;
         let newHover = -1;
         for (let i = 0; i < clickableAreas.length; i++) {
           const area = clickableAreas[i];
@@ -1386,20 +1535,49 @@ async function main() {
             break;
           }
         }
-        if (newHover !== hoveredAreaIndex) {
+        let newTitleHover = -1;
+        if (cy === L.startRow) {
+          for (let i = 0; i < titleClickZones.length; i++) {
+            const zone = titleClickZones[i];
+            if (cx >= zone.colStart && cx <= zone.colEnd) {
+              newTitleHover = i;
+              break;
+            }
+          }
+        }
+        let newDivHover = null;
+        const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
+        if (!leftPanelCollapsed && inBody) {
+          const dividerCol = L.startCol + L.leftW;
+          if (cx >= dividerCol - 1 && cx <= dividerCol + 1) {
+            newDivHover = 'vertical';
+          }
+        }
+        if (!rightTopCollapsed && !rightBottomCollapsed) {
+          const hSepRow = L.startRow + 2 + lastLogListH;
+          if (cy === hSepRow && cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width) {
+            newDivHover = 'horizontal';
+          }
+        }
+        if (newHover !== hoveredAreaIndex || newTitleHover !== hoveredTitleZoneIndex || newDivHover !== hoveredDivider) {
           hoveredAreaIndex = newHover;
+          hoveredTitleZoneIndex = newTitleHover;
+          hoveredDivider = newDivHover;
           render();
         }
         continue;
       }
 
-      if (isRelease) continue;
+      if (isRelease) {
+        if (dragging !== null) dragging = null;
+        continue;
+      }
 
       // Scroll wheel
       if (cb === 64 || cb === 65) {
         const L = lastLayout;
-        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
-        const inRight = cx > L.startCol + L.leftW && cx < L.startCol + L.width;
+        const inLeft = !leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
+        const inRight = cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width;
         const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
         if (inBody && inRight) {
           if (state.rightView === 'log') {
@@ -1419,9 +1597,12 @@ async function main() {
               else state.diffScrollOffset += 3;
             }
           } else {
-            // Scroll diff panel
-            if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
-            else state.diffScrollOffset += 3;
+            // Scroll diff panel (top section only)
+            const rightRowIdx = cy - (L.startRow + 2);
+            if (rightRowIdx < lastLogListH) {
+              if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
+              else state.diffScrollOffset += 3;
+            }
           }
           state.focusPanel = 'diff';
           render();
@@ -1443,6 +1624,39 @@ async function main() {
       if (cb === 0) {
         const L = lastLayout;
 
+        // Title row click → collapse/expand
+        if (cy === L.startRow) {
+          let handled = false;
+          for (const zone of titleClickZones) {
+            if (cx >= zone.colStart && cx <= zone.colEnd) {
+              if (zone.action === 'toggleStatus') {
+                leftPanelCollapsed = !leftPanelCollapsed;
+              } else if (zone.action === 'toggleHistory') {
+                rightTopCollapsed = !rightTopCollapsed;
+              } else if (zone.action === 'toggleDetail') {
+                rightBottomCollapsed = !rightBottomCollapsed;
+              }
+              render();
+              handled = true;
+              break;
+            }
+          }
+          if (handled) continue;
+        }
+
+        // Divider drag start detection (only when left panel is visible)
+        if (!leftPanelCollapsed) {
+          const dividerCol = L.startCol + L.leftW;
+          if (cx >= dividerCol - 1 && cx <= dividerCol + 1 && cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH) {
+            dragging = 'vertical';
+            continue;
+          }
+        }
+        if (!rightTopCollapsed && !rightBottomCollapsed && cy === L.startRow + 2 + lastLogListH && cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width) {
+          dragging = 'horizontal';
+          continue;
+        }
+
         // Click on hint bar buttons
         for (const area of clickableAreas) {
           if (cy === area.row && cx >= area.colStart && cx <= area.colEnd) {
@@ -1452,7 +1666,7 @@ async function main() {
         }
 
         // Click on left panel (file list)
-        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+        const inLeft = !leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
         const bodyRowIdx = cy - (L.startRow + 2);
         if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
           if (bodyRowIdx < fileLineMap.length && fileLineMap[bodyRowIdx] >= 0) {
@@ -1465,7 +1679,7 @@ async function main() {
         }
 
         // Click on right panel
-        const inRight = cx > L.startCol + L.leftW && cx < L.startCol + L.width;
+        const inRight = cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width;
         if (inRight && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
           state.focusPanel = 'diff';
           if (state.rightView === 'log' && bodyRowIdx < lastLogListH) {
