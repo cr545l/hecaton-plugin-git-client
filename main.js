@@ -275,6 +275,8 @@ let leftTabZones = [];             // { row, colStart, colEnd, action }
 let leftTabInfo = null;            // tab button positions from buildLeftPanel
 let hoveredTitleZoneIndex = -1;
 let hoveredDivider = null;         // null | 'vertical' | 'horizontal'
+let lastClickTime = 0;            // 더블클릭 감지용
+let lastClickFileIdx = -1;        // 더블클릭 감지용
 
 // ============================================================
 // RPC Communication
@@ -1995,12 +1997,35 @@ async function main() {
           if (tabHandled) continue;
         }
 
-        // Click on left panel (file list)
+        // Click on left panel (file list) — 더블클릭: stage/unstage 전환
         const inLeft = !leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
         const bodyRowIdx = cy - (L.startRow + 2);
         if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
           if (bodyRowIdx < fileLineMap.length && fileLineMap[bodyRowIdx] >= 0) {
-            state.cursor = fileLineMap[bodyRowIdx];
+            const fileIdx = fileLineMap[bodyRowIdx];
+            const now = Date.now();
+
+            if (fileIdx === lastClickFileIdx && now - lastClickTime < 400) {
+              // Double-click: stage/unstage 전환
+              const fileList = buildFileList();
+              const item = fileList[fileIdx];
+              if (item) {
+                if (item.type === 'staged') {
+                  gitUnstage(state.cwd, item.file);
+                } else {
+                  gitStage(state.cwd, item.file);
+                }
+                refresh();
+              }
+              lastClickFileIdx = -1;
+              lastClickTime = 0;
+            } else {
+              // Single click: 선택
+              state.cursor = fileIdx;
+              lastClickFileIdx = fileIdx;
+              lastClickTime = now;
+            }
+
             state.focusPanel = 'status';
             state.rightView = 'diff';
             updateDiff();
