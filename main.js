@@ -271,6 +271,8 @@ let leftPanelCollapsed = false;    // Status 패널 접힘 상태
 let rightTopCollapsed = false;     // 우측 상단 섹션 접힘 (History / Diff)
 let rightBottomCollapsed = false;  // 우측 하단 섹션 접힘 (Detail)
 let titleClickZones = [];          // { colStart, colEnd, action }
+let leftTabZones = [];             // { row, colStart, colEnd, action }
+let leftTabInfo = null;            // tab button positions from buildLeftPanel
 let hoveredTitleZoneIndex = -1;
 let hoveredDivider = null;         // null | 'vertical' | 'horizontal'
 
@@ -962,7 +964,8 @@ function render() {
     : Math.max(1, Math.min(width - 2, Math.floor(width * verticalDividerRatio)));
   const dividerW = leftPanelCollapsed ? 0 : 1;
   const rightW = width - leftW - dividerW;
-  const bodyH = height - 4; // -1 title, -1 title separator, -1 bottom separator, -1 hint bar
+  const bodyH = height - 2; // -1 title, -1 title separator (used for rendering loop & mouse hit testing)
+  const contentH = Math.max(0, bodyH - 2); // actual visible content rows (bottom separator + hint bar overlap last 2)
   const hintRow = startRow + height - 1;
   const sepRow = startRow + height - 2;
 
@@ -1035,8 +1038,8 @@ function render() {
 
   // ── Body ──
   const rightLines = state.rightView === 'log'
-    ? buildLogPanel(rightW, bodyH)
-    : buildRightPanel(rightW, bodyH);
+    ? buildLogPanel(rightW, contentH)
+    : buildRightPanel(rightW, contentH);
 
   if (leftPanelCollapsed) {
     for (let i = 0; i < bodyH; i++) {
@@ -1048,8 +1051,29 @@ function render() {
       );
     }
     fileLineMap = [];
+    leftTabZones = [];
   } else {
-    const leftLines = buildLeftPanel(leftW, bodyH);
+    const leftLines = buildLeftPanel(leftW, contentH);
+    // Compute left panel tab zones for mouse clicks
+    leftTabZones = [];
+    if (leftTabInfo) {
+      const visibleIdx = leftTabInfo.lineIdx - state.scrollOffset;
+      if (visibleIdx >= 0 && visibleIdx < contentH) {
+        const screenRow = startRow + 2 + visibleIdx;
+        leftTabZones.push({
+          row: screenRow,
+          colStart: startCol + leftTabInfo.localColStart,
+          colEnd: startCol + leftTabInfo.localColEnd,
+          action: 'localChanges'
+        });
+        leftTabZones.push({
+          row: screenRow,
+          colStart: startCol + leftTabInfo.allColStart,
+          colEnd: startCol + leftTabInfo.allColEnd,
+          action: 'allCommits'
+        });
+      }
+    }
     for (let i = 0; i < bodyH; i++) {
       const row = startRow + 2 + i;
       const lContent = i < leftLines.length ? leftLines[i] : '';
@@ -1131,6 +1155,34 @@ function buildLeftPanel(w, h) {
 
   // Branch
   pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + (state.branch || '...') + ansi.reset, -1);
+
+  // Tab buttons: Local Changes / All Commits
+  {
+    const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
+    const localLabel = `Local Changes (${totalChanges})`;
+    const allLabel = 'All Commits';
+    const isLocal = state.rightView !== 'log';
+    const isAll = state.rightView === 'log';
+    const activeStyle = colors.value + ansi.bold;
+    const inactiveStyle = colors.dim;
+
+    let col = 1;
+    const localColStart = col;
+    col += localLabel.length;
+    const localColEnd = col - 1;
+    col += 2;
+    const allColStart = col;
+    col += allLabel.length;
+    const allColEnd = col - 1;
+
+    leftTabInfo = { lineIdx: lines.length, localColStart, localColEnd, allColStart, allColEnd };
+
+    let tabLine = ' ';
+    tabLine += (isLocal ? activeStyle + CSI + '4m' : inactiveStyle) + localLabel + ansi.reset;
+    tabLine += '  ';
+    tabLine += (isAll ? activeStyle + CSI + '4m' : inactiveStyle) + allLabel + ansi.reset;
+    pushLine(tabLine, -1);
+  }
   pushLine('', -1);
 
   if (state.loading) {
@@ -1394,6 +1446,18 @@ function buildLogPanel(w, h) {
     }
   }
 
+  // Add extra graph rows beyond visible area for visual continuity
+  const extraGraphRows = Math.min(2, state.logItems.length - state.logScrollOffset - listH);
+  for (let ei = 0; ei < extraGraphRows; ei++) {
+    const item = state.logItems[state.logScrollOffset + listH + ei];
+    if (item && item.chars) {
+      graphRows.push({ chars: item.chars, charColors: item.charColors });
+      if (item.chars.length > graphWidth) graphWidth = item.chars.length;
+    } else {
+      graphRows.push(null);
+    }
+  }
+
   // Generate combined Sixel image for the entire graph column
   if (SIXEL_ENABLED && graphRows.length > 0 && graphWidth > 0) {
     const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth);
@@ -1470,7 +1534,6 @@ const hintButtons = [
   { label: '[u]nstage',  action: 'unstage' },
   { label: '[a]ll',      action: 'all' },
   { label: '[c]ommit',   action: 'commit' },
-  { label: '[l]og',      action: 'log' },
   { label: '[r]efresh',  action: 'refresh' },
 ];
 
@@ -1917,6 +1980,31 @@ async function main() {
             handleKey(actionToKey(area.action));
             break;
           }
+        }
+
+        // Click on left panel tab buttons
+        if (!leftPanelCollapsed) {
+          let tabHandled = false;
+          for (const zone of leftTabZones) {
+            if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
+              if (zone.action === 'localChanges') {
+                state.rightView = 'diff';
+                updateDiff();
+              } else if (zone.action === 'allCommits') {
+                state.rightView = 'log';
+                refreshLog();
+                state.logCursor = 0;
+                state.logScrollOffset = 0;
+                state.diffScrollOffset = 0;
+                updateLogDetail();
+                state.focusPanel = 'diff';
+              }
+              render();
+              tabHandled = true;
+              break;
+            }
+          }
+          if (tabHandled) continue;
         }
 
         // Click on left panel (file list)
