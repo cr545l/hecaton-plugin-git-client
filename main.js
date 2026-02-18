@@ -1226,7 +1226,7 @@ function buildLeftPanel(w, h) {
     if (isSelected) cursorLineIdx = lines.length;
     const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
     const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
-    const statusColor = colors.red;
+    const statusColor = item.status === 'D' ? colors.red : colors.orange;
     const line = prefix + statusColor + item.status + ansi.reset + ' ' + truncate(item.file, innerW - 6);
     pushLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
@@ -1443,18 +1443,6 @@ function buildLogPanel(w, h) {
       lines.push(' ' + graphPart);
       graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
-    }
-  }
-
-  // Add extra graph rows beyond visible area for visual continuity
-  const extraGraphRows = Math.min(2, state.logItems.length - state.logScrollOffset - listH);
-  for (let ei = 0; ei < extraGraphRows; ei++) {
-    const item = state.logItems[state.logScrollOffset + listH + ei];
-    if (item && item.chars) {
-      graphRows.push({ chars: item.chars, charColors: item.charColors });
-      if (item.chars.length > graphWidth) graphWidth = item.chars.length;
-    } else {
-      graphRows.push(null);
     }
   }
 
