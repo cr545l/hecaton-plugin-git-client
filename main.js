@@ -951,7 +951,7 @@ function render() {
   const startRow = 1;
 
   const buf = [];
-  buf.push(ansi.hideCursor);
+  buf.push(ansi.hideCursor + CSI + '?7l');  // Disable auto-wrap to prevent scroll on width overflow
 
   // Internal divider characters (outer border drawn by overlay system)
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
@@ -962,7 +962,7 @@ function render() {
     : Math.max(1, Math.min(width - 2, Math.floor(width * verticalDividerRatio)));
   const dividerW = leftPanelCollapsed ? 0 : 1;
   const rightW = width - leftW - dividerW;
-  const bodyH = height - 2; // -1 title, -1 separator
+  const bodyH = height - 4; // -1 title, -1 title separator, -1 bottom separator, -1 hint bar
   const hintRow = startRow + height - 1;
   const sepRow = startRow + height - 2;
 
@@ -1964,7 +1964,7 @@ async function main() {
 }
 
 function cleanup() {
-  process.stdout.write(ansi.showCursor + ansi.reset + ansi.clear);
+  process.stdout.write(CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);  // Re-enable auto-wrap
 }
 
 main().catch((e) => {
