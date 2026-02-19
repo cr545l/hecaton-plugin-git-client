@@ -468,29 +468,99 @@ function handleMouseData(data) {
         }
       }
 
-      // Click on left panel tab buttons
-      if (!ui.leftPanelCollapsed) {
-        let tabHandled = false;
-        for (const zone of ui.leftTabZones) {
-          if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
-            if (zone.action === 'localChanges') {
+      // Click on left panel (clickMap-based)
+      {
+        const bodyRowIdx2 = cy - (L.startRow + 2);
+        const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
+        if (inLeft && bodyRowIdx2 >= 0 && bodyRowIdx2 < ui.leftPanelClickMap.length) {
+          const entry = ui.leftPanelClickMap[bodyRowIdx2];
+          if (entry) {
+            let leftHandled = true;
+            if (entry.action === 'tab-local') {
+              ui.leftPanelActiveBranch = null;
               state.rightView = 'diff';
               updateDiff();
-            } else if (zone.action === 'allCommits') {
+              state.focusPanel = 'status';
+              render();
+            } else if (entry.action === 'tab-commits') {
               state.rightView = 'log';
               refreshLog();
               state.logCursor = 0;
               state.logScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateLogDetail();
+              state.focusPanel = 'status';
+              render();
+            } else if (entry.action === 'toggle-section') {
+              ui.collapsedSections[entry.section] = !ui.collapsedSections[entry.section];
+              render();
+            } else if (entry.action === 'toggle-group') {
+              ui.collapsedGroups[entry.group] = !ui.collapsedGroups[entry.group];
+              render();
+            } else if (entry.action === 'goto-branch') {
+              ui.leftPanelActiveBranch = entry.branch;
+              if (state.rightView !== 'log') {
+                state.rightView = 'log';
+                refreshLog();
+                state.logCursor = 0;
+                state.logScrollOffset = 0;
+                state.diffScrollOffset = 0;
+                updateLogDetail();
+              }
+              const targetBranch = entry.branch;
+              let foundIdx = -1;
+              for (let si = 0; si < state.logItems.length; si++) {
+                const item = state.logItems[si];
+                if (item.type !== 'commit' || !item.decoration) continue;
+                const refs = item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '').split(', ');
+                for (const ref of refs) {
+                  const cleaned = ref.startsWith('HEAD -> ') ? ref.substring(8) : ref;
+                  if (cleaned === targetBranch) { foundIdx = si; break; }
+                }
+                if (foundIdx >= 0) break;
+              }
+              if (foundIdx >= 0) {
+                const selectIdx = state.logSelectables.indexOf(foundIdx);
+                if (selectIdx >= 0) {
+                  state.logCursor = selectIdx;
+                  state.diffScrollOffset = 0;
+                  updateLogDetail();
+                }
+              }
+              state.focusPanel = 'status';
+              render();
+            } else if (entry.action === 'goto-stash') {
+              ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
+              if (state.rightView !== 'log') {
+                state.rightView = 'log';
+                refreshLog();
+                state.logCursor = 0;
+                state.logScrollOffset = 0;
+                state.diffScrollOffset = 0;
+                updateLogDetail();
+              }
+              const targetHash = entry.shortHash;
+              let foundIdx = -1;
+              for (let si = 0; si < state.logItems.length; si++) {
+                const item = state.logItems[si];
+                if (item.type === 'commit' && item.ref === targetHash) { foundIdx = si; break; }
+              }
+              if (foundIdx >= 0) {
+                const selectIdx = state.logSelectables.indexOf(foundIdx);
+                if (selectIdx >= 0) {
+                  state.logCursor = selectIdx;
+                  state.diffScrollOffset = 0;
+                  updateLogDetail();
+                }
+              }
+              state.focusPanel = 'status';
+              render();
+            } else {
+              leftHandled = false;
             }
-            state.focusPanel = 'status';
-            render();
-            tabHandled = true;
-            break;
+            if (leftHandled) continue;
           }
         }
-        if (tabHandled) continue;
       }
 
       // Click on commit button zone

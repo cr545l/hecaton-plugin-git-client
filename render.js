@@ -143,9 +143,9 @@ function render() {
         buf.push(ansi.moveTo(row, startCol) + padRight(rContent, width));
       }
       ui.leftTabZones = [];
+      ui.leftPanelClickMap = [];
     } else {
       const leftLines = buildLeftPanel(leftW, contentH);
-      buildLeftTabZones(startRow, startCol, contentH);
       for (let i = 0; i < bodyH; i++) {
         const row = startRow + 2 + i;
         const lContent = i < leftLines.length ? leftLines[i] : '';
@@ -176,9 +176,9 @@ function render() {
         );
       }
       ui.leftTabZones = [];
+      ui.leftPanelClickMap = [];
     } else {
       const leftLines = buildLeftPanel(leftW, contentH);
-      buildLeftTabZones(startRow, startCol, contentH);
       for (let i = 0; i < bodyH; i++) {
         const row = startRow + 2 + i;
         const lContent = i < leftLines.length ? leftLines[i] : '';
@@ -266,39 +266,19 @@ function render() {
   if (ui.hoveredAreaIndex >= ui.clickableAreas.length) ui.hoveredAreaIndex = -1;
 }
 
-function buildLeftTabZones(startRow, startCol, contentH) {
-  ui.leftTabZones = [];
-  if (ui.leftTabInfo) {
-    const visibleIdx = ui.leftTabInfo.lineIdx;
-    if (visibleIdx >= 0 && visibleIdx < contentH) {
-      const screenRow = startRow + 2 + visibleIdx;
-      ui.leftTabZones.push({
-        row: screenRow,
-        colStart: startCol + ui.leftTabInfo.localColStart,
-        colEnd: startCol + ui.leftTabInfo.localColEnd,
-        action: 'localChanges'
-      });
-      ui.leftTabZones.push({
-        row: screenRow,
-        colStart: startCol + ui.leftTabInfo.allColStart,
-        colEnd: startCol + ui.leftTabInfo.allColEnd,
-        action: 'allCommits'
-      });
-    }
-  }
-}
-
 // ── Left panel: branch tree ──
 
 function buildLeftPanel(w, h) {
   const lines = [];
+  const clickMap = [];
   const innerW = w - 1;
 
-  function pushLine(content) {
+  function pushLine(content, action) {
     if (visLen(content) > innerW) {
       content = truncate(content, innerW);
     }
     lines.push(content);
+    clickMap.push(action || null);
   }
 
   // Branch name + rebase state
@@ -317,114 +297,153 @@ function buildLeftPanel(w, h) {
     }
   }
 
-  // Tab buttons
+  // Tab buttons — two separate lines
   {
     const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
     const localLabel = `Local (${totalChanges})`;
     const allLabel = 'Commits';
     const isLocal = state.rightView !== 'log';
     const isAll = state.rightView === 'log';
-    const activeStyle = colors.title + ansi.bold;
+    const activeStyle = colors.title + ansi.bold + CSI + '4m';
     const inactiveStyle = colors.title;
 
-    let col = 1;
-    const localColStart = col;
-    col += localLabel.length;
-    const localColEnd = col - 1;
-    col += 2;
-    const allColStart = col;
-    col += allLabel.length;
-    const allColEnd = col - 1;
-
-    ui.leftTabInfo = { lineIdx: lines.length, localColStart, localColEnd, allColStart, allColEnd };
-
-    let tabLine = ' ';
-    tabLine += (isLocal ? activeStyle + CSI + '4m' : inactiveStyle) + localLabel + ansi.reset;
-    tabLine += '  ';
-    tabLine += (isAll ? activeStyle + CSI + '4m' : inactiveStyle) + allLabel + ansi.reset;
-    pushLine(tabLine);
+    pushLine(' ' + (isLocal ? activeStyle : inactiveStyle) + localLabel + ansi.reset, { action: 'tab-local' });
+    pushLine(' ' + (isAll ? activeStyle : inactiveStyle) + allLabel + ansi.reset, { action: 'tab-commits' });
   }
   pushLine('');
 
   if (state.loading) {
     pushLine(colors.dim + ' Loading...' + ansi.reset);
-    return lines;
+    ui.leftTabInfo = null;
+    ui.leftPanelClickMap = clickMap.slice(0, h);
+    return lines.slice(0, h);
   }
 
   if (!state.isGitRepo) {
     pushLine(colors.red + ' Not a git repository' + ansi.reset);
-    return lines;
+    ui.leftTabInfo = null;
+    ui.leftPanelClickMap = clickMap.slice(0, h);
+    return lines.slice(0, h);
+  }
+
+  const ARROW_OPEN = '\u25be';
+  const ARROW_CLOSED = '\u25b8';
+  const activeBranch = ui.leftPanelActiveBranch;
+
+  function branchLine(indent, name, fullRef, isCurrent) {
+    const isActive = activeBranch === fullRef;
+    const maxW = innerW - indent;
+    if (isCurrent) {
+      const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, maxW - 2) + ansi.reset;
+      return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
+    } else {
+      const content = ' '.repeat(indent) + colors.value + truncate(name, maxW) + ansi.reset;
+      return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
+    }
   }
 
   // Branches
-  pushLine(colors.sectionHeader + ansi.bold + ' Branches' + ansi.reset);
   {
-    const groups = new Map();
-    const topLevel = [];
-    for (const b of state.branches) {
-      const slashIdx = b.name.indexOf('/');
-      if (slashIdx >= 0) {
-        const prefix = b.name.substring(0, slashIdx);
-        const rest = b.name.substring(slashIdx + 1);
-        if (!groups.has(prefix)) groups.set(prefix, []);
-        groups.get(prefix).push({ ...b, shortName: rest });
-      } else {
-        topLevel.push(b);
-      }
-    }
-    for (const [prefix, items] of groups) {
-      pushLine(colors.dim + '   ' + prefix + '/' + ansi.reset);
-      for (const item of items) {
-        if (item.isCurrent) {
-          pushLine('    ' + colors.green + ansi.bold + '\u2713 ' + truncate(item.shortName, innerW - 6) + ansi.reset);
+    const collapsed = !!ui.collapsedSections.branches;
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Branches' + ansi.reset, { action: 'toggle-section', section: 'branches' });
+    if (!collapsed) {
+      const groups = new Map();
+      const topLevel = [];
+      for (const b of state.branches) {
+        const slashIdx = b.name.indexOf('/');
+        if (slashIdx >= 0) {
+          const prefix = b.name.substring(0, slashIdx);
+          const rest = b.name.substring(slashIdx + 1);
+          if (!groups.has(prefix)) groups.set(prefix, []);
+          groups.get(prefix).push({ ...b, shortName: rest });
         } else {
-          pushLine('      ' + colors.value + truncate(item.shortName, innerW - 6) + ansi.reset);
+          topLevel.push(b);
         }
       }
-    }
-    for (const b of topLevel) {
-      if (b.isCurrent) {
-        pushLine('  ' + colors.green + ansi.bold + '\u2713 ' + truncate(b.name, innerW - 4) + ansi.reset);
-      } else {
-        pushLine('    ' + colors.value + truncate(b.name, innerW - 4) + ansi.reset);
+      for (const [prefix, items] of groups) {
+        const groupKey = 'b:' + prefix;
+        const groupCollapsed = !!ui.collapsedGroups[groupKey];
+        pushLine(colors.dim + '   ' + (groupCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset, { action: 'toggle-group', group: groupKey });
+        if (!groupCollapsed) {
+          for (const item of items) {
+            const fullName = prefix + '/' + item.shortName;
+            pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent), { action: 'goto-branch', branch: fullName });
+          }
+        }
+      }
+      for (const b of topLevel) {
+        pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent), { action: 'goto-branch', branch: b.name });
       }
     }
   }
 
   // Remotes
   if (state.remoteBranches.length > 0) {
-    pushLine('');
-    pushLine(colors.sectionHeader + ansi.bold + ' Remotes' + ansi.reset);
-    const remoteGroups = new Map();
-    for (const rb of state.remoteBranches) {
-      const slashIdx = rb.indexOf('/');
-      if (slashIdx >= 0) {
-        const remote = rb.substring(0, slashIdx);
-        const branch = rb.substring(slashIdx + 1);
-        if (!remoteGroups.has(remote)) remoteGroups.set(remote, []);
-        remoteGroups.get(remote).push(branch);
-      } else {
-        if (!remoteGroups.has('')) remoteGroups.set('', []);
-        remoteGroups.get('').push(rb);
+    const collapsed = !!ui.collapsedSections.remotes;
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Remotes' + ansi.reset, { action: 'toggle-section', section: 'remotes' });
+    if (!collapsed) {
+      const remoteGroups = new Map();
+      for (const rb of state.remoteBranches) {
+        const slashIdx = rb.indexOf('/');
+        if (slashIdx >= 0) {
+          const remote = rb.substring(0, slashIdx);
+          const branch = rb.substring(slashIdx + 1);
+          if (!remoteGroups.has(remote)) remoteGroups.set(remote, []);
+          remoteGroups.get(remote).push(branch);
+        }
       }
-    }
-    for (const [remote, branches] of remoteGroups) {
-      if (remote) pushLine(colors.dim + '   ' + remote + ansi.reset);
-      for (const b of branches) {
-        pushLine('    ' + colors.cyan + truncate(b, innerW - 4) + ansi.reset);
+      for (const [remote, branches] of remoteGroups) {
+        const remoteKey = 'r:' + remote;
+        const remoteCollapsed = !!ui.collapsedGroups[remoteKey];
+        pushLine(colors.dim + '   ' + (remoteCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + remote + ansi.reset, { action: 'toggle-group', group: remoteKey });
+        if (!remoteCollapsed) {
+          // Sub-group by prefix within this remote
+          const subGroups = new Map();
+          const topLevel = [];
+          for (const b of branches) {
+            const slashIdx = b.indexOf('/');
+            if (slashIdx >= 0) {
+              const prefix = b.substring(0, slashIdx);
+              const rest = b.substring(slashIdx + 1);
+              if (!subGroups.has(prefix)) subGroups.set(prefix, []);
+              subGroups.get(prefix).push({ shortName: rest, fullRef: remote + '/' + b });
+            } else {
+              topLevel.push({ shortName: b, fullRef: remote + '/' + b });
+            }
+          }
+          for (const [prefix, items] of subGroups) {
+            const subKey = 'r:' + remote + '/' + prefix;
+            const subCollapsed = !!ui.collapsedGroups[subKey];
+            pushLine(colors.dim + '     ' + (subCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset, { action: 'toggle-group', group: subKey });
+            if (!subCollapsed) {
+              for (const item of items) {
+                pushLine(branchLine(8, item.shortName, item.fullRef, false), { action: 'goto-branch', branch: item.fullRef });
+              }
+            }
+          }
+          for (const item of topLevel) {
+            pushLine(branchLine(6, item.shortName, item.fullRef, false), { action: 'goto-branch', branch: item.fullRef });
+          }
+        }
       }
     }
   }
 
   // Stashes
   if (state.stashes.length > 0) {
-    pushLine('');
-    pushLine(colors.sectionHeader + ansi.bold + ' Stashes' + ansi.reset);
-    for (const s of state.stashes) {
-      pushLine('  ' + colors.yellow + truncate(s.ref, innerW - 2) + ansi.reset);
+    const collapsed = !!ui.collapsedSections.stashes;
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Stashes' + ansi.reset, { action: 'toggle-section', section: 'stashes' });
+    if (!collapsed) {
+      for (const s of state.stashes) {
+        const isActive = activeBranch === 'stash:' + s.shortHash;
+        const content = '  ' + colors.yellow + truncate(s.ref, innerW - 2) + ansi.reset;
+        pushLine(isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content, { action: 'goto-stash', shortHash: s.shortHash });
+      }
     }
   }
 
+  ui.leftTabInfo = null;
+  ui.leftPanelClickMap = clickMap.slice(0, h);
   return lines.slice(0, h);
 }
 
