@@ -439,6 +439,14 @@ function handleMouseData(data) {
               ui.rightBottomCollapsed = !ui.rightBottomCollapsed;
               render();
               handled = true;
+            } else if (zone.action === 'toggleFiles') {
+              ui.middlePanelCollapsed = !ui.middlePanelCollapsed;
+              render();
+              handled = true;
+            } else if (zone.action === 'toggleDiff') {
+              ui.rightPanelCollapsed = !ui.rightPanelCollapsed;
+              render();
+              handled = true;
             }
             break;
           }

@@ -48,6 +48,8 @@ const ui = {
   leftPanelCollapsed: false,
   rightTopCollapsed: false,
   rightBottomCollapsed: false,
+  middlePanelCollapsed: false,
+  rightPanelCollapsed: false,
   titleClickZones: [],
   leftTabZones: [],
   leftTabInfo: null,
@@ -60,6 +62,7 @@ const ui = {
   hoveredFileHeaderIdx: -1,
   hoveredLeftPanelRow: -1,
   hoveredDivider: null,
+  scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,
   lastClickFileIdx: -1,
 };

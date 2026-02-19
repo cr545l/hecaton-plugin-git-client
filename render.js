@@ -35,6 +35,12 @@ function render() {
     middleW = 0;
     divider2W = 0;
     rightW = remaining;
+  } else if (ui.middlePanelCollapsed && ui.rightPanelCollapsed) {
+    middleW = 0; divider2W = 0; rightW = 0;
+  } else if (ui.middlePanelCollapsed) {
+    middleW = 0; divider2W = 0; rightW = remaining;
+  } else if (ui.rightPanelCollapsed) {
+    middleW = remaining; divider2W = 0; rightW = 0;
   } else {
     // 3-column: left | middle (files) | right (diff+commit)
     middleW = Math.max(1, Math.min(remaining - 2, Math.floor(remaining * ui.filesDividerRatio)));
@@ -47,9 +53,9 @@ function render() {
   const hintRow = startRow + height - 1;
   const sepRow = startRow + height - 2;
 
-  // -- Title row --
-  ui.titleClickZones = [];
-  {
+  // -- Title row (rendered after body so scrollPct is available) --
+  function buildTitleRow() {
+    ui.titleClickZones = [];
     let titleStr = ansi.moveTo(startRow, startCol);
     let col = startCol;
     let zoneIdx = 0;
@@ -65,8 +71,16 @@ function render() {
       col += visLen(label);
     }
 
+    function pctSuffix(pct) {
+      if (pct < 0) return '';
+      return colors.dim + ' ' + pct + '%' + ansi.reset;
+    }
+
     // Left: Status
     pushZone((ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', 'toggleStatus');
+    const statusPctStr = pctSuffix(ui.scrollPct.status);
+    titleStr += statusPctStr;
+    col += visLen(statusPctStr);
 
     if (!ui.leftPanelCollapsed) {
       titleStr += ' '.repeat(Math.max(0, leftW - (col - startCol)));
@@ -77,30 +91,33 @@ function render() {
 
     if (state.rightView === 'log') {
       // 2-column title: History + Detail in the right area
-      const rStart = col;
       pushZone((ui.rightTopCollapsed ? ' + ' : ' - ') + 'History', 'toggleHistory');
+      const histPctStr = pctSuffix(ui.scrollPct.history);
+      titleStr += histPctStr;
+      col += visLen(histPctStr);
       titleStr += '  '; col += 2;
       pushZone((ui.rightBottomCollapsed ? ' + ' : ' - ') + 'Detail', 'toggleDetail');
+      const detPctStr = pctSuffix(ui.scrollPct.detail);
+      titleStr += detPctStr;
+      col += visLen(detPctStr);
       const rEnd = ui.leftPanelCollapsed ? startCol + width : startCol + leftW + divider1W + rightW;
       titleStr += ' '.repeat(Math.max(0, rEnd - col));
     } else {
-      // 3-column title: Files | Diff
-      {
-        pushZone(' Files', 'middleLabel');
-        const midEnd = startCol + leftW + divider1W + middleW;
-        titleStr += ' '.repeat(Math.max(0, midEnd - col));
-        col = midEnd;
-        titleStr += colors.border + V + ansi.reset;
-        col += 1;
-      }
-      {
-        pushZone(' Diff', 'rightLabel');
-        const totalEnd = startCol + width;
-        titleStr += ' '.repeat(Math.max(0, totalEnd - col));
-      }
+      // Files + Diff on one line (like History + Detail)
+      pushZone((ui.middlePanelCollapsed ? ' + ' : ' - ') + 'Files', 'toggleFiles');
+      const filesPctStr = pctSuffix(ui.scrollPct.files);
+      titleStr += filesPctStr;
+      col += visLen(filesPctStr);
+      titleStr += '  '; col += 2;
+      pushZone((ui.rightPanelCollapsed ? ' + ' : ' - ') + 'Diff', 'toggleDiff');
+      const diffPctStr = pctSuffix(ui.scrollPct.diff);
+      titleStr += diffPctStr;
+      col += visLen(diffPctStr);
+      const totalEnd = startCol + width;
+      titleStr += ' '.repeat(Math.max(0, totalEnd - col));
     }
 
-    buf.push(titleStr);
+    return titleStr;
   }
 
   // -- Title separator --
@@ -108,27 +125,33 @@ function render() {
   const vDiv2Color = ui.hoveredDivider === 'vertical2' ? colors.value : colors.border;
   {
     let sepStr = ansi.moveTo(startRow + 1, startCol);
-    if (ui.leftPanelCollapsed) {
-      if (state.rightView === 'log') {
-        sepStr += colors.border + H.repeat(width) + ansi.reset;
-      } else {
-        sepStr += colors.border + H.repeat(middleW) + ansi.reset;
-        sepStr += vDiv2Color + CROSS + ansi.reset;
-        sepStr += colors.border + H.repeat(rightW) + ansi.reset;
-      }
-    } else {
+    let sepCol = 0;
+    if (!ui.leftPanelCollapsed && leftW > 0) {
       sepStr += colors.border + H.repeat(leftW) + ansi.reset;
       sepStr += vDiv1Color + CROSS + ansi.reset;
-      if (state.rightView === 'log') {
-        sepStr += colors.border + H.repeat(rightW) + ansi.reset;
-      } else {
-        sepStr += colors.border + H.repeat(middleW) + ansi.reset;
-        sepStr += vDiv2Color + CROSS + ansi.reset;
-        sepStr += colors.border + H.repeat(rightW) + ansi.reset;
-      }
+      sepCol += leftW + 1;
+    }
+    if (middleW > 0) {
+      sepStr += colors.border + H.repeat(middleW) + ansi.reset;
+      sepCol += middleW;
+    }
+    if (divider2W > 0) {
+      sepStr += vDiv2Color + CROSS + ansi.reset;
+      sepCol += 1;
+    }
+    if (rightW > 0) {
+      sepStr += colors.border + H.repeat(rightW) + ansi.reset;
+      sepCol += rightW;
+    }
+    const sepRemain = width - sepCol;
+    if (sepRemain > 0) {
+      sepStr += colors.border + H.repeat(sepRemain) + ansi.reset;
     }
     buf.push(sepStr);
   }
+
+  // Reset scroll pct (will be set by panel builders)
+  ui.scrollPct = { status: -1, files: -1, diff: -1, history: -1, detail: -1 };
 
   // -- Body --
   if (state.rightView === 'log') {
@@ -160,41 +183,44 @@ function render() {
     }
   } else {
     // 3-column body: left | middle (files) | right (diff+commit)
-    const middleLines = buildFileListPanel(middleW, contentH);
-    const rightLines = buildDiffCommitPanel(rightW, contentH);
+    const middleLines = middleW > 0 ? buildFileListPanel(middleW, contentH) : [];
+    const rightLines = rightW > 0 ? buildDiffCommitPanel(rightW, contentH) : [];
+    if (middleW === 0) { ui.fileLineMap = []; ui.fileHeaderZones = []; }
 
-    if (ui.leftPanelCollapsed) {
-      for (let i = 0; i < bodyH; i++) {
-        const row = startRow + 2 + i;
-        const mContent = i < middleLines.length ? middleLines[i] : '';
-        const rContent = i < rightLines.length ? rightLines[i] : '';
-        buf.push(
-          ansi.moveTo(row, startCol) +
-          padRight(mContent, middleW) +
-          vDiv2Color + V + ansi.reset +
-          padRight(rContent, rightW)
-        );
+    const hasLeft = !ui.leftPanelCollapsed && leftW > 0;
+    const leftLines = hasLeft ? buildLeftPanel(leftW, contentH) : [];
+    if (!hasLeft) { ui.leftTabZones = []; ui.leftPanelClickMap = []; }
+
+    for (let i = 0; i < bodyH; i++) {
+      const row = startRow + 2 + i;
+      let line = ansi.moveTo(row, startCol);
+      if (hasLeft) {
+        line += padRight(i < leftLines.length ? leftLines[i] : '', leftW);
+        line += vDiv1Color + V + ansi.reset;
       }
-      ui.leftTabZones = [];
-      ui.leftPanelClickMap = [];
-    } else {
-      const leftLines = buildLeftPanel(leftW, contentH);
-      for (let i = 0; i < bodyH; i++) {
-        const row = startRow + 2 + i;
-        const lContent = i < leftLines.length ? leftLines[i] : '';
-        const mContent = i < middleLines.length ? middleLines[i] : '';
-        const rContent = i < rightLines.length ? rightLines[i] : '';
-        buf.push(
-          ansi.moveTo(row, startCol) +
-          padRight(lContent, leftW) +
-          vDiv1Color + V + ansi.reset +
-          padRight(mContent, middleW) +
-          vDiv2Color + V + ansi.reset +
-          padRight(rContent, rightW)
-        );
+      if (middleW > 0) {
+        line += padRight(i < middleLines.length ? middleLines[i] : '', middleW);
       }
+      if (middleW > 0 && rightW > 0) {
+        line += vDiv2Color + V + ansi.reset;
+      }
+      if (rightW > 0) {
+        line += padRight(i < rightLines.length ? rightLines[i] : '', rightW);
+      }
+      // Fill remaining if both middle and right collapsed
+      if (middleW === 0 && rightW > 0) {
+        // rightW takes full remaining — already handled
+      } else if (middleW > 0 && rightW === 0) {
+        // middleW takes full remaining — already handled
+      } else if (middleW === 0 && rightW === 0) {
+        line += ' '.repeat(remaining);
+      }
+      buf.push(line);
     }
   }
+
+  // -- Title row (after body so scrollPct is computed) --
+  buf.push(buildTitleRow());
 
   // -- Bottom separator --
   buf.push(
@@ -445,6 +471,11 @@ function buildLeftPanel(w, h) {
   ui.leftTabInfo = null;
   const maxScroll = Math.max(0, lines.length - h);
   if (ui.leftPanelScrollOffset > maxScroll) ui.leftPanelScrollOffset = maxScroll;
+  if (maxScroll > 0) {
+    ui.scrollPct.status = Math.round((ui.leftPanelScrollOffset / maxScroll) * 100);
+  } else {
+    ui.scrollPct.status = -1;
+  }
   const off = ui.leftPanelScrollOffset;
   ui.leftPanelClickMap = clickMap.slice(off, off + h);
   const visibleLines = lines.slice(off, off + h);
@@ -557,6 +588,12 @@ function buildFileListPanel(w, h) {
     state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, lines.length - h));
   }
 
+  const filesMaxScroll = Math.max(0, lines.length - h);
+  if (filesMaxScroll > 0) {
+    ui.scrollPct.files = Math.round((state.scrollOffset / filesMaxScroll) * 100);
+  } else {
+    ui.scrollPct.files = -1;
+  }
   ui.fileLineMap = lineToFileIdx.slice(state.scrollOffset, state.scrollOffset + h);
   return lines.slice(state.scrollOffset, state.scrollOffset + h);
 }
@@ -582,10 +619,9 @@ function buildDiffCommitPanel(w, h) {
         lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
       }
       if (state.diffLines.length > diffH) {
-        const pct = Math.round((state.diffScrollOffset / maxScroll) * 100);
-        if (lines.length > 0) {
-          lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 8) + colors.dim + ` [${pct}%]` + ansi.reset;
-        }
+        ui.scrollPct.diff = Math.round((state.diffScrollOffset / maxScroll) * 100);
+      } else {
+        ui.scrollPct.diff = -1;
       }
       for (let i = visible.length; i < diffH; i++) lines.push('');
     }
@@ -721,13 +757,12 @@ function buildLogPanel(w, h) {
     }
   }
 
-  // Scroll indicator
+  // Scroll pct for title
   if (listH > 0 && state.logItems.length > listH) {
     const maxScroll = Math.max(1, state.logItems.length - listH);
-    const pct = Math.round((state.logScrollOffset / maxScroll) * 100);
-    if (lines.length > 0) {
-      lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 8) + colors.dim + ` [${pct}%]` + ansi.reset;
-    }
+    ui.scrollPct.history = Math.round((state.logScrollOffset / maxScroll) * 100);
+  } else {
+    ui.scrollPct.history = -1;
   }
 
   // -- Separator --
@@ -756,10 +791,10 @@ function buildLogPanel(w, h) {
       for (const rawLine of visible) {
         lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
       }
-      if (state.logDetailLines.length > cH && lines.length > listH + separatorH + 1) {
-        const pct = Math.round((state.diffScrollOffset / maxDetailScroll) * 100);
-        const idx = listH + separatorH + 1;
-        lines[idx] = padRight(lines[idx], w - 8) + colors.dim + ` [${pct}%]` + ansi.reset;
+      if (state.logDetailLines.length > cH) {
+        ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
+      } else {
+        ui.scrollPct.detail = -1;
       }
     }
   }
