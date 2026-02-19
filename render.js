@@ -60,14 +60,15 @@ function render() {
     let col = startCol;
     let zoneIdx = 0;
 
-    const zoneStyle = (idx) => (idx === ui.hoveredTitleZoneIndex)
-      ? colors.value + ansi.bold + CSI + '4m'
-      : colors.title + ansi.bold;
+    const zoneStyle = (idx, collapsed) => {
+      if (idx === ui.hoveredTitleZoneIndex) return colors.value + ansi.bold + CSI + '4m';
+      return collapsed ? colors.dim : colors.title + ansi.bold;
+    };
 
-    function pushZone(label, action) {
+    function pushZone(label, action, collapsed) {
       const si = zoneIdx++;
       ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(label) - 1, action });
-      titleStr += zoneStyle(si) + label + ansi.reset;
+      titleStr += zoneStyle(si, collapsed) + label + ansi.reset;
       col += visLen(label);
     }
 
@@ -77,7 +78,7 @@ function render() {
     }
 
     // Left: Status
-    pushZone((ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', 'toggleStatus');
+    pushZone((ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', 'toggleStatus', ui.leftPanelCollapsed);
     const statusPctStr = pctSuffix(ui.scrollPct.status);
     titleStr += statusPctStr;
     col += visLen(statusPctStr);
@@ -91,12 +92,12 @@ function render() {
 
     if (state.rightView === 'log') {
       // 2-column title: History + Detail in the right area
-      pushZone((ui.rightTopCollapsed ? ' + ' : ' - ') + 'History', 'toggleHistory');
+      pushZone((ui.rightTopCollapsed ? ' + ' : ' - ') + 'History', 'toggleHistory', ui.rightTopCollapsed);
       const histPctStr = pctSuffix(ui.scrollPct.history);
       titleStr += histPctStr;
       col += visLen(histPctStr);
       titleStr += '  '; col += 2;
-      pushZone((ui.rightBottomCollapsed ? ' + ' : ' - ') + 'Detail', 'toggleDetail');
+      pushZone((ui.rightBottomCollapsed ? ' + ' : ' - ') + 'Detail', 'toggleDetail', ui.rightBottomCollapsed);
       const detPctStr = pctSuffix(ui.scrollPct.detail);
       titleStr += detPctStr;
       col += visLen(detPctStr);
@@ -104,12 +105,12 @@ function render() {
       titleStr += ' '.repeat(Math.max(0, rEnd - col));
     } else {
       // Files + Diff on one line (like History + Detail)
-      pushZone((ui.middlePanelCollapsed ? ' + ' : ' - ') + 'Files', 'toggleFiles');
+      pushZone((ui.middlePanelCollapsed ? ' + ' : ' - ') + 'Files', 'toggleFiles', ui.middlePanelCollapsed);
       const filesPctStr = pctSuffix(ui.scrollPct.files);
       titleStr += filesPctStr;
       col += visLen(filesPctStr);
       titleStr += '  '; col += 2;
-      pushZone((ui.rightPanelCollapsed ? ' + ' : ' - ') + 'Diff', 'toggleDiff');
+      pushZone((ui.rightPanelCollapsed ? ' + ' : ' - ') + 'Diff', 'toggleDiff', ui.rightPanelCollapsed);
       const diffPctStr = pctSuffix(ui.scrollPct.diff);
       titleStr += diffPctStr;
       col += visLen(diffPctStr);
