@@ -447,7 +447,15 @@ function buildLeftPanel(w, h) {
   if (ui.leftPanelScrollOffset > maxScroll) ui.leftPanelScrollOffset = maxScroll;
   const off = ui.leftPanelScrollOffset;
   ui.leftPanelClickMap = clickMap.slice(off, off + h);
-  return lines.slice(off, off + h);
+  const visibleLines = lines.slice(off, off + h);
+
+  // Apply hover highlight
+  const hoverRow = ui.hoveredLeftPanelRow;
+  if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.leftPanelClickMap[hoverRow]) {
+    visibleLines[hoverRow] = CSI + '4m' + colors.value + visibleLines[hoverRow] + ansi.reset;
+  }
+
+  return visibleLines;
 }
 
 // ── Middle panel (diff mode): file list ──
@@ -459,6 +467,7 @@ function buildFileListPanel(w, h) {
   let cursorLineIdx = -1;
   let listIdx = 0;
   const focused = state.focusPanel === 'status';
+  ui.fileHeaderZones = [];
 
   function pushFileLine(content, fileIdx) {
     lineToFileIdx.push(fileIdx);
@@ -466,21 +475,22 @@ function buildFileListPanel(w, h) {
     lines.push(content);
   }
 
-  pushFileLine(colors.sectionHeader + ansi.bold + ' Staged (' + state.staged.length + ')' + ansi.reset, -1);
-  for (let i = 0; i < state.staged.length; i++) {
-    const item = state.staged[i];
-    const isSelected = state.cursor === listIdx;
-    if (isSelected) cursorLineIdx = lines.length;
-    const hasBg = isSelected && focused;
-    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
-    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
-    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
-    const line = prefix + colors.green + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
-    pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
-    listIdx++;
+  // Unstaged (includes untracked)
+  const unstagedCount = state.unstaged.length + state.untracked.length;
+  {
+    const headerLabel = ' Unstaged (' + unstagedCount + ')';
+    const btnLabel = 'Stage All';
+    const headerLabelLen = visLen(headerLabel);
+    const gap = Math.max(1, innerW - headerLabelLen - btnLabel.length - 1);
+    const zoneIdx = ui.fileHeaderZones.length;
+    const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
+    const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+    const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
+      + ' '.repeat(gap)
+      + btnStyle + btnLabel + ansi.reset;
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'stageAll' });
+    pushFileLine(headerLine, -1);
   }
-
-  pushFileLine(colors.sectionHeader + ansi.bold + ' Unstaged (' + state.unstaged.length + ')' + ansi.reset, -1);
   for (let i = 0; i < state.unstaged.length; i++) {
     const item = state.unstaged[i];
     const isSelected = state.cursor === listIdx;
@@ -494,8 +504,6 @@ function buildFileListPanel(w, h) {
     pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
-
-  pushFileLine(colors.sectionHeader + ansi.bold + ' Untracked (' + state.untracked.length + ')' + ansi.reset, -1);
   for (let i = 0; i < state.untracked.length; i++) {
     const item = state.untracked[i];
     const isSelected = state.cursor === listIdx;
@@ -505,6 +513,34 @@ function buildFileListPanel(w, h) {
     const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
     const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
     const line = prefix + colors.dim + '?' + resetTo + ' ' + truncate(item.file, innerW - 6);
+    pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
+    listIdx++;
+  }
+
+  // Staged
+  {
+    const headerLabel = ' Staged (' + state.staged.length + ')';
+    const btnLabel = 'Unstage All';
+    const headerLabelLen = visLen(headerLabel);
+    const gap = Math.max(1, innerW - headerLabelLen - btnLabel.length - 1);
+    const zoneIdx = ui.fileHeaderZones.length;
+    const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
+    const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+    const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
+      + ' '.repeat(gap)
+      + btnStyle + btnLabel + ansi.reset;
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'unstageAll' });
+    pushFileLine(headerLine, -1);
+  }
+  for (let i = 0; i < state.staged.length; i++) {
+    const item = state.staged[i];
+    const isSelected = state.cursor === listIdx;
+    if (isSelected) cursorLineIdx = lines.length;
+    const hasBg = isSelected && focused;
+    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
+    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
+    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
+    const line = prefix + colors.green + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -767,9 +803,6 @@ function colorizeDiffLine(rawLine, w) {
 }
 
 const hintButtons = [
-  { label: '[s]tage',    action: 'stage' },
-  { label: '[u]nstage',  action: 'unstage' },
-  { label: '[a]ll',      action: 'all' },
   { label: '[c]ommit',   action: 'commit' },
   { label: '[b]rebase',  action: 'rebase' },
   { label: '[r]efresh',  action: 'refresh' },

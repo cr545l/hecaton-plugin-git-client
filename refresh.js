@@ -4,14 +4,14 @@ const { calcGraphRows } = require('./graph');
 
 function buildFileList() {
   const list = [];
-  for (let i = 0; i < state.staged.length; i++) {
-    list.push({ type: 'staged', index: i, status: state.staged[i].status, file: state.staged[i].file });
-  }
   for (let i = 0; i < state.unstaged.length; i++) {
     list.push({ type: 'unstaged', index: i, status: state.unstaged[i].status, file: state.unstaged[i].file });
   }
   for (let i = 0; i < state.untracked.length; i++) {
     list.push({ type: 'untracked', index: i, status: '?', file: state.untracked[i].file });
+  }
+  for (let i = 0; i < state.staged.length; i++) {
+    list.push({ type: 'staged', index: i, status: state.staged[i].status, file: state.staged[i].file });
   }
   return list;
 }

@@ -75,36 +75,6 @@ function handleKey(key) {
   }
 
   switch (key) {
-    case 's': {
-      const item = selectedItem();
-      if (!item) break;
-      if (item.type === 'unstaged' || item.type === 'untracked') {
-        gitStage(state.cwd, item.file);
-        refresh();
-      }
-      render();
-      break;
-    }
-    case 'u': {
-      const item = selectedItem();
-      if (!item) break;
-      if (item.type === 'staged') {
-        gitUnstage(state.cwd, item.file);
-        refresh();
-      }
-      render();
-      break;
-    }
-    case 'a': {
-      if (state.staged.length > 0 && state.unstaged.length === 0 && state.untracked.length === 0) {
-        gitUnstageAll(state.cwd);
-      } else {
-        gitStageAll(state.cwd);
-      }
-      refresh();
-      render();
-      break;
-    }
     case 'c': {
       if (state.staged.length === 0) {
         state.error = 'Nothing staged to commit';
@@ -356,10 +326,42 @@ function handleMouseData(data) {
           newDivHover = 'horizontal';
         }
       }
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider) {
+      // Hover: file header buttons (Stage All / Unstage All)
+      let newFileHeaderHover = -1;
+      if (state.rightView !== 'log' && inBody) {
+        const bodyRowIdx = cy - (L.startRow + 2);
+        for (let i = 0; i < ui.fileHeaderZones.length; i++) {
+          const zone = ui.fileHeaderZones[i];
+          const visibleLineIdx = zone.lineIdx - state.scrollOffset;
+          if (visibleLineIdx === bodyRowIdx) {
+            const btnScreenColStart = midStart + zone.btnColStart;
+            const btnScreenColEnd = midStart + zone.btnColEnd;
+            if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {
+              newFileHeaderHover = i;
+              break;
+            }
+          }
+        }
+      }
+
+      // Hover: left panel clickable rows
+      let newLeftPanelHover = -1;
+      if (!ui.leftPanelCollapsed && inBody) {
+        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+        if (inLeft) {
+          const bodyRowIdx = cy - (L.startRow + 2);
+          if (bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length && ui.leftPanelClickMap[bodyRowIdx]) {
+            newLeftPanelHover = bodyRowIdx;
+          }
+        }
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
+        ui.hoveredFileHeaderIdx = newFileHeaderHover;
+        ui.hoveredLeftPanelRow = newLeftPanelHover;
         render();
       }
       continue;
@@ -607,6 +609,27 @@ function handleMouseData(data) {
             updateLogDetail();
           }
         } else {
+          // File header button click (Stage All / Unstage All)
+          let headerHandled = false;
+          for (const zone of ui.fileHeaderZones) {
+            const visibleLineIdx = zone.lineIdx - state.scrollOffset;
+            if (visibleLineIdx === bodyRowIdx) {
+              const btnScreenColStart = midStart + zone.btnColStart;
+              const btnScreenColEnd = midStart + zone.btnColEnd;
+              if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {
+                if (zone.action === 'stageAll') {
+                  gitStageAll(state.cwd);
+                } else if (zone.action === 'unstageAll') {
+                  gitUnstageAll(state.cwd);
+                }
+                refresh();
+                render();
+                headerHandled = true;
+                break;
+              }
+            }
+          }
+          if (headerHandled) { continue; }
           // File list click
           if (bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
             const fileIdx = ui.fileLineMap[bodyRowIdx];
