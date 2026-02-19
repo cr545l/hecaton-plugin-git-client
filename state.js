@@ -16,6 +16,9 @@ const state = {
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
   logDetailLines: [],
+  branches: [],           // [{ name, isCurrent }]
+  remoteBranches: [],     // ['origin/main', ...]
+  stashes: [],            // [{ hash, shortHash, ref }]
   rebaseState: null,     // null | { type, step, total }
   mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu'
   commitMsg: '',
@@ -31,10 +34,14 @@ const ui = {
   clickableAreas: [],
   hoveredAreaIndex: -1,
   fileLineMap: [],
-  lastLayout: { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, dividerW: 0, rightW: 0, bodyH: 0 },
+  lastLayout: { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, divider1W: 0, middleW: 0, divider2W: 0, rightW: 0, bodyH: 0 },
+  rightDiffH: 0,
   lastLogListH: 0,
+  commitInputRow: -1,
+  commitButtonZone: null,
   stashMap: new Map(),
-  verticalDividerRatio: 0.35,
+  verticalDividerRatio: 0.25,
+  filesDividerRatio: 0.4,
   logListRatio: 0.4,
   dragging: null,
   leftPanelCollapsed: false,

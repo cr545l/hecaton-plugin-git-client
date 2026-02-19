@@ -239,9 +239,33 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
   }
 }
 
+function gitBranches(cwd) {
+  try {
+    const raw = git(['branch', '--format=%(refname:short)\t%(HEAD)'], cwd).trim();
+    if (!raw) return [];
+    return raw.split('\n').map(line => {
+      const parts = line.split('\t');
+      return { name: parts[0], isCurrent: parts[1] === '*' };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function gitRemoteBranches(cwd) {
+  try {
+    const raw = git(['branch', '-r', '--format=%(refname:short)'], cwd).trim();
+    if (!raw) return [];
+    return raw.split('\n').filter(b => !b.includes('/HEAD'));
+  } catch {
+    return [];
+  }
+}
+
 module.exports = {
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
+  gitBranches, gitRemoteBranches,
 };

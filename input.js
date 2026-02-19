@@ -33,17 +33,18 @@ function handleKey(key) {
   // Arrow keys (VT sequences)
   if (key === CSI + 'A' || key === 'k') { // Up
     if (state.focusPanel === 'status') {
-      const list = buildFileList();
-      if (list.length > 0) {
-        state.cursor = Math.max(0, state.cursor - 1);
-        state.rightView = 'diff';
-        updateDiff();
-      }
-    } else if (state.rightView === 'log') {
-      if (state.logSelectables.length > 0) {
-        state.logCursor = Math.max(0, state.logCursor - 1);
-        state.diffScrollOffset = 0;
-        updateLogDetail();
+      if (state.rightView === 'log') {
+        if (state.logSelectables.length > 0) {
+          state.logCursor = Math.max(0, state.logCursor - 1);
+          state.diffScrollOffset = 0;
+          updateLogDetail();
+        }
+      } else {
+        const list = buildFileList();
+        if (list.length > 0) {
+          state.cursor = Math.max(0, state.cursor - 1);
+          updateDiff();
+        }
       }
     } else {
       state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 1);
@@ -53,17 +54,18 @@ function handleKey(key) {
   }
   if (key === CSI + 'B' || key === 'j') { // Down
     if (state.focusPanel === 'status') {
-      const list = buildFileList();
-      if (list.length > 0) {
-        state.cursor = Math.min(list.length - 1, state.cursor + 1);
-        state.rightView = 'diff';
-        updateDiff();
-      }
-    } else if (state.rightView === 'log') {
-      if (state.logSelectables.length > 0) {
-        state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 1);
-        state.diffScrollOffset = 0;
-        updateLogDetail();
+      if (state.rightView === 'log') {
+        if (state.logSelectables.length > 0) {
+          state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 1);
+          state.diffScrollOffset = 0;
+          updateLogDetail();
+        }
+      } else {
+        const list = buildFileList();
+        if (list.length > 0) {
+          state.cursor = Math.min(list.length - 1, state.cursor + 1);
+          updateDiff();
+        }
       }
     } else {
       state.diffScrollOffset++;
@@ -127,8 +129,8 @@ function handleKey(key) {
         state.logScrollOffset = 0;
         state.diffScrollOffset = 0;
         updateLogDetail();
-        state.focusPanel = 'diff';
       }
+      state.focusPanel = 'status';
       render();
       break;
     }
@@ -137,7 +139,6 @@ function handleKey(key) {
         state.mode = 'rebase-menu';
         render();
       } else {
-        // Start rebase from log view
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
           state.error = 'Select a commit in log view to rebase onto';
@@ -149,7 +150,6 @@ function handleKey(key) {
         refresh();
         if (state.rightView === 'log') refreshLog();
         if (err && state.rebaseState) {
-          // Conflict: rebase in progress
           render();
         } else if (err) {
           state.error = 'Rebase failed: ' + err.substring(0, 60);
@@ -183,14 +183,12 @@ function handleKey(key) {
 }
 
 function handleCommitInput(key) {
-  // Esc → cancel
   if (key === ESC || key === '\x1b') {
     state.mode = 'normal';
     state.commitMsg = '';
     render();
     return;
   }
-  // Enter → commit
   if (key === '\r' || key === '\n') {
     if (state.commitMsg.trim().length === 0) {
       state.error = 'Commit message cannot be empty';
@@ -211,19 +209,16 @@ function handleCommitInput(key) {
     }
     return;
   }
-  // Backspace
   if (key === '\x7f' || key === '\b' || key === CSI + '3~') {
     state.commitMsg = state.commitMsg.slice(0, -1);
     render();
     return;
   }
-  // Printable characters
   if (key.length === 1 && key.charCodeAt(0) >= 32) {
     state.commitMsg += key;
     render();
     return;
   }
-  // Multi-byte UTF-8
   if (key.length > 1 && !key.startsWith('\x1b')) {
     state.commitMsg += key;
     render();
@@ -298,21 +293,35 @@ function handleMouseData(data) {
     const cy = parseInt(mouseMatch[3], 10);
     const isRelease = mouseMatch[4] === 'm';
 
-    // Motion events (cb bit 5 set) → drag resize / hover
+    const L = ui.lastLayout;
+    const midStart = L.startCol + L.leftW + L.divider1W;
+    const rightStart = midStart + L.middleW + L.divider2W;
+    const div1Col = L.startCol + L.leftW;
+    const div2Col = midStart + L.middleW;
+
+    // Motion events (cb bit 5 set) -> drag resize / hover
     if ((cb & 32) !== 0) {
       if (ui.dragging === 'vertical') {
-        const L = ui.lastLayout;
-        ui.verticalDividerRatio = Math.max(1 / L.width, Math.min(1 - 2 / L.width, (cx - L.startCol) / L.width));
+        ui.verticalDividerRatio = Math.max(1 / L.width, Math.min(0.5, (cx - L.startCol) / L.width));
+        render();
+        continue;
+      }
+      if (ui.dragging === 'vertical2') {
+        const remaining = L.width - L.leftW - L.divider1W;
+        const relX = cx - midStart;
+        ui.filesDividerRatio = Math.max(0.15, Math.min(0.7, relX / remaining));
         render();
         continue;
       }
       if (ui.dragging === 'horizontal') {
-        const L = ui.lastLayout;
-        ui.logListRatio = Math.max(1 / L.bodyH, Math.min(1 - 1 / L.bodyH, (cy - (L.startRow + 2)) / L.bodyH));
+        const bodyTop = L.startRow + 2;
+        const contentH = Math.max(1, L.bodyH - 2);
+        const relY = cy - bodyTop;
+        ui.logListRatio = Math.max(0.1, Math.min(0.9, relY / contentH));
         render();
         continue;
       }
-      const L = ui.lastLayout;
+
       let newHover = -1;
       for (let i = 0; i < ui.clickableAreas.length; i++) {
         const area = ui.clickableAreas[i];
@@ -334,14 +343,16 @@ function handleMouseData(data) {
       let newDivHover = null;
       const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
       if (!ui.leftPanelCollapsed && inBody) {
-        const dividerCol = L.startCol + L.leftW;
-        if (cx >= dividerCol - 1 && cx <= dividerCol + 1) {
+        if (cx >= div1Col - 1 && cx <= div1Col + 1) {
           newDivHover = 'vertical';
         }
       }
-      if (!ui.rightTopCollapsed && !ui.rightBottomCollapsed) {
-        const hSepRow = L.startRow + 2 + ui.lastLogListH;
-        if (cy === hSepRow && cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width) {
+      if (L.middleW > 0 && inBody && cx >= div2Col - 1 && cx <= div2Col + 1) {
+        newDivHover = 'vertical2';
+      }
+      if (state.rightView === 'log' && inBody && ui.lastLogListH > 0) {
+        const hDivRow = L.startRow + 2 + ui.lastLogListH;
+        if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
           newDivHover = 'horizontal';
         }
       }
@@ -361,40 +372,41 @@ function handleMouseData(data) {
 
     // Scroll wheel
     if (cb === 64 || cb === 65) {
-      const L = ui.lastLayout;
-      const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
-      const inRight = cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width;
+      const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
+      const inRight = cx >= rightStart && cx < L.startCol + L.width;
       const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
-      if (inBody && inRight) {
+      if (inBody && inMiddle) {
+        // Middle panel (diff mode only): file list scroll
+        const list = buildFileList();
+        if (list.length > 0) {
+          if (cb === 64) state.cursor = Math.max(0, state.cursor - 3);
+          else state.cursor = Math.min(list.length - 1, state.cursor + 3);
+          updateDiff();
+        }
+        state.focusPanel = 'status';
+        render();
+      } else if (inBody && inRight) {
         if (state.rightView === 'log') {
-          const rightRowIdx = cy - (L.startRow + 2);
-          if (rightRowIdx < ui.lastLogListH) {
+          // Log mode: top = log scroll, bottom = detail scroll
+          const bodyRowIdx = cy - (L.startRow + 2);
+          if (bodyRowIdx < ui.lastLogListH) {
             if (state.logSelectables.length > 0) {
               if (cb === 64) state.logCursor = Math.max(0, state.logCursor - 3);
               else state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 3);
               state.diffScrollOffset = 0;
               updateLogDetail();
             }
+            state.focusPanel = 'status';
           } else {
             if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
             else state.diffScrollOffset += 3;
+            state.focusPanel = 'diff';
           }
         } else {
-          const rightRowIdx = cy - (L.startRow + 2);
-          if (rightRowIdx < ui.lastLogListH) {
-            if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
-            else state.diffScrollOffset += 3;
-          }
-        }
-        state.focusPanel = 'diff';
-        render();
-      } else if (inBody && inLeft) {
-        const list = buildFileList();
-        if (list.length > 0) {
-          if (cb === 64) state.cursor = Math.max(0, state.cursor - 3);
-          else state.cursor = Math.min(list.length - 1, state.cursor + 3);
-          state.focusPanel = 'status';
-          if (state.rightView === 'diff') updateDiff();
+          // Diff mode: diff scroll
+          if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
+          else state.diffScrollOffset += 3;
+          state.focusPanel = 'diff';
         }
         render();
       }
@@ -403,39 +415,49 @@ function handleMouseData(data) {
 
     // Left click
     if (cb === 0) {
-      const L = ui.lastLayout;
-
-      // Title row click → collapse/expand
+      // Title row click
       if (cy === L.startRow) {
         let handled = false;
         for (const zone of ui.titleClickZones) {
           if (cx >= zone.colStart && cx <= zone.colEnd) {
             if (zone.action === 'toggleStatus') {
               ui.leftPanelCollapsed = !ui.leftPanelCollapsed;
+              render();
+              handled = true;
             } else if (zone.action === 'toggleHistory') {
               ui.rightTopCollapsed = !ui.rightTopCollapsed;
+              render();
+              handled = true;
             } else if (zone.action === 'toggleDetail') {
               ui.rightBottomCollapsed = !ui.rightBottomCollapsed;
+              render();
+              handled = true;
             }
-            render();
-            handled = true;
             break;
           }
         }
         if (handled) continue;
       }
 
-      // Divider drag start detection
+      // Divider drag start: first vertical divider
       if (!ui.leftPanelCollapsed) {
-        const dividerCol = L.startCol + L.leftW;
-        if (cx >= dividerCol - 1 && cx <= dividerCol + 1 && cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH) {
+        if (cx >= div1Col - 1 && cx <= div1Col + 1 && cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH) {
           ui.dragging = 'vertical';
           continue;
         }
       }
-      if (!ui.rightTopCollapsed && !ui.rightBottomCollapsed && cy === L.startRow + 2 + ui.lastLogListH && cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width) {
-        ui.dragging = 'horizontal';
+      // Divider drag start: second vertical divider (diff mode only)
+      if (L.middleW > 0 && cx >= div2Col - 1 && cx <= div2Col + 1 && cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH) {
+        ui.dragging = 'vertical2';
         continue;
+      }
+      // Horizontal divider drag start (log mode only)
+      if (state.rightView === 'log' && ui.lastLogListH > 0) {
+        const hDivRow = L.startRow + 2 + ui.lastLogListH;
+        if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
+          ui.dragging = 'horizontal';
+          continue;
+        }
       }
 
       // Click on hint bar buttons
@@ -461,8 +483,8 @@ function handleMouseData(data) {
               state.logScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateLogDetail();
-              state.focusPanel = 'diff';
             }
+            state.focusPanel = 'status';
             render();
             tabHandled = true;
             break;
@@ -471,47 +493,37 @@ function handleMouseData(data) {
         if (tabHandled) continue;
       }
 
-      // Click on left panel (file list)
-      const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
-      const bodyRowIdx = cy - (L.startRow + 2);
-      if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
-        if (bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
-          const fileIdx = ui.fileLineMap[bodyRowIdx];
-          const now = Date.now();
-
-          if (fileIdx === ui.lastClickFileIdx && now - ui.lastClickTime < 400) {
-            // Double-click: stage/unstage toggle
-            const fileList = buildFileList();
-            const item = fileList[fileIdx];
-            if (item) {
-              if (item.type === 'staged') {
-                gitUnstage(state.cwd, item.file);
-              } else {
-                gitStage(state.cwd, item.file);
-              }
-              refresh();
-            }
-            ui.lastClickFileIdx = -1;
-            ui.lastClickTime = 0;
-          } else {
-            // Single click: select
-            state.cursor = fileIdx;
-            ui.lastClickFileIdx = fileIdx;
-            ui.lastClickTime = now;
-          }
-
-          state.focusPanel = 'status';
-          state.rightView = 'diff';
-          updateDiff();
+      // Click on commit button zone
+      if (ui.commitButtonZone && cy === ui.commitButtonZone.row && cx >= ui.commitButtonZone.colStart && cx <= ui.commitButtonZone.colEnd) {
+        if (state.mode === 'commit' && state.commitMsg.trim().length > 0) {
+          // Trigger commit
+          handleCommitInput('\r');
+        } else if (state.staged.length > 0 && state.mode !== 'commit') {
+          state.mode = 'commit';
+          state.commitMsg = '';
           render();
         }
+        continue;
       }
 
-      // Click on right panel
-      const inRight = cx >= L.startCol + L.leftW + L.dividerW && cx < L.startCol + L.width;
-      if (inRight && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
-        state.focusPanel = 'diff';
-        if (state.rightView === 'log' && bodyRowIdx < ui.lastLogListH) {
+      // Click on commit input row -> enter commit mode
+      if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= rightStart && cx < L.startCol + L.width) {
+        if (state.mode !== 'commit' && state.staged.length > 0) {
+          state.mode = 'commit';
+          state.commitMsg = '';
+          render();
+        }
+        continue;
+      }
+
+      const bodyRowIdx = cy - (L.startRow + 2);
+      const inMiddle = cx >= midStart && cx < midStart + L.middleW;
+      const inRight = cx >= rightStart && cx < L.startCol + L.width;
+
+      // Click on middle panel
+      if (inMiddle && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
+        if (state.rightView === 'log') {
+          // Log list click
           const itemIdx = state.logScrollOffset + bodyRowIdx;
           const selectIdx = state.logSelectables.indexOf(itemIdx);
           if (selectIdx >= 0) {
@@ -519,6 +531,56 @@ function handleMouseData(data) {
             state.diffScrollOffset = 0;
             updateLogDetail();
           }
+        } else {
+          // File list click
+          if (bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+            const fileIdx = ui.fileLineMap[bodyRowIdx];
+            const now = Date.now();
+
+            if (fileIdx === ui.lastClickFileIdx && now - ui.lastClickTime < 400) {
+              // Double-click: stage/unstage toggle
+              const fileList = buildFileList();
+              const item = fileList[fileIdx];
+              if (item) {
+                if (item.type === 'staged') {
+                  gitUnstage(state.cwd, item.file);
+                } else {
+                  gitStage(state.cwd, item.file);
+                }
+                refresh();
+              }
+              ui.lastClickFileIdx = -1;
+              ui.lastClickTime = 0;
+            } else {
+              state.cursor = fileIdx;
+              ui.lastClickFileIdx = fileIdx;
+              ui.lastClickTime = now;
+            }
+            updateDiff();
+          }
+        }
+        state.focusPanel = 'status';
+        render();
+      }
+
+      // Click on right panel
+      if (inRight && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
+        if (state.rightView === 'log') {
+          // Log mode: top = log list, bottom = detail
+          if (bodyRowIdx < ui.lastLogListH) {
+            const itemIdx = state.logScrollOffset + bodyRowIdx;
+            const selectIdx = state.logSelectables.indexOf(itemIdx);
+            if (selectIdx >= 0) {
+              state.logCursor = selectIdx;
+              state.diffScrollOffset = 0;
+              updateLogDetail();
+            }
+            state.focusPanel = 'status';
+          } else {
+            state.focusPanel = 'diff';
+          }
+        } else {
+          state.focusPanel = 'diff';
         }
         render();
       }
