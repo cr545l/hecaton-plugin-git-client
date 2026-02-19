@@ -22,26 +22,14 @@
 const { state, ui } = require('./state');
 const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
-const { refresh } = require('./refresh');
+const { refresh, refreshAsync } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
 
 async function main() {
   render();
 
-  // Get CWD from host
-  const cwdResult = await sendRpc('get_cwd');
-  if (cwdResult && cwdResult.cwd) {
-    state.cwd = cwdResult.cwd;
-  } else {
-    state.cwd = process.cwd();
-  }
-
-  state.loading = false;
-  refresh();
-  render();
-
-  // Handle stdin
+  // Set up stdin FIRST so RPC responses can be received
   try {
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
@@ -80,6 +68,9 @@ async function main() {
       return;
     }
 
+    // Ignore input while loading
+    if (state.loading) return;
+
     // Handle SGR mouse sequences
     const hadMouse = handleMouseData(data);
     if (hadMouse) return;
@@ -87,6 +78,18 @@ async function main() {
     // Keyboard input
     handleKey(data);
   });
+
+  // Get CWD from host (stdin handler is ready, so RPC response will be received)
+  const cwdResult = await sendRpc('get_cwd');
+  if (cwdResult && cwdResult.cwd) {
+    state.cwd = cwdResult.cwd;
+  } else {
+    state.cwd = process.cwd();
+  }
+
+  state.loading = false;
+  await refreshAsync();
+  render();
 
   // Graceful shutdown
   process.on('SIGTERM', () => { cleanup(); process.exit(0); });

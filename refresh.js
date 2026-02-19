@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches } = require('./git');
+const { gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches } = require('./git');
 const { calcGraphRows } = require('./graph');
 
 function buildFileList() {
@@ -54,6 +54,89 @@ function refresh() {
   updateDiff();
 }
 
+async function refreshAsync() {
+  if (!state.cwd) return;
+
+  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, gitDirRaw] =
+    await Promise.all([
+      gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
+      gitExec(['branch', '--show-current'], state.cwd),
+      gitExec(['status', '--porcelain=v1'], state.cwd),
+      gitExec(['stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
+      gitExec(['branch', '--format=%(refname:short)\t%(HEAD)'], state.cwd),
+      gitExec(['branch', '-r', '--format=%(refname:short)'], state.cwd),
+      gitExec(['rev-parse', '--git-dir'], state.cwd),
+    ]);
+
+  // isGitRepo 판정
+  if (isRepoRaw.trim() !== 'true') {
+    state.isGitRepo = false;
+    state.error = 'Not a git repository: ' + state.cwd;
+    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.diffLines = [];
+    return;
+  }
+  state.isGitRepo = true;
+  state.error = null;
+
+  // branch
+  state.branch = branchRaw.trim() || 'HEAD (detached)';
+
+  // status — gitStatus()와 동일한 파싱 로직
+  const staged = [], unstaged = [], untracked = [];
+  for (const line of statusRaw.split('\n')) {
+    if (!line) continue;
+    const x = line[0], y = line[1], file = line.substring(3);
+    if (x === '?') { untracked.push({ file }); }
+    else {
+      if (x !== ' ' && x !== '?') staged.push({ status: x, file });
+      if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
+    }
+  }
+  state.staged = staged; state.unstaged = unstaged; state.untracked = untracked;
+
+  // stashes
+  state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
+    const parts = line.split('\t');
+    return { hash: parts[0], shortHash: parts[1], ref: parts[2] };
+  }) : [];
+
+  // branches
+  state.branches = branchesRaw.trim() ? branchesRaw.trim().split('\n').map(line => {
+    const parts = line.split('\t');
+    return { name: parts[0], isCurrent: parts[1] === '*' };
+  }) : [];
+
+  // remoteBranches
+  state.remoteBranches = remotesRaw.trim()
+    ? remotesRaw.trim().split('\n').filter(b => !b.includes('/HEAD'))
+    : [];
+
+  // rebaseState — gitDirRaw를 이용해 파일시스템 확인 (동기, 빠름)
+  state.rebaseState = null;
+  const gitDir = gitDirRaw.trim();
+  if (gitDir) {
+    const fs = require('fs');
+    const path = require('path');
+    const base = path.resolve(state.cwd, gitDir);
+    const rebaseMerge = path.join(base, 'rebase-merge');
+    if (fs.existsSync(rebaseMerge)) {
+      const step = fs.readFileSync(path.join(rebaseMerge, 'msgnum'), 'utf-8').trim();
+      const total = fs.readFileSync(path.join(rebaseMerge, 'end'), 'utf-8').trim();
+      state.rebaseState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
+    } else {
+      const rebaseApply = path.join(base, 'rebase-apply');
+      if (fs.existsSync(rebaseApply)) {
+        const step = fs.readFileSync(path.join(rebaseApply, 'next'), 'utf-8').trim();
+        const total = fs.readFileSync(path.join(rebaseApply, 'last'), 'utf-8').trim();
+        state.rebaseState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
+      }
+    }
+  }
+
+  clampCursor();
+  updateDiff();
+}
+
 function refreshLog() {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
@@ -66,7 +149,7 @@ function refreshLog() {
   state.logSelectables = [];
 
   // Build stash map and collect stash hashes for graph inclusion
-  const stashRefList = gitStashRefs(state.cwd);
+  const stashRefList = state.stashes;
   ui.stashMap = new Map();
   const stashHashes = [];
   const stashFullHashes = new Set();
@@ -182,5 +265,5 @@ function updateDiff() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  refresh, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
+  refresh, refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
 };

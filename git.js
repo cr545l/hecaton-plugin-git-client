@@ -1,4 +1,15 @@
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
+
+function gitExec(args, cwd) {
+  return new Promise((resolve) => {
+    execFile('git', args, {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
+    }, (err, stdout) => {
+      if (err && !stdout) resolve(err.stdout ? err.stdout.replace(/\r\n/g, '\n') : '');
+      else resolve((stdout || '').replace(/\r\n/g, '\n'));
+    });
+  });
+}
 
 function git(args, cwd) {
   try {
@@ -263,6 +274,7 @@ function gitRemoteBranches(cwd) {
 }
 
 module.exports = {
+  gitExec,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
