@@ -147,6 +147,75 @@ function gitStashDiff(cwd, ref) {
   }
 }
 
+function gitRebaseState(cwd) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const gitDir = git(['rev-parse', '--git-dir'], cwd).trim();
+    const base = path.resolve(cwd, gitDir);
+    // interactive rebase (rebase-merge)
+    const rebaseMerge = path.join(base, 'rebase-merge');
+    if (fs.existsSync(rebaseMerge)) {
+      const step = fs.readFileSync(path.join(rebaseMerge, 'msgnum'), 'utf-8').trim();
+      const total = fs.readFileSync(path.join(rebaseMerge, 'end'), 'utf-8').trim();
+      return { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
+    }
+    // am-style rebase (rebase-apply)
+    const rebaseApply = path.join(base, 'rebase-apply');
+    if (fs.existsSync(rebaseApply)) {
+      const step = fs.readFileSync(path.join(rebaseApply, 'next'), 'utf-8').trim();
+      const total = fs.readFileSync(path.join(rebaseApply, 'last'), 'utf-8').trim();
+      return { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
+    }
+  } catch { /* not in rebase */ }
+  return null;
+}
+
+function gitRebase(cwd, ref) {
+  try {
+    execFileSync('git', ['rebase', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Rebase failed';
+  }
+}
+
+function gitRebaseContinue(cwd) {
+  try {
+    execFileSync('git', ['rebase', '--continue'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+      env: { ...process.env, GIT_EDITOR: 'true' },
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Rebase continue failed';
+  }
+}
+
+function gitRebaseAbort(cwd) {
+  try {
+    execFileSync('git', ['rebase', '--abort'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Rebase abort failed';
+  }
+}
+
+function gitRebaseSkip(cwd) {
+  try {
+    execFileSync('git', ['rebase', '--skip'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Rebase skip failed';
+  }
+}
+
 function gitLogCommits(cwd, extraRefs, maxCount) {
   try {
     const args = ['log', '--all', '--topo-order', '--format=%H%x00%P%x00%D%x00%s'];
@@ -174,4 +243,5 @@ module.exports = {
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
+  gitRebaseState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
 };

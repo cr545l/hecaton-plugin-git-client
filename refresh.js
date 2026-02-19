@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff } = require('./git');
+const { gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState } = require('./git');
 const { calcGraphRows } = require('./graph');
 
 function buildFileList() {
@@ -42,6 +42,7 @@ function refresh() {
   }
   state.error = null;
   state.branch = gitBranch(state.cwd);
+  state.rebaseState = gitRebaseState(state.cwd);
   const status = gitStatus(state.cwd);
   state.staged = status.staged;
   state.unstaged = status.unstaged;

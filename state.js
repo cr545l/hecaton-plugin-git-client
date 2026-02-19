@@ -16,7 +16,8 @@ const state = {
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
   logDetailLines: [],
-  mode: 'normal',        // 'normal' | 'commit'
+  rebaseState: null,     // null | { type, step, total }
+  mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu'
   commitMsg: '',
   error: null,
   loading: true,

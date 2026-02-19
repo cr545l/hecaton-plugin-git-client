@@ -155,7 +155,13 @@ function render() {
 
   // ── Hint bar / commit input ──
   let hintContent;
-  if (state.mode === 'commit') {
+  if (state.mode === 'rebase-menu') {
+    hintContent = colors.yellow + ' Rebase: ' + ansi.reset
+      + colors.value + '[c]ontinue' + ansi.reset + '  '
+      + colors.value + '[a]bort' + ansi.reset + '  '
+      + colors.value + '[s]kip' + ansi.reset + '  '
+      + colors.dim + '[Esc]cancel' + ansi.reset;
+  } else if (state.mode === 'commit') {
     hintContent = colors.yellow + ' Commit: ' + ansi.reset + colors.inputBg + colors.value + state.commitMsg + '\u2588' + ansi.reset;
   } else if (state.error) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
@@ -211,7 +217,13 @@ function buildLeftPanel(w, h) {
   }
 
   // Branch
-  pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + (state.branch || '...') + ansi.reset, -1);
+  {
+    let branchText = state.branch || '...';
+    if (state.rebaseState) {
+      branchText += colors.yellow + ' (rebasing ' + state.rebaseState.step + '/' + state.rebaseState.total + ')' + ansi.reset;
+    }
+    pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + branchText + ansi.reset, -1);
+  }
 
   // Tab buttons: Local Changes / All Commits
   {
@@ -563,6 +575,7 @@ const hintButtons = [
   { label: '[u]nstage',  action: 'unstage' },
   { label: '[a]ll',      action: 'all' },
   { label: '[c]ommit',   action: 'commit' },
+  { label: '[b]rebase',  action: 'rebase' },
   { label: '[r]efresh',  action: 'refresh' },
 ];
 

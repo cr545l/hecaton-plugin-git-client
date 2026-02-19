@@ -1,8 +1,8 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit } = require('./git');
+const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip } = require('./git');
 const { sendRpcNotify } = require('./rpc');
-const { buildFileList, selectedItem, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
 
 function actionToKey(action) {
@@ -12,6 +12,7 @@ function actionToKey(action) {
     case 'all':      return 'a';
     case 'commit':   return 'c';
     case 'log':      return 'l';
+    case 'rebase':   return 'b';
     case 'refresh':  return 'r';
     case 'tab':      return '\t';
     case 'quit':     return 'q';
@@ -20,6 +21,10 @@ function actionToKey(action) {
 }
 
 function handleKey(key) {
+  if (state.mode === 'rebase-menu') {
+    handleRebaseMenuInput(key);
+    return;
+  }
   if (state.mode === 'commit') {
     handleCommitInput(key);
     return;
@@ -127,6 +132,35 @@ function handleKey(key) {
       render();
       break;
     }
+    case 'b': {
+      if (state.rebaseState) {
+        state.mode = 'rebase-menu';
+        render();
+      } else {
+        // Start rebase from log view
+        const logItem = selectedLogRef();
+        if (!logItem || !logItem.ref) {
+          state.error = 'Select a commit in log view to rebase onto';
+          render();
+          setTimeout(() => { state.error = null; render(); }, 2000);
+          break;
+        }
+        const err = gitRebase(state.cwd, logItem.ref);
+        refresh();
+        if (state.rightView === 'log') refreshLog();
+        if (err && state.rebaseState) {
+          // Conflict: rebase in progress
+          render();
+        } else if (err) {
+          state.error = 'Rebase failed: ' + err.substring(0, 60);
+          render();
+          setTimeout(() => { state.error = null; render(); }, 3000);
+        } else {
+          render();
+        }
+      }
+      break;
+    }
     case 'r':
     case 'R': {
       refresh();
@@ -193,6 +227,62 @@ function handleCommitInput(key) {
   if (key.length > 1 && !key.startsWith('\x1b')) {
     state.commitMsg += key;
     render();
+    return;
+  }
+}
+
+function handleRebaseMenuInput(key) {
+  if (key === ESC || key === '\x1b') {
+    state.mode = 'normal';
+    render();
+    return;
+  }
+  if (key === 'c') {
+    state.mode = 'normal';
+    const err = gitRebaseContinue(state.cwd);
+    refresh();
+    if (state.rightView === 'log') refreshLog();
+    if (err && state.rebaseState) {
+      state.error = 'Rebase continue: resolve conflicts first';
+      render();
+      setTimeout(() => { state.error = null; render(); }, 3000);
+    } else if (err) {
+      state.error = 'Rebase continue failed: ' + err.substring(0, 60);
+      render();
+      setTimeout(() => { state.error = null; render(); }, 3000);
+    } else {
+      render();
+    }
+    return;
+  }
+  if (key === 'a') {
+    state.mode = 'normal';
+    const err = gitRebaseAbort(state.cwd);
+    refresh();
+    if (state.rightView === 'log') refreshLog();
+    if (err) {
+      state.error = 'Rebase abort failed: ' + err.substring(0, 60);
+      render();
+      setTimeout(() => { state.error = null; render(); }, 3000);
+    } else {
+      render();
+    }
+    return;
+  }
+  if (key === 's') {
+    state.mode = 'normal';
+    const err = gitRebaseSkip(state.cwd);
+    refresh();
+    if (state.rightView === 'log') refreshLog();
+    if (err && state.rebaseState) {
+      render();
+    } else if (err) {
+      state.error = 'Rebase skip failed: ' + err.substring(0, 60);
+      render();
+      setTimeout(() => { state.error = null; render(); }, 3000);
+    } else {
+      render();
+    }
     return;
   }
 }
