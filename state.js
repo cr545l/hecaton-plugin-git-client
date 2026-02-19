@@ -54,6 +54,7 @@ const ui = {
   collapsedSections: {},
   collapsedGroups: {},
   leftPanelActiveBranch: null,
+  leftPanelScrollOffset: 0,
   hoveredTitleZoneIndex: -1,
   hoveredDivider: null,
   lastClickTime: 0,

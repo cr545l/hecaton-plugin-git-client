@@ -372,10 +372,15 @@ function handleMouseData(data) {
 
     // Scroll wheel
     if (cb === 64 || cb === 65) {
+      const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
       const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
       const inRight = cx >= rightStart && cx < L.startCol + L.width;
       const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
-      if (inBody && inMiddle) {
+      if (inBody && inLeft) {
+        if (cb === 64) ui.leftPanelScrollOffset = Math.max(0, ui.leftPanelScrollOffset - 3);
+        else ui.leftPanelScrollOffset += 3;
+        render();
+      } else if (inBody && inMiddle) {
         // Middle panel (diff mode only): file list scroll
         const list = buildFileList();
         if (list.length > 0) {

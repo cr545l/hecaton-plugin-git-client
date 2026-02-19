@@ -443,8 +443,11 @@ function buildLeftPanel(w, h) {
   }
 
   ui.leftTabInfo = null;
-  ui.leftPanelClickMap = clickMap.slice(0, h);
-  return lines.slice(0, h);
+  const maxScroll = Math.max(0, lines.length - h);
+  if (ui.leftPanelScrollOffset > maxScroll) ui.leftPanelScrollOffset = maxScroll;
+  const off = ui.leftPanelScrollOffset;
+  ui.leftPanelClickMap = clickMap.slice(off, off + h);
+  return lines.slice(off, off + h);
 }
 
 // ── Middle panel (diff mode): file list ──
@@ -468,9 +471,11 @@ function buildFileListPanel(w, h) {
     const item = state.staged[i];
     const isSelected = state.cursor === listIdx;
     if (isSelected) cursorLineIdx = lines.length;
+    const hasBg = isSelected && focused;
+    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
     const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
     const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
-    const line = prefix + colors.green + item.status + ansi.reset + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + colors.green + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -480,10 +485,12 @@ function buildFileListPanel(w, h) {
     const item = state.unstaged[i];
     const isSelected = state.cursor === listIdx;
     if (isSelected) cursorLineIdx = lines.length;
+    const hasBg = isSelected && focused;
+    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
     const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
     const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
     const statusColor = item.status === 'D' ? colors.red : colors.orange;
-    const line = prefix + statusColor + item.status + ansi.reset + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + statusColor + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -493,9 +500,11 @@ function buildFileListPanel(w, h) {
     const item = state.untracked[i];
     const isSelected = state.cursor === listIdx;
     if (isSelected) cursorLineIdx = lines.length;
+    const hasBg = isSelected && focused;
+    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
     const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
     const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
-    const line = prefix + colors.dim + '?' + ansi.reset + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + colors.dim + '?' + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -650,11 +659,13 @@ function buildLogPanel(w, h) {
           else { subjStr = truncate(item.subject, available); decoPart = ''; }
         }
       }
-      const subjPart = colors.value + subjStr + ansi.reset;
-      const hashPart = (isHead ? colors.green + ansi.bold : colors.yellow) + item.ref + ansi.reset;
+      const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
+      const subjPart = colors.value + subjStr + resetTo;
+      const hashPart = (isHead ? colors.green + ansi.bold : colors.yellow) + item.ref + resetTo;
       const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
       const pad = Math.max(1, w - usedLen - 7);
-      const line = prefix + graphPart + subjPart + decoPart + ' '.repeat(pad) + hashPart;
+      const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
+      const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
       lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
       graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
