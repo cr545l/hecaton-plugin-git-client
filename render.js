@@ -221,15 +221,17 @@ function buildLeftPanel(w, h) {
 
   // Branch
   {
-    const availW = innerW - 3; // ' ⎇ ' takes 3 visible chars
+    const availW = innerW - 1; // ' ' leading space
     let branchName = state.branch || '...';
+    const slashIdx = branchName.lastIndexOf('/');
+    if (slashIdx >= 0) branchName = branchName.substring(slashIdx + 1);
     if (state.rebaseState) {
       const suffix = ' (rebasing ' + state.rebaseState.step + '/' + state.rebaseState.total + ')';
       branchName = truncate(branchName, Math.max(3, availW - suffix.length));
-      pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + branchName + colors.yellow + suffix + ansi.reset, -1);
+      pushLine(' ' + colors.value + ansi.bold + branchName + colors.yellow + suffix + ansi.reset, -1);
     } else {
       branchName = truncate(branchName, availW);
-      pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + branchName + ansi.reset, -1);
+      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset, -1);
     }
   }
 
