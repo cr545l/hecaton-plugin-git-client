@@ -1,0 +1,177 @@
+const { execFileSync } = require('child_process');
+
+function git(args, cwd) {
+  try {
+    return execFileSync('git', args, {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
+    }).replace(/\r\n/g, '\n');
+  } catch (e) {
+    if (e.stdout) return e.stdout.replace(/\r\n/g, '\n');
+    throw e;
+  }
+}
+
+function gitIsRepo(cwd) {
+  try {
+    git(['rev-parse', '--is-inside-work-tree'], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function gitBranch(cwd) {
+  try {
+    return git(['branch', '--show-current'], cwd).trim() || 'HEAD (detached)';
+  } catch {
+    return '???';
+  }
+}
+
+function gitStatus(cwd) {
+  const staged = [];
+  const unstaged = [];
+  const untracked = [];
+  try {
+    const output = git(['status', '--porcelain=v1'], cwd);
+    for (const line of output.split('\n')) {
+      if (!line) continue;
+      const x = line[0]; // index status
+      const y = line[1]; // worktree status
+      const file = line.substring(3);
+      if (x === '?') {
+        untracked.push({ file });
+      } else {
+        if (x !== ' ' && x !== '?') {
+          staged.push({ status: x, file });
+        }
+        if (y !== ' ' && y !== '?') {
+          unstaged.push({ status: y, file });
+        }
+      }
+    }
+  } catch { /* empty */ }
+  return { staged, unstaged, untracked };
+}
+
+function gitDiff(cwd, file, isStaged) {
+  try {
+    const args = ['diff'];
+    if (isStaged) args.push('--cached');
+    args.push('--', file);
+    return git(args, cwd);
+  } catch {
+    return '';
+  }
+}
+
+function gitDiffUntracked(cwd, file) {
+  try {
+    return git(['diff', '--no-index', '--', '/dev/null', file], cwd);
+  } catch {
+    return '';
+  }
+}
+
+function gitStage(cwd, file) {
+  try {
+    git(['add', '--', file], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function gitUnstage(cwd, file) {
+  try {
+    git(['restore', '--staged', '--', file], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function gitStageAll(cwd) {
+  try {
+    git(['add', '-A'], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function gitUnstageAll(cwd) {
+  try {
+    git(['reset', 'HEAD'], cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function gitCommit(cwd, message) {
+  try {
+    git(['commit', '-m', message], cwd);
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Commit failed';
+  }
+}
+
+function gitStashRefs(cwd) {
+  try {
+    const raw = git(['stash', 'list', '--format=%H\t%h\t%gd'], cwd).trim();
+    if (!raw) return [];
+    return raw.split('\n').map(line => {
+      const parts = line.split('\t');
+      return { hash: parts[0], shortHash: parts[1], ref: parts[2] };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function gitShowRef(cwd, ref) {
+  try {
+    return git(['show', ref], cwd);
+  } catch {
+    return '';
+  }
+}
+
+function gitStashDiff(cwd, ref) {
+  try {
+    return git(['stash', 'show', '-p', ref], cwd);
+  } catch {
+    return '';
+  }
+}
+
+function gitLogCommits(cwd, extraRefs, maxCount) {
+  try {
+    const args = ['log', '--all', '--topo-order', '--format=%H%x00%P%x00%D%x00%s'];
+    if (extraRefs && extraRefs.length > 0) args.push(...extraRefs);
+    if (maxCount) args.push('-' + maxCount);
+    const raw = execFileSync('git', args, {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    }).replace(/\r\n/g, '\n').trim();
+    if (!raw) return [];
+    return raw.split('\n').map(line => {
+      const parts = line.split('\0');
+      return {
+        hash: parts[0],
+        parents: parts[1] ? parts[1].split(' ') : [],
+        refs: parts[2] || '',
+        subject: (parts[3] || '').replace(/[\r\n]+/g, ' '),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+module.exports = {
+  gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
+  gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
+  gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
+};
