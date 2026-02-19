@@ -213,16 +213,24 @@ function buildLeftPanel(w, h) {
 
   function pushLine(content, fileIdx) {
     lineToFileIdx.push(fileIdx);
+    if (visLen(content) > innerW) {
+      content = truncate(content, innerW);
+    }
     lines.push(content);
   }
 
   // Branch
   {
-    let branchText = state.branch || '...';
+    const availW = innerW - 3; // ' ⎇ ' takes 3 visible chars
+    let branchName = state.branch || '...';
     if (state.rebaseState) {
-      branchText += colors.yellow + ' (rebasing ' + state.rebaseState.step + '/' + state.rebaseState.total + ')' + ansi.reset;
+      const suffix = ' (rebasing ' + state.rebaseState.step + '/' + state.rebaseState.total + ')';
+      branchName = truncate(branchName, Math.max(3, availW - suffix.length));
+      pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + branchName + colors.yellow + suffix + ansi.reset, -1);
+    } else {
+      branchName = truncate(branchName, availW);
+      pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + branchName + ansi.reset, -1);
     }
-    pushLine(colors.cyan + ' \u2387 ' + ansi.reset + colors.value + ansi.bold + branchText + ansi.reset, -1);
   }
 
   // Tab buttons: Local Changes / All Commits
@@ -404,6 +412,24 @@ function buildRightPanel(w, h) {
   return lines;
 }
 
+function colorizeDecoration(plainDeco, currentBranch, isHead) {
+  if (!plainDeco) return '';
+  const refs = plainDeco.split(', ');
+  const parts = [];
+  for (const ref of refs) {
+    if (ref === 'HEAD') {
+      parts.push(colors.green + ansi.bold + 'HEAD' + ansi.reset);
+    } else if (ref === currentBranch) {
+      parts.push(colors.green + (isHead ? ansi.bold : '') + ref + ansi.reset);
+    } else if (ref.startsWith('tag:')) {
+      parts.push(colors.yellow + ref + ansi.reset);
+    } else {
+      parts.push(colors.cyan + ref + ansi.reset);
+    }
+  }
+  return parts.join(colors.dim + ', ' + ansi.reset);
+}
+
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
     return [colors.dim + ' No commits yet' + ansi.reset];
@@ -457,36 +483,42 @@ function buildLogPanel(w, h) {
         : item.graphStr + ' ';
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
       const available = w - fixedLen;
-      const decoRaw = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
-      let subjStr, decoStr;
+      const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
+      const isHead = decoRawOrig.includes('HEAD');
+      // Strip "HEAD -> branch" to just "branch" for display width
+      const decoRaw = decoRawOrig.split(', ').map(r =>
+        r.startsWith('HEAD -> ') ? r.substring(8) : r
+      ).join(', ');
+      // Colorize decoration on full ref names first, then truncate
+      const decoColorized = decoRaw ? colorizeDecoration(decoRaw, state.branch, isHead) : '';
+      let subjStr, decoPart;
       if (available <= 0) {
         subjStr = '';
-        decoStr = '';
+        decoPart = '';
       } else if (!decoRaw) {
         subjStr = truncate(item.subject, available);
-        decoStr = '';
+        decoPart = '';
       } else {
         const subjNeed = visLen(item.subject);
         const decoNeed = visLen(decoRaw) + 1;
         if (subjNeed + decoNeed <= available) {
           subjStr = item.subject;
-          decoStr = ' ' + decoRaw;
+          decoPart = ' ' + decoColorized;
         } else {
           const subjW = Math.min(subjNeed, available - Math.min(decoNeed, Math.max(4, available - subjNeed)));
           subjStr = truncate(item.subject, subjW);
           const decoW = available - visLen(subjStr);
           if (decoW >= 4) {
-            decoStr = ' ' + truncate(decoRaw, decoW - 1);
+            decoPart = ' ' + truncate(decoColorized, decoW - 1);
           } else {
             subjStr = truncate(item.subject, available);
-            decoStr = '';
+            decoPart = '';
           }
         }
       }
       const subjPart = colors.value + subjStr + ansi.reset;
-      const decoPart = decoStr ? colors.cyan + decoStr + ansi.reset : '';
-      const hashPart = colors.yellow + item.ref + ansi.reset;
-      const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoStr);
+      const hashPart = (isHead ? colors.green + ansi.bold : colors.yellow) + item.ref + ansi.reset;
+      const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
       const pad = Math.max(1, w - usedLen - 7);
       const line = prefix + graphPart + subjPart + decoPart + ' '.repeat(pad) + hashPart;
       lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
