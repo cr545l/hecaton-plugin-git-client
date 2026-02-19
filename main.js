@@ -143,34 +143,41 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevC
         if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - DOT_R - 1, c, LINE_W);
         if (hasBelow) pxVLine(buf, pw, ph, cx, cy + DOT_R + 1, bot, c, LINE_W);
         pxCircle(buf, pw, ph, cx, cy, DOT_R, c);
+        // Bridge to adjacent cells for 1-cell-per-lane connections
+        if (i > 0 && chars[i - 1] !== ' ' && chars[i - 1] !== '\u2502' && chars[i - 1] !== '\u25cf') {
+          pxHLine(buf, pw, ph, left, cx - DOT_R - 1, cy, c, LINE_W);
+        }
+        if (i + 1 < numCols && i + 1 < chars.length && chars[i + 1] !== ' ' && chars[i + 1] !== '\u2502' && chars[i + 1] !== '\u25cf') {
+          pxHLine(buf, pw, ph, cx + DOT_R + 1, right, cy, c, LINE_W);
+        }
         break;
       }
-      case '\u251c': // ├ vertical + right
+      case '\u251c': // ├ vertical + right (extend 1px into next cell)
         pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
-        pxHLine(buf, pw, ph, cx, right, cy, c, LINE_W);
+        pxHLine(buf, pw, ph, cx, right + 1, cy, c, LINE_W);
         break;
-      case '\u2524': // ┤ vertical + left
+      case '\u2524': // ┤ vertical + left (extend 1px into prev cell)
         pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
-        pxHLine(buf, pw, ph, left, cx, cy, c, LINE_W);
+        pxHLine(buf, pw, ph, left - 1, cx, cy, c, LINE_W);
         break;
       case '\u256e': // ╮ bezier: left → down
-        pxBezier(buf, pw, ph, left, cy, cx, cy, cx, bot, c, LINE_W);
+        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, LINE_W);
         break;
       case '\u256d': // ╭ bezier: right → down
-        pxBezier(buf, pw, ph, right, cy, cx, cy, cx, bot, c, LINE_W);
+        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, LINE_W);
         break;
       case '\u256f': // ╯ bezier: up → left
-        pxBezier(buf, pw, ph, cx, top, cx, cy, left, cy, c, LINE_W);
+        pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, LINE_W);
         break;
       case '\u2570': // ╰ bezier: up → right
-        pxBezier(buf, pw, ph, cx, top, cx, cy, right, cy, c, LINE_W);
+        pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, LINE_W);
         break;
-      case '\u2500': // ─ horizontal line
-        pxHLine(buf, pw, ph, left, right, cy, c, LINE_W);
+      case '\u2500': // ─ horizontal line (extend 1px each side for cell bridging)
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, LINE_W);
         break;
-      case '\u253c': // ┼ cross
+      case '\u253c': // ┼ cross (extend horizontal 1px each side)
         pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
-        pxHLine(buf, pw, ph, left, right, cy, c, LINE_W);
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, LINE_W);
         break;
     }
   }
@@ -537,7 +544,7 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
         hash: parts[0],
         parents: parts[1] ? parts[1].split(' ') : [],
         refs: parts[2] || '',
-        subject: parts[3] || '',
+        subject: (parts[3] || '').replace(/[\r\n]+/g, ' '),
       };
     });
   } catch {
@@ -545,7 +552,7 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
   }
 }
 
-function calcGraphRows(commits) {
+function calcGraphRows(commits, stashHashes) {
   const rows = [];
   let lanes = [];
   let maxLanes = 0;
@@ -592,6 +599,23 @@ function calcGraphRows(commits) {
     const { chars, charColors } = buildGraphChars(commitLane, lanes, merges);
     maxLanes = Math.max(maxLanes, lanes.length);
 
+    // Handle incoming stash lanes: other lanes pointing to this commit's hash
+    // Draw ╯/╰ curves at the parent commit row to connect the stash branch
+    for (let i = 0; i < lanes.length; i++) {
+      if (i === commitLane) continue;
+      if (lanes[i] !== hash) continue;
+      while (chars.length <= i) { chars.push(' '); charColors.push(-1); }
+      if (i > commitLane) {
+        chars[i] = '\u256f'; // ╯ curve: up → left
+      } else {
+        chars[i] = '\u2570'; // ╰ curve: up → right
+      }
+      charColors[i] = i;
+      fillHorizontal(chars, charColors, commitLane, i, lanes);
+      lanes[i] = null;
+      maxLanes = Math.max(maxLanes, i + 1);
+    }
+
     const shortHash = hash.substring(0, 7);
     let decoration = '';
     if (commit.refs) {
@@ -606,28 +630,31 @@ function calcGraphRows(commits) {
     rows.push({ type: 'commit', chars, charColors, commitLane, ref: shortHash, decoration, subject: commit.subject });
 
     // Collapse duplicate lanes — merge visual into the commit row
-    const lastRow = rows[rows.length - 1];
-    for (let i = 0; i < lanes.length; i++) {
-      if (lanes[i] === null) continue;
-      for (let j = i + 1; j < lanes.length; j++) {
-        if (lanes[j] === lanes[i]) {
-          maxLanes = Math.max(maxLanes, lanes.length);
-          while (lastRow.chars.length < lanes.length * 2) {
-            lastRow.chars.push(' ');
-            lastRow.charColors.push(-1);
+    // Skip collapse for stash commit rows (their duplicate lanes are
+    // handled at the parent row via incoming lanes logic above)
+    const isStashRow = stashHashes && stashHashes.has(commit.hash);
+    if (!isStashRow) {
+      const lastRow = rows[rows.length - 1];
+      for (let i = 0; i < lanes.length; i++) {
+        if (lanes[i] === null) continue;
+        for (let j = i + 1; j < lanes.length; j++) {
+          if (lanes[j] === lanes[i]) {
+            maxLanes = Math.max(maxLanes, lanes.length);
+            while (lastRow.chars.length < lanes.length) {
+              lastRow.chars.push(' ');
+              lastRow.charColors.push(-1);
+            }
+            if (lastRow.chars[j] === '\u2502') {
+              lastRow.chars[j] = j > i ? '\u256f' : '\u2570';
+              lastRow.charColors[j] = j;
+            }
+            if (lastRow.chars[i] === '\u2502') {
+              lastRow.chars[i] = j > i ? '\u251c' : '\u2524';
+              lastRow.charColors[i] = i;
+            }
+            fillHorizontal(lastRow.chars, lastRow.charColors, i, j, lanes);
+            lanes[j] = null;
           }
-          const keepCol = i * 2;
-          const removeCol = j * 2;
-          if (lastRow.chars[removeCol] === '\u2502') {
-            lastRow.chars[removeCol] = j > i ? '\u256f' : '\u2570';
-            lastRow.charColors[removeCol] = j;
-          }
-          if (lastRow.chars[keepCol] === '\u2502') {
-            lastRow.chars[keepCol] = j > i ? '\u251c' : '\u2524';
-            lastRow.charColors[keepCol] = i;
-          }
-          fillHorizontal(lastRow.chars, lastRow.charColors, i, j, lanes);
-          lanes[j] = null;
         }
       }
     }
@@ -640,8 +667,8 @@ function calcGraphRows(commits) {
     // (connector rows removed — one line per commit)
   }
 
-  // Post-process: align all rows to same width, add trailing ─ for commits
-  const graphWidth = maxLanes * 2;
+  // Post-process: align all rows to same width
+  const graphWidth = maxLanes;
   for (let idx = 0; idx < rows.length; idx++) {
     const row = rows[idx];
     // Extend chars/charColors to graphWidth
@@ -660,31 +687,29 @@ function calcGraphRows(commits) {
 
 function buildGraphChars(commitLane, lanes, merges) {
   const n = lanes.length;
-  const width = n * 2;
+  const width = n; // 1-cell-per-lane for compact graph
   const chars = new Array(width).fill(' ');
   const charColors = new Array(width).fill(-1);
 
   for (let i = 0; i < n; i++) {
-    const col = i * 2;
     if (i === commitLane) {
-      chars[col] = '\u25cf';
-      charColors[col] = commitLane;
+      chars[i] = '\u25cf';
+      charColors[i] = commitLane;
     } else if (lanes[i] !== null) {
-      chars[col] = '\u2502';
-      charColors[col] = i;
+      chars[i] = '\u2502';
+      charColors[i] = i;
     }
   }
 
   for (const merge of merges) {
     const target = merge.lane;
     fillHorizontal(chars, charColors, commitLane, target, lanes);
-    const targetCol = target * 2;
     if (merge.isNew) {
-      chars[targetCol] = target > commitLane ? '\u256e' : '\u256d';
+      chars[target] = target > commitLane ? '\u256e' : '\u256d';
     } else {
-      chars[targetCol] = target > commitLane ? '\u2524' : '\u251c';
+      chars[target] = target > commitLane ? '\u2524' : '\u251c';
     }
-    charColors[targetCol] = target;
+    charColors[target] = target;
   }
 
   return { chars, charColors };
@@ -692,25 +717,23 @@ function buildGraphChars(commitLane, lanes, merges) {
 
 function buildCollapseChars(keepLane, removeLane, lanes) {
   const n = lanes.length;
-  const width = n * 2;
+  const width = n; // 1-cell-per-lane
   const chars = new Array(width).fill(' ');
   const charColors = new Array(width).fill(-1);
 
   for (let i = 0; i < n; i++) {
     if (i === keepLane || i === removeLane) continue;
     if (lanes[i] !== null) {
-      chars[i * 2] = '\u2502';
-      charColors[i * 2] = i;
+      chars[i] = '\u2502';
+      charColors[i] = i;
     }
   }
 
-  const keepCol = keepLane * 2;
-  chars[keepCol] = removeLane > keepLane ? '\u251c' : '\u2524';
-  charColors[keepCol] = keepLane;
+  chars[keepLane] = removeLane > keepLane ? '\u251c' : '\u2524';
+  charColors[keepLane] = keepLane;
 
-  const removeCol = removeLane * 2;
-  chars[removeCol] = removeLane > keepLane ? '\u256f' : '\u2570';
-  charColors[removeCol] = removeLane;
+  chars[removeLane] = removeLane > keepLane ? '\u256f' : '\u2570';
+  charColors[removeLane] = removeLane;
 
   fillHorizontal(chars, charColors, keepLane, removeLane, lanes);
 
@@ -722,23 +745,15 @@ function fillHorizontal(chars, charColors, fromLane, toLane, lanes) {
   const right = Math.max(fromLane, toLane);
   const lineColor = toLane;
 
-  for (let col = left * 2 + 1; col < right * 2; col++) {
-    const isLanePos = (col % 2 === 0);
-    if (isLanePos) {
-      const laneIdx = col / 2 | 0;
-      if (laneIdx === fromLane || laneIdx === toLane) continue;
-      const existing = chars[col];
-      if (existing === '\u2502' || existing === '\u251c' || existing === '\u2524' || existing === '\u256e' || existing === '\u256d') {
-        chars[col] = '\u253c';
-      } else if (existing === ' ') {
-        chars[col] = '\u2500';
-        charColors[col] = lineColor;
-      }
-    } else {
-      if (chars[col] === ' ') {
-        chars[col] = '\u2500';
-        charColors[col] = lineColor;
-      }
+  // 1-cell-per-lane: fill between adjacent lane positions
+  for (let col = left + 1; col < right; col++) {
+    if (col === fromLane || col === toLane) continue;
+    const existing = chars[col];
+    if (existing === '\u2502' || existing === '\u251c' || existing === '\u2524' || existing === '\u256e' || existing === '\u256d') {
+      chars[col] = '\u253c';
+    } else if (existing === ' ') {
+      chars[col] = '\u2500';
+      charColors[col] = lineColor;
     }
   }
 }
@@ -875,7 +890,7 @@ function refreshLog() {
       }
     }
   }
-  const commits = stashSubHashes.size > 0
+  let commits = stashSubHashes.size > 0
     ? rawCommits
         .filter(c => !stashSubHashes.has(c.hash))
         .map(c => {
@@ -884,7 +899,40 @@ function refreshLog() {
         })
     : rawCommits;
 
-  const graphRows = calcGraphRows(commits);
+  // Reorder stash commits: place them right BEFORE their parent commit
+  // so stash (child) appears above the parent in the time-ordered list.
+  // The curve (╯) is drawn at the parent row by calcGraphRows.
+  if (stashFullHashes.size > 0) {
+    const hashIdx = new Map();
+    for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
+
+    const stashByParent = new Map();
+    const stashSet = new Set();
+    for (const c of commits) {
+      if (!stashFullHashes.has(c.hash)) continue;
+      const parentHash = c.parents[0];
+      if (!parentHash || !hashIdx.has(parentHash)) continue;
+      if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
+      stashByParent.get(parentHash).push(c);
+      stashSet.add(c.hash);
+    }
+
+    if (stashByParent.size > 0) {
+      const reordered = [];
+      for (const c of commits) {
+        if (stashSet.has(c.hash)) continue;
+        // Insert stash commits right before their parent
+        const stashes = stashByParent.get(c.hash);
+        if (stashes) {
+          for (const s of stashes) reordered.push(s);
+        }
+        reordered.push(c);
+      }
+      commits = reordered;
+    }
+  }
+
+  const graphRows = calcGraphRows(commits, stashFullHashes);
 
   for (const row of graphRows) {
     if (row.type === 'commit') {
@@ -1161,12 +1209,12 @@ function buildLeftPanel(w, h) {
   // Tab buttons: Local Changes / All Commits
   {
     const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
-    const localLabel = `Local Changes (${totalChanges})`;
-    const allLabel = 'All Commits';
+    const localLabel = `Local (${totalChanges})`;
+    const allLabel = 'Commits';
     const isLocal = state.rightView !== 'log';
     const isAll = state.rightView === 'log';
-    const activeStyle = colors.value + ansi.bold;
-    const inactiveStyle = colors.dim;
+    const activeStyle = colors.title + ansi.bold;
+    const inactiveStyle = colors.title;
 
     let col = 1;
     const localColStart = col;
@@ -1298,13 +1346,13 @@ function buildRightPanel(w, h) {
     if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
     const visible = state.diffLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
     for (const rawLine of visible) {
-      lines.push(' ' + colorizeDiffLine(rawLine, w));
+      lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
     }
     if (state.diffLines.length > diffH) {
       const pct = Math.round((state.diffScrollOffset / maxScroll) * 100);
       const indicator = colors.dim + ` [${pct}%]` + ansi.reset;
       if (lines.length > 0) {
-        lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 6) + indicator;
+        lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 8) + indicator;
       }
     }
   }
@@ -1462,7 +1510,7 @@ function buildLogPanel(w, h) {
     const pct = Math.round((state.logScrollOffset / maxScroll) * 100);
     const indicator = colors.dim + ` [${pct}%]` + ansi.reset;
     if (lines.length > 0) {
-      lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 6) + indicator;
+      lines[lines.length - 1] = padRight(lines[lines.length - 1], w - 8) + indicator;
     }
   }
 
@@ -1491,12 +1539,12 @@ function buildLogPanel(w, h) {
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + contentH);
       for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, w));
+        lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
       }
       if (state.logDetailLines.length > contentH && lines.length > listH + separatorH + 1) {
         const pct = Math.round((state.diffScrollOffset / maxDetailScroll) * 100);
         const idx = listH + separatorH + 1;
-        lines[idx] = padRight(lines[idx], w - 6) + colors.dim + ` [${pct}%]` + ansi.reset;
+        lines[idx] = padRight(lines[idx], w - 8) + colors.dim + ` [${pct}%]` + ansi.reset;
       }
     }
   }
