@@ -133,6 +133,7 @@ function render() {
   // -- Body --
   if (state.rightView === 'log') {
     // 2-column body: left | right (log panel with top/bottom split)
+    ui.fileLineMap = [];
     const rightLines = buildLogPanel(rightW, contentH);
 
     if (ui.leftPanelCollapsed) {
@@ -141,7 +142,6 @@ function render() {
         const rContent = i < rightLines.length ? rightLines[i] : '';
         buf.push(ansi.moveTo(row, startCol) + padRight(rContent, width));
       }
-      ui.fileLineMap = [];
       ui.leftTabZones = [];
     } else {
       const leftLines = buildLeftPanel(leftW, contentH);
@@ -348,13 +348,11 @@ function buildLeftPanel(w, h) {
 
   if (state.loading) {
     pushLine(colors.dim + ' Loading...' + ansi.reset);
-    ui.fileLineMap = [];
     return lines;
   }
 
   if (!state.isGitRepo) {
     pushLine(colors.red + ' Not a git repository' + ansi.reset);
-    ui.fileLineMap = [];
     return lines;
   }
 
@@ -427,7 +425,6 @@ function buildLeftPanel(w, h) {
     }
   }
 
-  ui.fileLineMap = [];
   return lines.slice(0, h);
 }
 
