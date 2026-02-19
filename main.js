@@ -599,8 +599,9 @@ function calcGraphRows(commits, stashHashes) {
     const { chars, charColors } = buildGraphChars(commitLane, lanes, merges);
     maxLanes = Math.max(maxLanes, lanes.length);
 
-    // Handle incoming stash lanes: other lanes pointing to this commit's hash
-    // Draw ╯/╰ curves at the parent commit row to connect the stash branch
+    // Handle incoming lanes: other lanes pointing to this commit's hash
+    // (from deferred branch collapses or stash branches)
+    // Draw ╯/╰ bezier curves at the ancestor row to connect them smoothly
     for (let i = 0; i < lanes.length; i++) {
       if (i === commitLane) continue;
       if (lanes[i] !== hash) continue;
@@ -630,31 +631,32 @@ function calcGraphRows(commits, stashHashes) {
     rows.push({ type: 'commit', chars, charColors, commitLane, ref: shortHash, decoration, subject: commit.subject });
 
     // Collapse duplicate lanes — merge visual into the commit row
-    // Skip collapse for stash commit rows (their duplicate lanes are
-    // handled at the parent row via incoming lanes logic above)
-    const isStashRow = stashHashes && stashHashes.has(commit.hash);
-    if (!isStashRow) {
-      const lastRow = rows[rows.length - 1];
-      for (let i = 0; i < lanes.length; i++) {
-        if (lanes[i] === null) continue;
-        for (let j = i + 1; j < lanes.length; j++) {
-          if (lanes[j] === lanes[i]) {
-            maxLanes = Math.max(maxLanes, lanes.length);
-            while (lastRow.chars.length < lanes.length) {
-              lastRow.chars.push(' ');
-              lastRow.charColors.push(-1);
-            }
-            if (lastRow.chars[j] === '\u2502') {
-              lastRow.chars[j] = j > i ? '\u256f' : '\u2570';
-              lastRow.charColors[j] = j;
-            }
-            if (lastRow.chars[i] === '\u2502') {
-              lastRow.chars[i] = j > i ? '\u251c' : '\u2524';
-              lastRow.charColors[i] = i;
-            }
-            fillHorizontal(lastRow.chars, lastRow.charColors, i, j, lanes);
-            lanes[j] = null;
+    // When the collapsing lane has a commit dot (●), skip the collapse:
+    // can't replace ● with ╯/╰ curve. The merge will be drawn at the
+    // ancestor commit's row via the incoming lanes logic above.
+    const lastRow = rows[rows.length - 1];
+    for (let i = 0; i < lanes.length; i++) {
+      if (lanes[i] === null) continue;
+      for (let j = i + 1; j < lanes.length; j++) {
+        if (lanes[j] === lanes[i]) {
+          // Skip when commit dot is at the collapsing lane (j) — can't replace
+          // ● with ╯/╰. The merge will be drawn at the ancestor row instead.
+          if (lastRow.chars[j] === '\u25cf') continue;
+          maxLanes = Math.max(maxLanes, lanes.length);
+          while (lastRow.chars.length < lanes.length) {
+            lastRow.chars.push(' ');
+            lastRow.charColors.push(-1);
           }
+          if (lastRow.chars[j] === '\u2502') {
+            lastRow.chars[j] = j > i ? '\u256f' : '\u2570';
+            lastRow.charColors[j] = j;
+          }
+          if (lastRow.chars[i] === '\u2502') {
+            lastRow.chars[i] = j > i ? '\u251c' : '\u2524';
+            lastRow.charColors[i] = i;
+          }
+          fillHorizontal(lastRow.chars, lastRow.charColors, i, j, lanes);
+          lanes[j] = null;
         }
       }
     }
