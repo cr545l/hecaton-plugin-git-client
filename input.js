@@ -585,6 +585,7 @@ function handleMouseData(data) {
                 state.logScrollOffset = 0;
                 state.diffScrollOffset = 0;
                 updateLogDetail();
+                registerHistoryContextMenu();
               }
               const targetBranch = entry.branch;
               let foundIdx = -1;
@@ -617,6 +618,7 @@ function handleMouseData(data) {
                 state.logScrollOffset = 0;
                 state.diffScrollOffset = 0;
                 updateLogDetail();
+                registerHistoryContextMenu();
               }
               const targetHash = entry.shortHash;
               let foundIdx = -1;
