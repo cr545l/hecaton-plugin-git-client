@@ -299,6 +299,18 @@ function render() {
     }
   }
   if (ui.hoveredAreaIndex >= ui.clickableAreas.length) ui.hoveredAreaIndex = -1;
+
+  // Position cursor at text input location for IME composition
+  if (state.mode === 'commit' && state.rightView !== 'log' && ui.rightDiffH >= 0) {
+    const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
+    const cursorRow = startRow + 2 + ui.rightDiffH + 1;
+    const cursorCol = rpStartCol + 1 + visLen(state.commitMsg);
+    process.stdout.write(ansi.moveTo(cursorRow, cursorCol));
+  } else if (state.mode === 'new-branch') {
+    process.stdout.write(ansi.moveTo(hintRow, startCol + 13 + visLen(state.inputBuffer)));
+  } else if (state.mode === 'new-tag') {
+    process.stdout.write(ansi.moveTo(hintRow, startCol + 10 + visLen(state.inputBuffer)));
+  }
 }
 
 // ── Left panel: branch tree ──
