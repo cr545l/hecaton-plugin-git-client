@@ -757,6 +757,37 @@ function handleMouseData(data) {
         render();
       }
     }
+
+    // Right click - update selection for context menu
+    if (cb === 2) {
+      if (state.rightView === 'log') {
+        const bodyRowIdx = cy - (L.startRow + 2);
+        const rightStart2 = midStart + L.middleW + L.divider2W;
+        const inRight2 = cx >= rightStart2 && cx < L.startCol + L.width;
+        if (inRight2 && bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
+          const itemIdx = state.logScrollOffset + bodyRowIdx;
+          const selectIdx = state.logSelectables.indexOf(itemIdx);
+          if (selectIdx >= 0) {
+            state.logCursor = selectIdx;
+            state.diffScrollOffset = 0;
+            updateLogDetail();
+            state.focusPanel = 'status';
+            render();
+          }
+        }
+      } else {
+        // Diff mode: right-click on file list updates cursor
+        const bodyRowIdx = cy - (L.startRow + 2);
+        const inMiddle2 = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
+        if (inMiddle2 && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+          const fileIdx = ui.fileLineMap[bodyRowIdx];
+          state.cursor = fileIdx;
+          updateDiff();
+          state.focusPanel = 'status';
+          render();
+        }
+      }
+    }
   }
   return hadMouse;
 }
