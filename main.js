@@ -22,10 +22,12 @@
 const { state, ui } = require('./state');
 const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
-const { refresh, refreshAsync } = require('./refresh');
+const { refresh, refreshAsync, refreshLog } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
 const { handleContextMenuAction } = require('./context-menu');
+const fs = require('fs');
+const path = require('path');
 
 async function main() {
   render();
@@ -94,10 +96,34 @@ async function main() {
   await refreshAsync();
   render();
 
+  // Auto-refresh: watch .git directory for changes
+  setupGitWatcher();
+
   // Graceful shutdown
   process.on('SIGTERM', () => { cleanup(); process.exit(0); });
   process.on('SIGINT', () => { cleanup(); process.exit(0); });
   process.stdin.on('end', () => { cleanup(); process.exit(0); });
+}
+
+function setupGitWatcher() {
+  if (!state.cwd || !state.isGitRepo) return;
+
+  let debounceTimer = null;
+
+  function triggerRefresh() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      if (state.loading || state.mode !== 'normal') return;
+      refresh();
+      if (state.rightView === 'log') refreshLog();
+      render();
+    }, 300);
+  }
+
+  const gitDir = path.join(state.cwd, '.git');
+  try {
+    fs.watch(gitDir, { recursive: true }, triggerRefresh);
+  } catch { /* ignore */ }
 }
 
 main().catch((e) => {
