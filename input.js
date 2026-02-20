@@ -166,7 +166,8 @@ function handleCommitInput(key) {
     render();
     return;
   }
-  if (key === '\r' || key === '\n') {
+  // Ctrl+Enter → submit commit
+  if (key === CSI + '13;5u') {
     if (state.commitMsg.trim().length === 0) {
       state.error = 'Commit message cannot be empty';
       render();
@@ -184,6 +185,10 @@ function handleCommitInput(key) {
       refresh();
       render();
     }
+    return;
+  }
+  // Plain Enter → ignore (prevent accidental commit)
+  if (key === '\r' || key === '\n') {
     return;
   }
   if (key === '\x7f' || key === '\b' || key === CSI + '3~') {
@@ -647,8 +652,8 @@ function handleMouseData(data) {
       // Click on commit button zone
       if (ui.commitButtonZone && cy === ui.commitButtonZone.row && cx >= ui.commitButtonZone.colStart && cx <= ui.commitButtonZone.colEnd) {
         if (state.mode === 'commit' && state.commitMsg.trim().length > 0) {
-          // Trigger commit
-          handleCommitInput('\r');
+          // Trigger commit via button click
+          handleCommitInput(CSI + '13;5u');
         } else if (state.staged.length > 0 && state.mode !== 'commit') {
           state.mode = 'commit';
           state.commitMsg = '';

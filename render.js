@@ -239,7 +239,7 @@ function render() {
       + colors.dim + '[Esc]cancel' + ansi.reset;
   } else if (state.mode === 'commit') {
     hintContent = colors.yellow + ' Commit: ' + ansi.reset
-      + colors.dim + '[Enter]submit  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Ctrl+Enter]submit  [Esc]cancel' + ansi.reset;
   } else if (state.mode === 'new-branch') {
     hintContent = colors.yellow + ' New Branch: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
@@ -662,7 +662,7 @@ function buildDiffCommitPanel(w, h) {
 
     const commitLabel = '[Commit]';
     if (state.mode === 'commit' && state.commitMsg.trim().length > 0) {
-      lines.push(' ' + colors.green + ansi.bold + commitLabel + ansi.reset + colors.dim + '  Enter \u2190 submit  Esc \u2190 cancel' + ansi.reset);
+      lines.push(' ' + colors.green + ansi.bold + commitLabel + ansi.reset + colors.dim + '  Ctrl+Enter \u2190 submit  Esc \u2190 cancel' + ansi.reset);
     } else if (state.mode === 'commit') {
       lines.push(' ' + colors.dim + commitLabel + '  Esc \u2190 cancel' + ansi.reset);
     } else {
