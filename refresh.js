@@ -1,6 +1,7 @@
 const { state, ui } = require('./state');
 const { gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches } = require('./git');
 const { calcGraphRows } = require('./graph');
+const { sendRpcNotify } = require('./rpc');
 
 function buildFileList() {
   const list = [];
@@ -42,6 +43,7 @@ function refresh() {
   }
   state.error = null;
   state.branch = gitBranch(state.cwd);
+  sendRpcNotify('set_title', { title: state.branch });
   state.rebaseState = gitRebaseState(state.cwd);
   state.branches = gitBranches(state.cwd);
   state.remoteBranches = gitRemoteBranches(state.cwd);
@@ -80,6 +82,7 @@ async function refreshAsync() {
 
   // branch
   state.branch = branchRaw.trim() || 'HEAD (detached)';
+  sendRpcNotify('set_title', { title: state.branch });
 
   // status — gitStatus()와 동일한 파싱 로직
   const staged = [], unstaged = [], untracked = [];
