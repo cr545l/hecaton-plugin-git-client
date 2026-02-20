@@ -273,6 +273,101 @@ function gitRemoteBranches(cwd) {
   }
 }
 
+function gitCherryPick(cwd, ref) {
+  try {
+    execFileSync('git', ['cherry-pick', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Cherry-pick failed';
+  }
+}
+
+function gitRevert(cwd, ref) {
+  try {
+    execFileSync('git', ['revert', '--no-edit', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Revert failed';
+  }
+}
+
+function gitCheckoutRef(cwd, ref) {
+  try {
+    execFileSync('git', ['checkout', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Checkout failed';
+  }
+}
+
+function gitCreateBranch(cwd, name, startPoint) {
+  try {
+    const args = ['checkout', '-b', name];
+    if (startPoint) args.push(startPoint);
+    execFileSync('git', args, {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Create branch failed';
+  }
+}
+
+function gitCreateTag(cwd, name, ref) {
+  try {
+    const args = ['tag', name];
+    if (ref) args.push(ref);
+    git(args, cwd);
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Create tag failed';
+  }
+}
+
+function gitReset(cwd, ref) {
+  try {
+    execFileSync('git', ['reset', '--hard', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Reset failed';
+  }
+}
+
+function gitMerge(cwd, ref) {
+  try {
+    execFileSync('git', ['merge', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Merge failed';
+  }
+}
+
+function gitFormatPatch(cwd, ref) {
+  try {
+    return git(['format-patch', '-1', ref, '--stdout'], cwd);
+  } catch {
+    return '';
+  }
+}
+
+function gitCommitInfo(cwd, ref) {
+  try {
+    return git(['log', '-1', '--format=%H%n%s%n%an <%ae>%n%ai', ref], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
 module.exports = {
   gitExec,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
@@ -280,4 +375,6 @@ module.exports = {
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
   gitBranches, gitRemoteBranches,
+  gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
+  gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
 };

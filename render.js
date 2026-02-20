@@ -240,6 +240,14 @@ function render() {
   } else if (state.mode === 'commit') {
     hintContent = colors.yellow + ' Commit: ' + ansi.reset
       + colors.dim + '[Enter]submit  [Esc]cancel' + ansi.reset;
+  } else if (state.mode === 'new-branch') {
+    hintContent = colors.yellow + ' New Branch: ' + ansi.reset
+      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
+      + colors.dim + '[Enter]create  [Esc]cancel' + ansi.reset;
+  } else if (state.mode === 'new-tag') {
+    hintContent = colors.yellow + ' New Tag: ' + ansi.reset
+      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
+      + colors.dim + '[Enter]create  [Esc]cancel' + ansi.reset;
   } else if (state.error) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
   } else {

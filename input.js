@@ -1,9 +1,10 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip } = require('./git');
+const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag } = require('./git');
 const { sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
+const { registerHistoryContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -27,6 +28,10 @@ function handleKey(key) {
   }
   if (state.mode === 'commit') {
     handleCommitInput(key);
+    return;
+  }
+  if (state.mode === 'new-branch' || state.mode === 'new-tag') {
+    handleNameInput(key);
     return;
   }
 
@@ -92,6 +97,7 @@ function handleKey(key) {
       if (state.rightView === 'log') {
         state.rightView = 'diff';
         updateDiff();
+        unregisterContextMenu();
       } else {
         state.rightView = 'log';
         refreshLog();
@@ -99,6 +105,7 @@ function handleKey(key) {
         state.logScrollOffset = 0;
         state.diffScrollOffset = 0;
         updateLogDetail();
+        registerHistoryContextMenu();
       }
       state.focusPanel = 'status';
       render();
@@ -248,6 +255,61 @@ function handleRebaseMenuInput(key) {
     } else {
       render();
     }
+    return;
+  }
+}
+
+function handleNameInput(key) {
+  if (key === ESC || key === '\x1b') {
+    state.mode = 'normal';
+    state.inputBuffer = '';
+    state.inputTarget = '';
+    render();
+    return;
+  }
+  if (key === '\r' || key === '\n') {
+    const name = state.inputBuffer.trim();
+    if (name.length === 0) {
+      state.error = 'Name cannot be empty';
+      render();
+      setTimeout(() => { state.error = null; render(); }, 2000);
+      return;
+    }
+    let err;
+    if (state.mode === 'new-branch') {
+      err = gitCreateBranch(state.cwd, name, state.inputTarget);
+    } else {
+      err = gitCreateTag(state.cwd, name, state.inputTarget);
+    }
+    const opName = state.mode === 'new-branch' ? 'Branch' : 'Tag';
+    state.mode = 'normal';
+    state.inputBuffer = '';
+    state.inputTarget = '';
+    if (err) {
+      state.error = opName + ' failed: ' + err.substring(0, 60);
+      render();
+      setTimeout(() => { state.error = null; render(); }, 3000);
+    } else {
+      refresh();
+      if (state.rightView === 'log') refreshLog();
+      registerHistoryContextMenu();
+      render();
+    }
+    return;
+  }
+  if (key === '\x7f' || key === '\b' || key === CSI + '3~') {
+    state.inputBuffer = state.inputBuffer.slice(0, -1);
+    render();
+    return;
+  }
+  if (key.length === 1 && key.charCodeAt(0) >= 32) {
+    state.inputBuffer += key;
+    render();
+    return;
+  }
+  if (key.length > 1 && !key.startsWith('\x1b')) {
+    state.inputBuffer += key;
+    render();
     return;
   }
 }
@@ -495,6 +557,7 @@ function handleMouseData(data) {
               ui.leftPanelActiveBranch = null;
               state.rightView = 'diff';
               updateDiff();
+              unregisterContextMenu();
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'tab-commits') {
@@ -504,6 +567,7 @@ function handleMouseData(data) {
               state.logScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateLogDetail();
+              registerHistoryContextMenu();
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'toggle-section') {

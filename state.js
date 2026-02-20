@@ -20,8 +20,10 @@ const state = {
   remoteBranches: [],     // ['origin/main', ...]
   stashes: [],            // [{ hash, shortHash, ref }]
   rebaseState: null,     // null | { type, step, total }
-  mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu'
+  mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu' | 'new-branch' | 'new-tag'
   commitMsg: '',
+  inputBuffer: '',
+  inputTarget: '',
   error: null,
   loading: true,
   minimized: false,

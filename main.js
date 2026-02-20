@@ -25,6 +25,7 @@ const { handleRpcResponse } = require('./rpc');
 const { refresh, refreshAsync } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
+const { handleContextMenuAction } = require('./context-menu');
 
 async function main() {
   render();
@@ -60,6 +61,8 @@ async function main() {
             state.minimized = false;
             refresh();
             render();
+          } else if (json.method === 'context_menu_action' && json.params) {
+            handleContextMenuAction(json.params.id);
           } else {
             handleRpcResponse(json);
           }
