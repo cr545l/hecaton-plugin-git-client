@@ -15,34 +15,34 @@ const ansi = {
 };
 
 const colors = {
-  title: ansi.fg(130, 180, 255),
-  label: ansi.fg(180, 180, 200),
-  value: ansi.fg(255, 255, 255),
-  dim: ansi.fg(100, 100, 120),
-  green: ansi.fg(120, 220, 150),
-  red: ansi.fg(230, 110, 110),
-  yellow: ansi.fg(230, 200, 100),
-  cyan: ansi.fg(100, 200, 230),
-  orange: ansi.fg(230, 170, 100),
-  border: ansi.fg(80, 80, 100),
-  sectionHeader: ansi.fg(160, 160, 180),
-  cursor: ansi.fg(255, 255, 255),
-  cursorBg: ansi.bg(60, 60, 90),
-  diffAdd: ansi.fg(120, 220, 150),
-  diffDel: ansi.fg(230, 110, 110),
-  diffHunk: ansi.fg(100, 200, 230),
-  diffHeader: ansi.fg(180, 180, 200),
-  inputBg: ansi.bg(40, 40, 60),
+  title: CSI + '94m',         // bright blue
+  label: CSI + '39m',         // default foreground
+  value: CSI + '39m',         // default foreground
+  dim: CSI + '2m',             // SGR dim (faint)
+  green: CSI + '32m',         // green
+  red: CSI + '31m',           // red
+  yellow: CSI + '33m',        // yellow
+  cyan: CSI + '36m',          // cyan
+  orange: CSI + '33m',        // yellow (dark gold on light themes)
+  border: CSI + '2m',         // SGR dim (faint)
+  sectionHeader: CSI + '39m', // default foreground
+  cursor: CSI + '39m',        // default foreground
+  cursorBg: CSI + '100m',     // bright black bg
+  diffAdd: CSI + '32m',       // green
+  diffDel: CSI + '31m',       // red
+  diffHunk: CSI + '36m',      // cyan
+  diffHeader: CSI + '39m',    // default foreground
+  inputBg: CSI + '100m',      // bright black bg
 };
 
-// Serie-style branch lane colors (6 colors from serie's palette)
+// Branch lane colors (ANSI bright palette)
 const seriePalette = [
-  ansi.fg(224, 108, 118),  // red/coral
-  ansi.fg(152, 195, 121),  // green
-  ansi.fg(229, 192, 123),  // yellow
-  ansi.fg(97, 175, 239),   // blue
-  ansi.fg(198, 120, 221),  // purple
-  ansi.fg(86, 182, 194),   // cyan
+  CSI + '91m',  // bright red
+  CSI + '92m',  // bright green
+  CSI + '93m',  // bright yellow
+  CSI + '94m',  // bright blue
+  CSI + '95m',  // bright magenta
+  CSI + '96m',  // bright cyan
 ];
 
 module.exports = { ESC, CSI, ansi, colors, seriePalette };

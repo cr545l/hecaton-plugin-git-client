@@ -858,11 +858,7 @@ function colorizeDiffLine(rawLine, w) {
   return colors.label + truncate(rawLine, w) + ansi.reset;
 }
 
-const hintButtons = [
-  { label: '[c]ommit',   action: 'commit' },
-  { label: '[b]rebase',  action: 'rebase' },
-  { label: '[r]efresh',  action: 'refresh' },
-];
+const hintButtons = [];
 
 function buildHintText() {
   let result = '';
