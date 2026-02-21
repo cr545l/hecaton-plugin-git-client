@@ -435,6 +435,8 @@ function handleMouseData(data) {
     const isRelease = mouseMatch[4] === 'm';
 
     const L = ui.lastLayout;
+    const titleH = (L.titleRows || 2) + 1; // title rows + separator
+    const bodyTop = L.startRow + titleH;
     const midStart = L.startCol + L.leftW + L.divider1W;
     const rightStart = midStart + L.middleW + L.divider2W;
     const div1Col = L.startCol + L.leftW;
@@ -455,7 +457,6 @@ function handleMouseData(data) {
         continue;
       }
       if (ui.dragging === 'horizontal') {
-        const bodyTop = L.startRow + 2;
         const contentH = Math.max(1, L.bodyH - 2);
         const relY = cy - bodyTop;
         ui.logListRatio = Math.max(0.1, Math.min(0.9, relY / contentH));
@@ -472,17 +473,17 @@ function handleMouseData(data) {
         }
       }
       let newTitleHover = -1;
-      if (cy === L.startRow) {
+      if (cy >= L.startRow && cy < bodyTop) {
         for (let i = 0; i < ui.titleClickZones.length; i++) {
           const zone = ui.titleClickZones[i];
-          if (cx >= zone.colStart && cx <= zone.colEnd) {
+          if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
             newTitleHover = i;
             break;
           }
         }
       }
       let newDivHover = null;
-      const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
+      const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (!ui.leftPanelCollapsed && inBody) {
         if (cx >= div1Col - 1 && cx <= div1Col + 1) {
           newDivHover = 'vertical';
@@ -492,7 +493,7 @@ function handleMouseData(data) {
         newDivHover = 'vertical2';
       }
       if (state.rightView === 'log' && inBody && ui.lastLogListH > 0) {
-        const hDivRow = L.startRow + 2 + ui.lastLogListH;
+        const hDivRow = bodyTop + ui.lastLogListH;
         if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
           newDivHover = 'horizontal';
         }
@@ -500,7 +501,7 @@ function handleMouseData(data) {
       // Hover: file header buttons (Stage All / Unstage All)
       let newFileHeaderHover = -1;
       if (state.rightView !== 'log' && inBody) {
-        const bodyRowIdx = cy - (L.startRow + 2);
+        const bodyRowIdx = cy - (bodyTop);
         for (let i = 0; i < ui.fileHeaderZones.length; i++) {
           const zone = ui.fileHeaderZones[i];
           const visibleLineIdx = zone.lineIdx - state.scrollOffset;
@@ -520,7 +521,7 @@ function handleMouseData(data) {
       if (!ui.leftPanelCollapsed && inBody) {
         const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
         if (inLeft) {
-          const bodyRowIdx = cy - (L.startRow + 2);
+          const bodyRowIdx = cy - (bodyTop);
           if (bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length && ui.leftPanelClickMap[bodyRowIdx]) {
             newLeftPanelHover = bodyRowIdx;
           }
@@ -529,7 +530,7 @@ function handleMouseData(data) {
 
       // Context menu: only active when mouse is over the history list area
       if (state.rightView === 'log') {
-        const bodyRowIdx = cy - (L.startRow + 2);
+        const bodyRowIdx = cy - (bodyTop);
         const inHistoryList = inBody && cx >= rightStart && cx < L.startCol + L.width &&
           bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH;
         if (inHistoryList && !ui.contextMenuActive) {
@@ -560,7 +561,7 @@ function handleMouseData(data) {
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
       const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
       const inRight = cx >= rightStart && cx < L.startCol + L.width;
-      const inBody = cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH;
+      const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (inBody && inLeft) {
         if (cb === 64) ui.leftPanelScrollOffset = Math.max(0, ui.leftPanelScrollOffset - 3);
         else ui.leftPanelScrollOffset += 3;
@@ -578,7 +579,7 @@ function handleMouseData(data) {
       } else if (inBody && inRight) {
         if (state.rightView === 'log') {
           // Log mode: top = log scroll, bottom = detail scroll
-          const bodyRowIdx = cy - (L.startRow + 2);
+          const bodyRowIdx = cy - (bodyTop);
           if (bodyRowIdx < ui.lastLogListH) {
             if (state.logSelectables.length > 0) {
               if (cb === 64) state.logCursor = Math.max(0, state.logCursor - 3);
@@ -605,11 +606,11 @@ function handleMouseData(data) {
 
     // Left click
     if (cb === 0) {
-      // Title row click
-      if (cy === L.startRow) {
+      // Title rows click
+      if (cy >= L.startRow && cy < bodyTop) {
         let handled = false;
         for (const zone of ui.titleClickZones) {
-          if (cx >= zone.colStart && cx <= zone.colEnd) {
+          if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
             if (zone.action === 'toggleStatus') {
               ui.leftPanelCollapsed = !ui.leftPanelCollapsed;
               render();
@@ -657,19 +658,19 @@ function handleMouseData(data) {
 
       // Divider drag start: first vertical divider
       if (!ui.leftPanelCollapsed) {
-        if (cx >= div1Col - 1 && cx <= div1Col + 1 && cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH) {
+        if (cx >= div1Col - 1 && cx <= div1Col + 1 && cy >= bodyTop && cy < bodyTop + L.bodyH) {
           ui.dragging = 'vertical';
           continue;
         }
       }
       // Divider drag start: second vertical divider (diff mode only)
-      if (L.middleW > 0 && cx >= div2Col - 1 && cx <= div2Col + 1 && cy >= L.startRow + 2 && cy < L.startRow + 2 + L.bodyH) {
+      if (L.middleW > 0 && cx >= div2Col - 1 && cx <= div2Col + 1 && cy >= bodyTop && cy < bodyTop + L.bodyH) {
         ui.dragging = 'vertical2';
         continue;
       }
       // Horizontal divider drag start (log mode only)
       if (state.rightView === 'log' && ui.lastLogListH > 0) {
-        const hDivRow = L.startRow + 2 + ui.lastLogListH;
+        const hDivRow = bodyTop + ui.lastLogListH;
         if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
           ui.dragging = 'horizontal';
           continue;
@@ -686,7 +687,7 @@ function handleMouseData(data) {
 
       // Click on left panel (clickMap-based)
       {
-        const bodyRowIdx2 = cy - (L.startRow + 2);
+        const bodyRowIdx2 = cy - (bodyTop);
         const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
         if (inLeft && bodyRowIdx2 >= 0 && bodyRowIdx2 < ui.leftPanelClickMap.length) {
           const entry = ui.leftPanelClickMap[bodyRowIdx2];
@@ -805,7 +806,7 @@ function handleMouseData(data) {
         continue;
       }
 
-      const bodyRowIdx = cy - (L.startRow + 2);
+      const bodyRowIdx = cy - (bodyTop);
       const inMiddle = cx >= midStart && cx < midStart + L.middleW;
       const inRight = cx >= rightStart && cx < L.startCol + L.width;
 
@@ -899,7 +900,7 @@ function handleMouseData(data) {
     // Right click - update selection for context menu
     if (cb === 2) {
       if (state.rightView === 'log') {
-        const bodyRowIdx = cy - (L.startRow + 2);
+        const bodyRowIdx = cy - (bodyTop);
         const rightStart2 = midStart + L.middleW + L.divider2W;
         const inRight2 = cx >= rightStart2 && cx < L.startCol + L.width;
         if (inRight2 && bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
@@ -915,7 +916,7 @@ function handleMouseData(data) {
         }
       } else {
         // Diff mode: right-click on file list updates cursor
-        const bodyRowIdx = cy - (L.startRow + 2);
+        const bodyRowIdx = cy - (bodyTop);
         const inMiddle2 = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
         if (inMiddle2 && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
           const fileIdx = ui.fileLineMap[bodyRowIdx];

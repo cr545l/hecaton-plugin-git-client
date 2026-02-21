@@ -48,16 +48,15 @@ function render() {
     rightW = Math.max(1, remaining - middleW - divider2W);
   }
 
-  const bodyH = height - 2;
+  const titleRows = 1;
+  const bodyH = height - (titleRows + 1);  // title row + separator
   const contentH = Math.max(0, bodyH - 2);
   const hintRow = startRow + height - 1;
   const sepRow = startRow + height - 2;
 
   // -- Title row (rendered after body so scrollPct is available) --
-  function buildTitleRow() {
+  function buildTitleRows() {
     ui.titleClickZones = [];
-    let titleStr = ansi.moveTo(startRow, startCol);
-    let col = startCol;
     let zoneIdx = 0;
 
     const zoneStyle = (idx, collapsed) => {
@@ -65,116 +64,79 @@ function render() {
       return collapsed ? colors.dim : colors.title + ansi.bold;
     };
 
-    function pushZone(label, action, collapsed) {
-      const si = zoneIdx++;
-      ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(label) - 1, action });
-      titleStr += zoneStyle(si, collapsed) + label + ansi.reset;
-      col += visLen(label);
-    }
-
     function pctSuffix(pct) {
       if (pct < 0) return '';
       return colors.dim + ' ' + pct + '%' + ansi.reset;
     }
 
-    // Tab switches: Commits / Local (always visible, before Status)
+    // Build right-side panel buttons string first to know its width
+    let rightParts = []; // { label, action, collapsed, pctStr }
+    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', action: 'toggleStatus', collapsed: ui.leftPanelCollapsed, pctStr: pctSuffix(ui.scrollPct.status) });
+    if (state.rightView === 'log') {
+      rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + 'History', action: 'toggleHistory', collapsed: ui.rightTopCollapsed, pctStr: pctSuffix(ui.scrollPct.history) });
+      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed, pctStr: pctSuffix(ui.scrollPct.detail) });
+    } else {
+      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed, pctStr: pctSuffix(ui.scrollPct.files) });
+      rightParts.push({ label: (ui.rightPanelCollapsed ? '  + ' : '  - ') + 'Diff', action: 'toggleDiff', collapsed: ui.rightPanelCollapsed, pctStr: pctSuffix(ui.scrollPct.diff) });
+    }
+    let rightTotalW = 0;
+    for (const p of rightParts) rightTotalW += visLen(p.label) + visLen(p.pctStr);
+
+    // === Left side: Local / Commits tabs ===
+    let row1 = ansi.moveTo(startRow, startCol);
+    let col1 = startCol;
     {
       const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
       const isLocal = state.rightView !== 'log';
       const isCommits = state.rightView === 'log';
-      const localLabel = isLocal ? ` [Local (${totalChanges})] ` : ` Local (${totalChanges}) `;
-      const commitsLabel = isCommits ? ' [Commits] ' : ' Commits ';
+      const localLabel = ` Local (${totalChanges}) `;
+      const commitsLabel = ' Commits ';
 
       const localIdx = zoneIdx++;
-      ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(localLabel) - 1, action: 'tab-local' });
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
       const localStyle = localIdx === ui.hoveredTitleZoneIndex
-        ? colors.value + ansi.bold + CSI + '4m'
-        : isLocal ? colors.cyan + ansi.bold : colors.cyan;
-      titleStr += localStyle + localLabel + ansi.reset;
-      col += visLen(localLabel);
+        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+        : isLocal ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
+      row1 += localStyle + localLabel + ansi.reset;
+      col1 += visLen(localLabel);
 
       const commitsIdx = zoneIdx++;
-      ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(commitsLabel) - 1, action: 'tab-commits' });
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(commitsLabel) - 1, action: 'tab-commits' });
       const commitsStyle = commitsIdx === ui.hoveredTitleZoneIndex
-        ? colors.value + ansi.bold + CSI + '4m'
-        : isCommits ? colors.cyan + ansi.bold : colors.cyan;
-      titleStr += commitsStyle + commitsLabel + ansi.reset;
-      col += visLen(commitsLabel);
+        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+        : isCommits ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
+      row1 += commitsStyle + commitsLabel + ansi.reset;
+      col1 += visLen(commitsLabel);
     }
 
-    // Left: Status
-    pushZone((ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', 'toggleStatus', ui.leftPanelCollapsed);
-    const statusPctStr = pctSuffix(ui.scrollPct.status);
-    titleStr += statusPctStr;
-    col += visLen(statusPctStr);
+    // === Right side: panel toggle buttons (right-aligned) ===
+    const rightStartCol = startCol + width - rightTotalW;
+    const gap = Math.max(0, rightStartCol - col1);
+    row1 += ' '.repeat(gap);
+    col1 += gap;
 
-    if (!ui.leftPanelCollapsed) {
-      titleStr += ' '.repeat(Math.max(0, leftW - (col - startCol)));
-      col = startCol + leftW;
-      titleStr += colors.border + V + ansi.reset;
-      col += 1;
+    for (const p of rightParts) {
+      const si = zoneIdx++;
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(p.label) - 1, action: p.action });
+      row1 += zoneStyle(si, p.collapsed) + p.label + ansi.reset;
+      col1 += visLen(p.label);
+      row1 += p.pctStr;
+      col1 += visLen(p.pctStr);
     }
 
-    if (state.rightView === 'log') {
-      // 2-column title: History + Detail in the right area
-      pushZone((ui.rightTopCollapsed ? ' + ' : ' - ') + 'History', 'toggleHistory', ui.rightTopCollapsed);
-      const histPctStr = pctSuffix(ui.scrollPct.history);
-      titleStr += histPctStr;
-      col += visLen(histPctStr);
-      titleStr += '  '; col += 2;
-      pushZone((ui.rightBottomCollapsed ? ' + ' : ' - ') + 'Detail', 'toggleDetail', ui.rightBottomCollapsed);
-      const detPctStr = pctSuffix(ui.scrollPct.detail);
-      titleStr += detPctStr;
-      col += visLen(detPctStr);
-      const rEnd = ui.leftPanelCollapsed ? startCol + width : startCol + leftW + divider1W + rightW;
-      titleStr += ' '.repeat(Math.max(0, rEnd - col));
-    } else {
-      // Files + Diff on one line (like History + Detail)
-      pushZone((ui.middlePanelCollapsed ? ' + ' : ' - ') + 'Files', 'toggleFiles', ui.middlePanelCollapsed);
-      const filesPctStr = pctSuffix(ui.scrollPct.files);
-      titleStr += filesPctStr;
-      col += visLen(filesPctStr);
-      titleStr += '  '; col += 2;
-      pushZone((ui.rightPanelCollapsed ? ' + ' : ' - ') + 'Diff', 'toggleDiff', ui.rightPanelCollapsed);
-      const diffPctStr = pctSuffix(ui.scrollPct.diff);
-      titleStr += diffPctStr;
-      col += visLen(diffPctStr);
-      const totalEnd = startCol + width;
-      titleStr += ' '.repeat(Math.max(0, totalEnd - col));
-    }
-
-    return titleStr;
+    return row1;
   }
 
-  // -- Title separator --
+  // -- Separator line --
+  function buildSeparator() {
+    let sepStr = ansi.moveTo(startRow + titleRows, startCol);
+    sepStr += colors.border + H.repeat(width) + ansi.reset;
+    return sepStr;
+  }
+
+  // Vertical divider colors (used in body)
   const vDiv1Color = ui.hoveredDivider === 'vertical' ? colors.value : colors.border;
   const vDiv2Color = ui.hoveredDivider === 'vertical2' ? colors.value : colors.border;
-  {
-    let sepStr = ansi.moveTo(startRow + 1, startCol);
-    let sepCol = 0;
-    if (!ui.leftPanelCollapsed && leftW > 0) {
-      sepStr += colors.border + H.repeat(leftW) + ansi.reset;
-      sepStr += vDiv1Color + CROSS + ansi.reset;
-      sepCol += leftW + 1;
-    }
-    if (middleW > 0) {
-      sepStr += colors.border + H.repeat(middleW) + ansi.reset;
-      sepCol += middleW;
-    }
-    if (divider2W > 0) {
-      sepStr += vDiv2Color + CROSS + ansi.reset;
-      sepCol += 1;
-    }
-    if (rightW > 0) {
-      sepStr += colors.border + H.repeat(rightW) + ansi.reset;
-      sepCol += rightW;
-    }
-    const sepRemain = width - sepCol;
-    if (sepRemain > 0) {
-      sepStr += colors.border + H.repeat(sepRemain) + ansi.reset;
-    }
-    buf.push(sepStr);
-  }
 
   // Reset scroll pct (will be set by panel builders)
   ui.scrollPct = { status: -1, files: -1, diff: -1, history: -1, detail: -1 };
@@ -187,7 +149,7 @@ function render() {
 
     if (ui.leftPanelCollapsed) {
       for (let i = 0; i < bodyH; i++) {
-        const row = startRow + 2 + i;
+        const row = startRow + titleRows + 1 + i;
         const rContent = i < rightLines.length ? rightLines[i] : '';
         buf.push(ansi.moveTo(row, startCol) + padRight(rContent, width));
       }
@@ -196,7 +158,7 @@ function render() {
     } else {
       const leftLines = buildLeftPanel(leftW, contentH);
       for (let i = 0; i < bodyH; i++) {
-        const row = startRow + 2 + i;
+        const row = startRow + titleRows + 1 + i;
         const lContent = i < leftLines.length ? leftLines[i] : '';
         const rContent = i < rightLines.length ? rightLines[i] : '';
         buf.push(
@@ -218,7 +180,7 @@ function render() {
     if (!hasLeft) { ui.leftTabZones = []; ui.leftPanelClickMap = []; }
 
     for (let i = 0; i < bodyH; i++) {
-      const row = startRow + 2 + i;
+      const row = startRow + titleRows + 1 + i;
       let line = ansi.moveTo(row, startCol);
       if (hasLeft) {
         line += padRight(i < leftLines.length ? leftLines[i] : '', leftW);
@@ -245,8 +207,9 @@ function render() {
     }
   }
 
-  // -- Title row (after body so scrollPct is computed) --
-  buf.push(buildTitleRow());
+  // -- Title row + separator (after body so scrollPct is computed) --
+  buf.push(buildTitleRows());
+  buf.push(buildSeparator());
 
   // -- Bottom separator --
   buf.push(
@@ -283,7 +246,7 @@ function render() {
   // Append Sixel overlay (for log graph)
   if (SIXEL_ENABLED && ui.logSixelOverlay && state.rightView === 'log') {
     const graphCol = startCol + leftW + divider1W + 1;
-    const screenRow = startRow + 2;
+    const screenRow = startRow + titleRows + 1;
     buf.push(ansi.moveTo(screenRow, graphCol) + ui.logSixelOverlay);
   }
   ui.logSixelOverlay = null;
@@ -291,15 +254,15 @@ function render() {
   process.stdout.write(buf.join(''));
 
   // Record layout
-  ui.lastLayout = { startRow, startCol, width, height, leftW, divider1W, middleW, divider2W, rightW, bodyH };
+  ui.lastLayout = { startRow, startCol, width, height, leftW, divider1W, middleW, divider2W, rightW, bodyH, titleRows };
 
   // Commit button zone (diff mode only)
   if (state.rightView !== 'log' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const visLines = ui.commitMsgVisibleLines || 1;
-    ui.commitInputRow = startRow + 2 + ui.rightDiffH + 1;
+    ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + 1;
     ui.commitButtonZone = {
-      row: startRow + 2 + ui.rightDiffH + visLines + 1,
+      row: startRow + titleRows + 1 + ui.rightDiffH + visLines + 1,
       colStart: rpStartCol + 1,
       colEnd: rpStartCol + 9,
     };
@@ -331,7 +294,7 @@ function render() {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const topLine = ui.commitTopLine || 0;
     const cursorLineIdx = ui.commitCursorLineIdx || 0;
-    const cursorRow = startRow + 2 + ui.rightDiffH + 1 + (cursorLineIdx - topLine);
+    const cursorRow = startRow + titleRows + 1 + ui.rightDiffH + 1 + (cursorLineIdx - topLine);
     const maxW = rightW - 2;
     const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
     const cursorLineEnd = state.commitMsg.indexOf('\n', state.commitCursor);
