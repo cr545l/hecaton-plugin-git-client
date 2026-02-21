@@ -80,19 +80,25 @@ function render() {
     // Tab switches: Commits / Local (always visible, before Status)
     {
       const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
-      const localLabel = ` Local (${totalChanges}) `;
-      const commitsLabel = ' Commits ';
       const isLocal = state.rightView !== 'log';
       const isCommits = state.rightView === 'log';
-      const tabActive = colors.cyan + ansi.bold + CSI + '4m';
-      const tabInactive = colors.cyan;
-      zoneIdx++;
+      const localLabel = isLocal ? ` [Local (${totalChanges})] ` : ` Local (${totalChanges}) `;
+      const commitsLabel = isCommits ? ' [Commits] ' : ' Commits ';
+
+      const localIdx = zoneIdx++;
       ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(localLabel) - 1, action: 'tab-local' });
-      titleStr += (isLocal ? tabActive : tabInactive) + localLabel + ansi.reset;
+      const localStyle = localIdx === ui.hoveredTitleZoneIndex
+        ? colors.value + ansi.bold + CSI + '4m'
+        : isLocal ? colors.cyan + ansi.bold : colors.cyan;
+      titleStr += localStyle + localLabel + ansi.reset;
       col += visLen(localLabel);
-      zoneIdx++;
+
+      const commitsIdx = zoneIdx++;
       ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(commitsLabel) - 1, action: 'tab-commits' });
-      titleStr += (isCommits ? tabActive : tabInactive) + commitsLabel + ansi.reset;
+      const commitsStyle = commitsIdx === ui.hoveredTitleZoneIndex
+        ? colors.value + ansi.bold + CSI + '4m'
+        : isCommits ? colors.cyan + ansi.bold : colors.cyan;
+      titleStr += commitsStyle + commitsLabel + ansi.reset;
       col += visLen(commitsLabel);
     }
 
