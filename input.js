@@ -34,8 +34,10 @@ function clearError() {
 }
 
 function handleKey(key) {
+  // 에러 오버레이가 떠 있으면 아무 키나 눌러서 닫기
   if (state.errorLines.length > 0) {
-    handleErrorInput(key);
+    clearError();
+    render();
     return;
   }
   if (state.mode === 'rebase-menu') {
@@ -415,24 +417,6 @@ function handleNameInput(key) {
   }
 }
 
-function handleErrorInput(key) {
-  if (key === ESC || key === '\x1b' || key === '\r' || key === '\n' || key === 'q') {
-    clearError();
-    render();
-    return;
-  }
-  if (key === CSI + 'A' || key === 'k') { // Up
-    state.errorScrollOffset = Math.max(0, state.errorScrollOffset - 1);
-    render();
-    return;
-  }
-  if (key === CSI + 'B' || key === 'j') { // Down
-    state.errorScrollOffset++;
-    render();
-    return;
-  }
-}
-
 function handleMouseData(data) {
   const mouseRegex = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
   let mouseMatch;
@@ -566,6 +550,30 @@ function handleMouseData(data) {
       continue;
     }
 
+    // 에러 오버레이 마우스 처리
+    if (state.errorLines.length > 0 && ui.errorOverlay) {
+      const eo = ui.errorOverlay;
+      const inOverlay = cx >= eo.x && cx < eo.x + eo.w && cy >= eo.y && cy < eo.y + eo.h;
+      // 스크롤 휠 — 오버레이 내부에서만
+      if ((cb === 64 || cb === 65) && inOverlay) {
+        const maxScroll = Math.max(0, state.errorLines.length - eo.contentH);
+        if (cb === 64) state.errorScrollOffset = Math.max(0, state.errorScrollOffset - 3);
+        else state.errorScrollOffset = Math.min(maxScroll, state.errorScrollOffset + 3);
+        render();
+        continue;
+      }
+      // 좌클릭 — [X] 닫기 버튼 또는 오버레이 바깥 클릭
+      if (cb === 0) {
+        const isCloseBtn = cy === eo.y && cx >= eo.x + eo.w - 4 && cx <= eo.x + eo.w - 1;
+        if (isCloseBtn || !inOverlay) {
+          clearError();
+          render();
+        }
+        continue;
+      }
+      continue;
+    }
+
     // Scroll wheel
     if (cb === 64 || cb === 65) {
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
@@ -664,9 +672,8 @@ function handleMouseData(data) {
               render();
               const err = gitFetch(state.cwd);
               if (err) {
-                state.error = 'Fetch failed: ' + err.substring(0, 60);
+                setError(err);
                 render();
-                setTimeout(() => { state.error = null; render(); }, 3000);
               } else {
                 state.error = null;
                 refresh();
@@ -678,9 +685,8 @@ function handleMouseData(data) {
               render();
               const err = gitPull(state.cwd);
               if (err) {
-                state.error = 'Pull failed: ' + err.substring(0, 60);
+                setError(err);
                 render();
-                setTimeout(() => { state.error = null; render(); }, 3000);
               } else {
                 state.error = null;
                 refresh();
@@ -692,9 +698,8 @@ function handleMouseData(data) {
               render();
               const err = gitPush(state.cwd);
               if (err) {
-                state.error = 'Push failed: ' + err.substring(0, 60);
+                setError(err);
                 render();
-                setTimeout(() => { state.error = null; render(); }, 3000);
               } else {
                 state.error = null;
                 refresh();
@@ -704,9 +709,8 @@ function handleMouseData(data) {
             } else if (zone.action === 'git-stash') {
               const err = gitStashSave(state.cwd);
               if (err) {
-                state.error = 'Stash failed: ' + err.substring(0, 60);
+                setError(err);
                 render();
-                setTimeout(() => { state.error = null; render(); }, 3000);
               } else {
                 refresh();
                 render();

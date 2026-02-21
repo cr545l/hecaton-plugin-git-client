@@ -263,7 +263,7 @@ function render() {
   } else if (state.error && state.errorLines.length === 0) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
   } else if (state.errorLines.length > 0) {
-    hintContent = ' ' + colors.red + '[Error] press Esc to close' + ansi.reset;
+    hintContent = ' ' + colors.red + '[Error] click [X] or outside to close' + ansi.reset;
   } else {
     hintContent = ' ' + buildHintText();
   }
@@ -291,14 +291,18 @@ function render() {
     const overlayX = startCol + Math.floor((width - overlayW) / 2);
     const overlayY = startRow + Math.max(1, Math.floor((height - overlayH) / 2));
 
+    // 마우스 처리를 위한 오버레이 위치 저장
+    ui.errorOverlay = { x: overlayX, y: overlayY, w: overlayW, h: overlayH, contentH };
+
     const TOP_L = '\u250c', TOP_R = '\u2510', BOT_L = '\u2514', BOT_R = '\u2518';
     const HORIZ = '\u2500', VERT = '\u2502';
 
-    // Top border
+    // Top border with [X] close button
     const title = ' Error ';
-    const topPad = Math.max(0, overlayW - 2 - title.length);
+    const closeBtn = '[X]';
+    const topPad = Math.max(0, overlayW - 2 - title.length - closeBtn.length - 1);
     buf.push(ansi.moveTo(overlayY, overlayX) + colors.red
-      + TOP_L + HORIZ + title + HORIZ.repeat(topPad) + TOP_R + ansi.reset);
+      + TOP_L + HORIZ + title + HORIZ.repeat(topPad) + closeBtn + HORIZ + TOP_R + ansi.reset);
 
     // Content lines
     const visibleLines = state.errorLines.slice(scrollOff, scrollOff + contentH);
@@ -312,14 +316,15 @@ function render() {
         + colors.red + VERT + ansi.reset);
     }
 
-    // Bottom border with scroll hint
+    // Bottom border with scroll info
     const scrollInfo = totalLines > maxVisibleLines
       ? ` ${scrollOff + 1}-${scrollOff + contentH}/${totalLines} `
       : '';
-    const hint = '[Esc]close [' + '\u2191\u2193' + ']scroll' + scrollInfo;
-    const botPad = Math.max(0, overlayW - 2 - hint.length);
+    const botPad = Math.max(0, overlayW - 2 - scrollInfo.length);
     buf.push(ansi.moveTo(overlayY + contentH + 1, overlayX) + colors.red
-      + BOT_L + HORIZ.repeat(botPad) + hint + HORIZ + BOT_R + ansi.reset);
+      + BOT_L + HORIZ.repeat(botPad) + scrollInfo + HORIZ + BOT_R + ansi.reset);
+  } else {
+    ui.errorOverlay = null;
   }
 
   process.stdout.write(buf.join(''));
