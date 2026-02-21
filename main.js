@@ -109,21 +109,47 @@ function setupGitWatcher() {
   if (!state.cwd || !state.isGitRepo) return;
 
   let debounceTimer = null;
+  const watchers = [];
 
   function triggerRefresh() {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      if (state.loading || state.mode !== 'normal') return;
+      if (state.loading || state.minimized) return;
+      if (state.mode !== 'normal') return;
       refresh();
       if (state.rightView === 'log') refreshLog();
       render();
     }, 300);
   }
 
+  // .git 디렉토리 감시 (stage, commit, checkout 등 git 명령 감지)
   const gitDir = path.join(state.cwd, '.git');
   try {
-    fs.watch(gitDir, { recursive: true }, triggerRefresh);
+    watchers.push(fs.watch(gitDir, { recursive: true }, triggerRefresh));
   } catch { /* ignore */ }
+
+  // 워킹 트리 감시 (파일 편집, 생성, 삭제 감지)
+  const ignorePatterns = ['.git', 'node_modules', '.hg', '.svn'];
+  try {
+    watchers.push(fs.watch(state.cwd, { recursive: true }, (_event, filename) => {
+      if (!filename) return;
+      const normalized = filename.replace(/\\/g, '/');
+      for (const pattern of ignorePatterns) {
+        if (normalized === pattern || normalized.startsWith(pattern + '/')) return;
+      }
+      triggerRefresh();
+    }));
+  } catch { /* ignore */ }
+
+  // 종료 시 watcher 정리
+  function closeWatchers() {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    for (const w of watchers) {
+      try { w.close(); } catch { /* ignore */ }
+    }
+  }
+  process.on('SIGTERM', closeWatchers);
+  process.on('SIGINT', closeWatchers);
 }
 
 main().catch((e) => {
