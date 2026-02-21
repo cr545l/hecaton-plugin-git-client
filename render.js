@@ -588,6 +588,7 @@ function buildLeftPanel(w, h) {
 
   ui.leftTabInfo = null;
   const maxScroll = Math.max(0, lines.length - h);
+  ui.leftMaxScroll = maxScroll;
   if (ui.leftPanelScrollOffset > maxScroll) ui.leftPanelScrollOffset = maxScroll;
   if (maxScroll > 0) {
     ui.scrollPct.status = Math.round((ui.leftPanelScrollOffset / maxScroll) * 100);

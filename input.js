@@ -600,43 +600,58 @@ function handleMouseData(data) {
       const inRight = cx >= rightStart && cx < L.startCol + L.width;
       const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (inBody && inLeft) {
+        const prev = ui.leftPanelScrollOffset;
         if (cb === 64) ui.leftPanelScrollOffset = Math.max(0, ui.leftPanelScrollOffset - 3);
-        else ui.leftPanelScrollOffset += 3;
-        render();
+        else ui.leftPanelScrollOffset = Math.min(ui.leftMaxScroll || 0, ui.leftPanelScrollOffset + 3);
+        if (ui.leftPanelScrollOffset !== prev) render();
       } else if (inBody && inMiddle) {
         // Middle panel (diff mode only): file list scroll
         const list = buildFileList();
         if (list.length > 0) {
+          const prev = state.cursor;
           if (cb === 64) state.cursor = Math.max(0, state.cursor - 3);
           else state.cursor = Math.min(list.length - 1, state.cursor + 3);
-          updateDiff();
+          if (state.cursor !== prev) {
+            updateDiff();
+            state.focusPanel = 'status';
+            render();
+          }
         }
-        state.focusPanel = 'status';
-        render();
       } else if (inBody && inRight) {
+        let changed = false;
         if (state.rightView === 'log') {
           // Log mode: top = log scroll, bottom = detail scroll
           const bodyRowIdx = cy - (bodyTop);
           if (bodyRowIdx < ui.lastLogListH) {
             if (state.logSelectables.length > 0) {
+              const prev = state.logCursor;
               if (cb === 64) state.logCursor = Math.max(0, state.logCursor - 3);
               else state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 3);
-              state.diffScrollOffset = 0;
-              updateLogDetail();
+              if (state.logCursor !== prev) {
+                state.diffScrollOffset = 0;
+                updateLogDetail();
+                changed = true;
+              }
             }
             state.focusPanel = 'status';
           } else {
+            const prev = state.diffScrollOffset;
+            const maxDiff = Math.max(0, state.diffLines.length - (ui.rightDiffH || 1));
             if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
-            else state.diffScrollOffset += 3;
+            else state.diffScrollOffset = Math.min(maxDiff, state.diffScrollOffset + 3);
+            if (state.diffScrollOffset !== prev) changed = true;
             state.focusPanel = 'diff';
           }
         } else {
           // Diff mode: diff scroll
+          const prev = state.diffScrollOffset;
+          const maxDiff = Math.max(0, state.diffLines.length - (ui.rightDiffH || 1));
           if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
-          else state.diffScrollOffset += 3;
+          else state.diffScrollOffset = Math.min(maxDiff, state.diffScrollOffset + 3);
+          if (state.diffScrollOffset !== prev) changed = true;
           state.focusPanel = 'diff';
         }
-        render();
+        if (changed) render();
       }
       continue;
     }
