@@ -105,7 +105,6 @@ function handleKey(key) {
         state.logScrollOffset = 0;
         state.diffScrollOffset = 0;
         updateLogDetail();
-        registerHistoryContextMenu();
       }
       state.focusPanel = 'status';
       render();
@@ -297,7 +296,6 @@ function handleNameInput(key) {
     } else {
       refresh();
       if (state.rightView === 'log') refreshLog();
-      registerHistoryContextMenu();
       render();
     }
     return;
@@ -420,6 +418,18 @@ function handleMouseData(data) {
           if (bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length && ui.leftPanelClickMap[bodyRowIdx]) {
             newLeftPanelHover = bodyRowIdx;
           }
+        }
+      }
+
+      // Context menu: only active when mouse is over the history list area
+      if (state.rightView === 'log') {
+        const bodyRowIdx = cy - (L.startRow + 2);
+        const inHistoryList = inBody && cx >= rightStart && cx < L.startCol + L.width &&
+          bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH;
+        if (inHistoryList && !ui.contextMenuActive) {
+          registerHistoryContextMenu();
+        } else if (!inHistoryList && ui.contextMenuActive) {
+          unregisterContextMenu();
         }
       }
 
@@ -572,7 +582,6 @@ function handleMouseData(data) {
               state.logScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateLogDetail();
-              registerHistoryContextMenu();
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'toggle-section') {
@@ -590,7 +599,6 @@ function handleMouseData(data) {
                 state.logScrollOffset = 0;
                 state.diffScrollOffset = 0;
                 updateLogDetail();
-                registerHistoryContextMenu();
               }
               const targetBranch = entry.branch;
               let foundIdx = -1;
@@ -623,7 +631,6 @@ function handleMouseData(data) {
                 state.logScrollOffset = 0;
                 state.diffScrollOffset = 0;
                 updateLogDetail();
-                registerHistoryContextMenu();
               }
               const targetHash = entry.shortHash;
               let foundIdx = -1;

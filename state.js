@@ -64,6 +64,7 @@ const ui = {
   hoveredFileHeaderIdx: -1,
   hoveredLeftPanelRow: -1,
   hoveredDivider: null,
+  contextMenuActive: false,
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,
   lastClickFileIdx: -1,

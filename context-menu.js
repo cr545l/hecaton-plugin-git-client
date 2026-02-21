@@ -47,10 +47,12 @@ function registerHistoryContextMenu() {
   );
 
   sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
 }
 
 function unregisterContextMenu() {
   sendRpcNotify('register_context_menu', { items: [] });
+  ui.contextMenuActive = false;
 }
 
 function handleContextMenuAction(actionId) {
