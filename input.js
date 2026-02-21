@@ -21,7 +21,23 @@ function actionToKey(action) {
   }
 }
 
+function setError(msg) {
+  state.error = msg;
+  state.errorLines = msg.split('\n');
+  state.errorScrollOffset = 0;
+}
+
+function clearError() {
+  state.error = null;
+  state.errorLines = [];
+  state.errorScrollOffset = 0;
+}
+
 function handleKey(key) {
+  if (state.errorLines.length > 0) {
+    handleErrorInput(key);
+    return;
+  }
   if (state.mode === 'rebase-menu') {
     handleRebaseMenuInput(key);
     return;
@@ -82,9 +98,8 @@ function handleKey(key) {
   switch (key) {
     case 'c': {
       if (state.staged.length === 0) {
-        state.error = 'Nothing staged to commit';
+        setError('Nothing staged to commit');
         render();
-        setTimeout(() => { state.error = null; render(); }, 2000);
         break;
       }
       state.mode = 'commit';
@@ -118,20 +133,16 @@ function handleKey(key) {
       } else {
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
-          state.error = 'Select a commit in log view to rebase onto';
+          setError('Select a commit in log view to rebase onto');
           render();
-          setTimeout(() => { state.error = null; render(); }, 2000);
           break;
         }
         const err = gitRebase(state.cwd, logItem.ref);
         refresh();
         if (state.rightView === 'log') refreshLog();
-        if (err && state.rebaseState) {
+        if (err) {
+          setError(err);
           render();
-        } else if (err) {
-          state.error = 'Rebase failed: ' + err.substring(0, 60);
-          render();
-          setTimeout(() => { state.error = null; render(); }, 3000);
         } else {
           render();
         }
@@ -187,17 +198,15 @@ function handleCommitInput(key) {
   // Ctrl+Enter → submit commit
   if (key === CSI + '13;5u') {
     if (state.commitMsg.trim().length === 0) {
-      state.error = 'Commit message cannot be empty';
+      setError('Commit message cannot be empty');
       render();
-      setTimeout(() => { state.error = null; render(); }, 2000);
       return;
     }
     const err = gitCommit(state.cwd, state.commitMsg);
     state.mode = 'normal';
     if (err) {
-      state.error = 'Commit failed: ' + err.substring(0, 60);
+      setError(err);
       render();
-      setTimeout(() => { state.error = null; render(); }, 3000);
     } else {
       state.commitMsg = '';
       state.commitCursor = 0;
@@ -324,17 +333,10 @@ function handleRebaseMenuInput(key) {
     const err = gitRebaseContinue(state.cwd);
     refresh();
     if (state.rightView === 'log') refreshLog();
-    if (err && state.rebaseState) {
-      state.error = 'Rebase continue: resolve conflicts first';
-      render();
-      setTimeout(() => { state.error = null; render(); }, 3000);
-    } else if (err) {
-      state.error = 'Rebase continue failed: ' + err.substring(0, 60);
-      render();
-      setTimeout(() => { state.error = null; render(); }, 3000);
-    } else {
-      render();
+    if (err) {
+      setError(err);
     }
+    render();
     return;
   }
   if (key === 'a') {
@@ -343,12 +345,9 @@ function handleRebaseMenuInput(key) {
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
-      state.error = 'Rebase abort failed: ' + err.substring(0, 60);
-      render();
-      setTimeout(() => { state.error = null; render(); }, 3000);
-    } else {
-      render();
+      setError(err);
     }
+    render();
     return;
   }
   if (key === 's') {
@@ -356,15 +355,10 @@ function handleRebaseMenuInput(key) {
     const err = gitRebaseSkip(state.cwd);
     refresh();
     if (state.rightView === 'log') refreshLog();
-    if (err && state.rebaseState) {
-      render();
-    } else if (err) {
-      state.error = 'Rebase skip failed: ' + err.substring(0, 60);
-      render();
-      setTimeout(() => { state.error = null; render(); }, 3000);
-    } else {
-      render();
+    if (err) {
+      setError(err);
     }
+    render();
     return;
   }
 }
@@ -380,9 +374,8 @@ function handleNameInput(key) {
   if (key === '\r' || key === '\n') {
     const name = state.inputBuffer.trim();
     if (name.length === 0) {
-      state.error = 'Name cannot be empty';
+      setError('Name cannot be empty');
       render();
-      setTimeout(() => { state.error = null; render(); }, 2000);
       return;
     }
     let err;
@@ -396,9 +389,8 @@ function handleNameInput(key) {
     state.inputBuffer = '';
     state.inputTarget = '';
     if (err) {
-      state.error = opName + ' failed: ' + err.substring(0, 60);
+      setError(opName + ' failed:\n' + err);
       render();
-      setTimeout(() => { state.error = null; render(); }, 3000);
     } else {
       refresh();
       if (state.rightView === 'log') refreshLog();
@@ -418,6 +410,24 @@ function handleNameInput(key) {
   }
   if (key.length > 1 && !key.startsWith('\x1b')) {
     state.inputBuffer += key;
+    render();
+    return;
+  }
+}
+
+function handleErrorInput(key) {
+  if (key === ESC || key === '\x1b' || key === '\r' || key === '\n' || key === 'q') {
+    clearError();
+    render();
+    return;
+  }
+  if (key === CSI + 'A' || key === 'k') { // Up
+    state.errorScrollOffset = Math.max(0, state.errorScrollOffset - 1);
+    render();
+    return;
+  }
+  if (key === CSI + 'B' || key === 'j') { // Down
+    state.errorScrollOffset++;
     render();
     return;
   }

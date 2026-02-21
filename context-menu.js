@@ -92,10 +92,8 @@ function handleContextMenuAction(actionId) {
       const err = gitRebase(state.cwd, hash);
       refresh();
       if (state.rightView === 'log') refreshLog();
-      if (err && state.rebaseState) {
-        render();
-      } else if (err) {
-        showError('Rebase failed: ' + err.substring(0, 60));
+      if (err) {
+        showError(err);
       } else {
         render();
       }
@@ -151,7 +149,7 @@ function afterGitOp(err, opName) {
   refresh();
   if (state.rightView === 'log') refreshLog();
   if (err) {
-    showError(opName + ' failed: ' + err.substring(0, 60));
+    showError(opName + ' failed:\n' + err);
   } else {
     render();
   }
@@ -159,8 +157,9 @@ function afterGitOp(err, opName) {
 
 function showError(msg) {
   state.error = msg;
+  state.errorLines = msg.split('\n');
+  state.errorScrollOffset = 0;
   render();
-  setTimeout(() => { state.error = null; render(); }, 3000);
 }
 
 function copyToClipboard(text) {

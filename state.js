@@ -26,6 +26,8 @@ const state = {
   inputBuffer: '',
   inputTarget: '',
   error: null,
+  errorLines: [],
+  errorScrollOffset: 0,
   loading: true,
   minimized: false,
 };
