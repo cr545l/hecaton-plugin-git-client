@@ -1,5 +1,5 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
-const { SIXEL_ENABLED, CELL_W, CELL_H, SIXEL_PALETTE, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
+const { SIXEL_ENABLED, SIXEL_PALETTE, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
 const { visLen, padRight, truncate, viewport } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef } = require('./refresh');
@@ -870,9 +870,9 @@ function buildLogPanel(w, h) {
 
   // Sixel
   if (SIXEL_ENABLED && graphRows.length > 0 && graphWidth > 0) {
-    const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth);
+    const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth, ui.cellW, ui.cellH);
     if (pixBuf) {
-      ui.logSixelOverlay = encodeSixel(pixBuf, graphWidth * CELL_W, graphRows.length * CELL_H, SIXEL_PALETTE);
+      ui.logSixelOverlay = encodeSixel(pixBuf, graphWidth * ui.cellW, graphRows.length * ui.cellH, SIXEL_PALETTE);
     }
   }
 

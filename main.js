@@ -53,6 +53,13 @@ async function main() {
           if (json.method === 'resize' && json.params) {
             ui.termCols = json.params.cols || ui.termCols;
             ui.termRows = json.params.rows || ui.termRows;
+            const newCellW = json.params.cellWidth ? Math.round(json.params.cellWidth) : ui.cellW;
+            const newCellH = json.params.cellHeight ? Math.round(json.params.cellHeight) : ui.cellH;
+            if (newCellW !== ui.cellW || newCellH !== ui.cellH) {
+              ui.cellW = newCellW;
+              ui.cellH = newCellH;
+              ui.logSixelOverlay = null;
+            }
             render();
           } else if (json.method === 'minimize') {
             state.minimized = true;
@@ -91,6 +98,15 @@ async function main() {
   } else {
     state.cwd = process.cwd();
   }
+
+  // Get initial cell size from host
+  try {
+    const cellSizeResult = await sendRpc('get_cell_size');
+    if (cellSizeResult && cellSizeResult.cellWidth && cellSizeResult.cellHeight) {
+      ui.cellW = Math.round(cellSizeResult.cellWidth);
+      ui.cellH = Math.round(cellSizeResult.cellHeight);
+    }
+  } catch { /* ignore — use defaults */ }
 
   state.loading = false;
   await refreshAsync();

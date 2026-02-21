@@ -1,8 +1,4 @@
 const SIXEL_ENABLED = true;
-const CELL_W = 8;
-const CELL_H = 16;
-const LINE_W = 2;
-const DOT_R = 3;
 const SIXEL_PALETTE = [
   [224, 108, 118],
   [152, 195, 121],
@@ -46,78 +42,80 @@ function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
   }
 }
 
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevChars, nextChars) {
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
     if (cc < 0 || ch === ' ') continue;
     const c = (cc % 6) + 1; // 1-6, 0 = transparent
-    const cx = i * CELL_W + (CELL_W >> 1); // center x of cell
-    const cy = yOff + (CELL_H >> 1);       // center y in combined image
-    const top = yOff, bot = yOff + CELL_H - 1;
-    const left = i * CELL_W, right = (i + 1) * CELL_W - 1;
+    const cx = i * cellW + (cellW >> 1); // center x of cell
+    const cy = yOff + (cellH >> 1);       // center y in combined image
+    const top = yOff, bot = yOff + cellH - 1;
+    const left = i * cellW, right = (i + 1) * cellW - 1;
 
     switch (ch) {
       case '\u2502': // │ vertical line
-        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
         break;
       case '\u25cf': { // ● commit dot
         const hasAbove = prevChars && i < prevChars.length && prevChars[i] !== ' ';
         const hasBelow = nextChars && i < nextChars.length && nextChars[i] !== ' ';
-        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - DOT_R - 1, c, LINE_W);
-        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + DOT_R + 1, bot, c, LINE_W);
-        pxCircle(buf, pw, ph, cx, cy, DOT_R, c);
+        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lineW);
+        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lineW);
+        pxCircle(buf, pw, ph, cx, cy, dotR, c);
         // Bridge to adjacent cells for 1-cell-per-lane connections
         if (i > 0 && chars[i - 1] !== ' ' && chars[i - 1] !== '\u2502' && chars[i - 1] !== '\u25cf') {
-          pxHLine(buf, pw, ph, left, cx - DOT_R - 1, cy, c, LINE_W);
+          pxHLine(buf, pw, ph, left, cx - dotR - 1, cy, c, lineW);
         }
         if (i + 1 < numCols && i + 1 < chars.length && chars[i + 1] !== ' ' && chars[i + 1] !== '\u2502' && chars[i + 1] !== '\u25cf') {
-          pxHLine(buf, pw, ph, cx + DOT_R + 1, right, cy, c, LINE_W);
+          pxHLine(buf, pw, ph, cx + dotR + 1, right, cy, c, lineW);
         }
         break;
       }
       case '\u251c': // ├ vertical + right (extend 1px into next cell)
-        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
-        pxHLine(buf, pw, ph, cx, right + 1, cy, c, LINE_W);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
+        pxHLine(buf, pw, ph, cx, right + 1, cy, c, lineW);
         break;
       case '\u2524': // ┤ vertical + left (extend 1px into prev cell)
-        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
-        pxHLine(buf, pw, ph, left - 1, cx, cy, c, LINE_W);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
+        pxHLine(buf, pw, ph, left - 1, cx, cy, c, lineW);
         break;
       case '\u256e': // ╮ bezier: left → down
-        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, LINE_W);
+        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
         break;
       case '\u256d': // ╭ bezier: right → down
-        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, LINE_W);
+        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lineW);
         break;
       case '\u256f': // ╯ bezier: up → left
-        pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, LINE_W);
+        pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, lineW);
         break;
       case '\u2570': // ╰ bezier: up → right
-        pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, LINE_W);
+        pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, lineW);
         break;
       case '\u2500': // ─ horizontal line (extend 1px each side for cell bridging)
-        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, LINE_W);
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lineW);
         break;
       case '\u253c': // ┼ cross (extend horizontal 1px each side)
-        pxVLine(buf, pw, ph, cx, top, bot, c, LINE_W);
-        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, LINE_W);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lineW);
         break;
     }
   }
 }
 
-function renderCombinedGraphPixels(graphRows, numCols) {
-  const pw = numCols * CELL_W;
-  const ph = graphRows.length * CELL_H;
+function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH) {
+  const pw = numCols * cellW;
+  const ph = graphRows.length * cellH;
   if (pw <= 0 || ph <= 0) return null;
+  const lineW = Math.max(1, Math.round(cellW * 0.25));
+  const dotR = Math.max(2, Math.round(cellW * 0.375));
   const buf = new Uint8Array(pw * ph);
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
     const prev = r > 0 && graphRows[r - 1] ? graphRows[r - 1].chars : null;
     const next = r < graphRows.length - 1 && graphRows[r + 1] ? graphRows[r + 1].chars : null;
-    renderGraphRowInto(buf, pw, ph, r * CELL_H, row.chars, row.charColors, numCols, prev, next);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, numCols, prev, next, cellW, cellH, lineW, dotR);
   }
   return buf;
 }
@@ -182,6 +180,6 @@ function encodeSixel(buf, w, h, palette) {
 }
 
 module.exports = {
-  SIXEL_ENABLED, CELL_W, CELL_H, SIXEL_PALETTE,
+  SIXEL_ENABLED, SIXEL_PALETTE,
   renderCombinedGraphPixels, encodeSixel,
 };

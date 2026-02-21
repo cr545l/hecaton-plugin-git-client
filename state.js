@@ -72,6 +72,8 @@ const ui = {
   errorOverlay: null,  // { x, y, w, h } — error overlay bounds for mouse interaction
   lastClickTime: 0,
   lastClickFileIdx: -1,
+  cellW: 8,
+  cellH: 16,
 };
 
 module.exports = { state, ui };
