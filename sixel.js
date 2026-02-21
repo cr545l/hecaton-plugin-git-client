@@ -103,7 +103,7 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevC
   }
 }
 
-function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH) {
+function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundary, nextBoundary) {
   const pw = numCols * cellW;
   const ph = graphRows.length * cellH;
   if (pw <= 0 || ph <= 0) return null;
@@ -113,8 +113,12 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH) {
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
-    const prev = r > 0 && graphRows[r - 1] ? graphRows[r - 1].chars : null;
-    const next = r < graphRows.length - 1 && graphRows[r + 1] ? graphRows[r + 1].chars : null;
+    const prev = r > 0
+      ? (graphRows[r - 1] ? graphRows[r - 1].chars : null)
+      : (prevBoundary ? prevBoundary.chars : null);
+    const next = r < graphRows.length - 1
+      ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
+      : (nextBoundary ? nextBoundary.chars : null);
     renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, numCols, prev, next, cellW, cellH, lineW, dotR);
   }
   return buf;

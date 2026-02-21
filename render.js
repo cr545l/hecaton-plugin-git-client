@@ -870,7 +870,11 @@ function buildLogPanel(w, h) {
 
   // Sixel
   if (SIXEL_ENABLED && graphRows.length > 0 && graphWidth > 0) {
-    const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth, ui.cellW, ui.cellH);
+    const prevItem = state.logScrollOffset > 0 ? state.logItems[state.logScrollOffset - 1] : null;
+    const nextItem = state.logScrollOffset + listH < state.logItems.length ? state.logItems[state.logScrollOffset + listH] : null;
+    const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
+    const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
+    const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
     if (pixBuf) {
       ui.logSixelOverlay = encodeSixel(pixBuf, graphWidth * ui.cellW, graphRows.length * ui.cellH, SIXEL_PALETTE);
     }
