@@ -296,9 +296,10 @@ function render() {
   // Commit button zone (diff mode only)
   if (state.rightView !== 'log' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
+    const visLines = ui.commitMsgVisibleLines || 1;
     ui.commitInputRow = startRow + 2 + ui.rightDiffH + 1;
     ui.commitButtonZone = {
-      row: startRow + 2 + ui.rightDiffH + 2,
+      row: startRow + 2 + ui.rightDiffH + visLines + 1,
       colStart: rpStartCol + 1,
       colEnd: rpStartCol + 9,
     };
@@ -328,10 +329,16 @@ function render() {
   // Position cursor at text input location for IME composition
   if (state.mode === 'commit' && state.rightView !== 'log' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
-    const cursorRow = startRow + 2 + ui.rightDiffH + 1;
+    const topLine = ui.commitTopLine || 0;
+    const cursorLineIdx = ui.commitCursorLineIdx || 0;
+    const cursorRow = startRow + 2 + ui.rightDiffH + 1 + (cursorLineIdx - topLine);
     const maxW = rightW - 2;
-    const beforeVis = visLen(state.commitMsg.substring(0, state.commitCursor));
-    const afterVis = visLen(state.commitMsg.substring(state.commitCursor));
+    const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
+    const cursorLineEnd = state.commitMsg.indexOf('\n', state.commitCursor);
+    const lineText = state.commitMsg.substring(cursorLineStart, cursorLineEnd === -1 ? state.commitMsg.length : cursorLineEnd);
+    const colInLine = state.commitCursor - cursorLineStart;
+    const beforeVis = visLen(lineText.substring(0, colInLine));
+    const afterVis = visLen(lineText.substring(colInLine));
     const totalVis = beforeVis + 1 + afterVis;
     const fits = totalVis <= maxW;
     const leftEllipsis = fits ? 0 : (beforeVis > 0 ? 1 : 0);
@@ -645,9 +652,17 @@ function buildFileListPanel(w, h) {
 
 function buildDiffCommitPanel(w, h) {
   const lines = [];
-  const commitAreaH = h >= 5 ? 3 : 0;
+
+  // Calculate commit area height
+  let msgLineCount = 1;
+  if (state.mode === 'commit') {
+    msgLineCount = state.commitMsg.split('\n').length;
+  }
+  const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
+  const commitAreaH = h >= 5 ? (2 + maxMsgLines) : 0;
   const diffH = h - commitAreaH;
   ui.rightDiffH = diffH;
+  ui.commitMsgVisibleLines = maxMsgLines;
 
   // Diff section
   if (diffH > 0) {
@@ -670,12 +685,34 @@ function buildDiffCommitPanel(w, h) {
     }
   }
 
-  // Commit area (3 lines)
+  // Commit area
   if (commitAreaH > 0) {
     lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
 
     if (state.mode === 'commit') {
-      lines.push(' ' + colors.value + viewport(state.commitMsg, state.commitCursor, w - 2) + ansi.reset);
+      const msgLines = state.commitMsg.split('\n');
+      const cursorLineIdx = state.commitMsg.substring(0, state.commitCursor).split('\n').length - 1;
+      const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
+      const cursorCol = state.commitCursor - cursorLineStart;
+
+      // Vertical viewport: ensure cursor line is visible
+      let topLine = Math.max(0, cursorLineIdx - maxMsgLines + 1);
+      topLine = Math.min(topLine, Math.max(0, msgLines.length - maxMsgLines));
+      ui.commitTopLine = topLine;
+      ui.commitCursorLineIdx = cursorLineIdx;
+
+      for (let i = 0; i < maxMsgLines; i++) {
+        const lineIdx = topLine + i;
+        if (lineIdx < msgLines.length) {
+          if (lineIdx === cursorLineIdx) {
+            lines.push(' ' + colors.value + viewport(msgLines[lineIdx], cursorCol, w - 2) + ansi.reset);
+          } else {
+            lines.push(' ' + colors.value + truncate(msgLines[lineIdx], w - 2) + ansi.reset);
+          }
+        } else {
+          lines.push('');
+        }
+      }
     } else if (state.staged.length > 0) {
       lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + ansi.reset);
     } else {

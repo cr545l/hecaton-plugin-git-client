@@ -213,8 +213,37 @@ function handleCommitInput(key) {
     render();
     return;
   }
-  // Plain Enter → ignore (prevent accidental commit)
+  // Enter → insert newline
   if (key === '\r' || key === '\n') {
+    state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + '\n' + state.commitMsg.substring(state.commitCursor);
+    state.commitCursor += 1;
+    render();
+    return;
+  }
+  // Up arrow → move to previous line
+  if (key === CSI + 'A') {
+    const before = state.commitMsg.substring(0, state.commitCursor);
+    const lastNL = before.lastIndexOf('\n');
+    if (lastNL === -1) { render(); return; }
+    const col = state.commitCursor - lastNL - 1;
+    const prevLineStart = before.lastIndexOf('\n', lastNL - 1) + 1;
+    const prevLineLen = lastNL - prevLineStart;
+    state.commitCursor = prevLineStart + Math.min(col, prevLineLen);
+    render();
+    return;
+  }
+  // Down arrow → move to next line
+  if (key === CSI + 'B') {
+    const after = state.commitMsg.substring(state.commitCursor);
+    const nextNL = after.indexOf('\n');
+    if (nextNL === -1) { render(); return; }
+    const lineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
+    const col = state.commitCursor - lineStart;
+    const nextLineStart = state.commitCursor + nextNL + 1;
+    const nextNL2 = state.commitMsg.indexOf('\n', nextLineStart);
+    const nextLineLen = nextNL2 === -1 ? state.commitMsg.length - nextLineStart : nextNL2 - nextLineStart;
+    state.commitCursor = nextLineStart + Math.min(col, nextLineLen);
+    render();
     return;
   }
   // Left arrow
@@ -233,15 +262,17 @@ function handleCommitInput(key) {
     render();
     return;
   }
-  // Home
+  // Home → start of current line
   if (key === CSI + 'H' || key === CSI + '1~') {
-    state.commitCursor = 0;
+    const lineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
+    state.commitCursor = lineStart;
     render();
     return;
   }
-  // End
+  // End → end of current line
   if (key === CSI + 'F' || key === CSI + '4~') {
-    state.commitCursor = state.commitMsg.length;
+    const nextNL = state.commitMsg.indexOf('\n', state.commitCursor);
+    state.commitCursor = nextNL === -1 ? state.commitMsg.length : nextNL;
     render();
     return;
   }
@@ -271,10 +302,12 @@ function handleCommitInput(key) {
     render();
     return;
   }
-  // Multi-byte character (IME input)
+  // Multi-byte character (IME input / paste)
   if (key.length > 1 && !key.startsWith('\x1b')) {
-    state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + key + state.commitMsg.substring(state.commitCursor);
-    state.commitCursor += key.length;
+    const clean = key.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (clean.length === 0) return;
+    state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + clean + state.commitMsg.substring(state.commitCursor);
+    state.commitCursor += clean.length;
     render();
     return;
   }
