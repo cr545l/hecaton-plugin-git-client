@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches } = require('./git');
+const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches } = require('./git');
 const { calcGraphRows } = require('./graph');
 const { sendRpcNotify } = require('./rpc');
 
@@ -238,14 +238,33 @@ function updateLogDetail() {
     state.logDetailLines = [];
     return;
   }
+  const lines = [];
+
+  // Commit message body (full multi-line message)
+  if (item.body) {
+    for (const l of item.body.split('\n')) {
+      lines.push(l);
+    }
+    lines.push('');
+  }
+
+  // Diff only (suppress commit header/message with --pretty=format:)
   let raw = '';
   const stashRef = ui.stashMap.get(item.ref);
   if (stashRef) {
     raw = gitStashDiff(state.cwd, stashRef);
   } else {
-    raw = gitShowRef(state.cwd, item.ref);
+    try {
+      raw = git(['show', '--pretty=format:', item.ref], state.cwd);
+    } catch {
+      raw = '';
+    }
   }
-  state.logDetailLines = raw.split('\n');
+  for (const l of raw.split('\n')) {
+    lines.push(l);
+  }
+
+  state.logDetailLines = lines;
 }
 
 function updateDiff() {

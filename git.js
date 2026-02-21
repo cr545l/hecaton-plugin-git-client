@@ -229,20 +229,34 @@ function gitRebaseSkip(cwd) {
 
 function gitLogCommits(cwd, extraRefs, maxCount) {
   try {
-    const args = ['log', '--all', '--topo-order', '--format=%H%x00%P%x00%D%x00%s'];
+    // %x01 as record separator to handle multi-line %B
+    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%B'];
     if (extraRefs && extraRefs.length > 0) args.push(...extraRefs);
     if (maxCount) args.push('-' + maxCount);
     const raw = execFileSync('git', args, {
       cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
     }).replace(/\r\n/g, '\n').trim();
     if (!raw) return [];
-    return raw.split('\n').map(line => {
-      const parts = line.split('\0');
+    return raw.split('\x01').filter(r => r.trim()).map(record => {
+      const trimmed = record.trim();
+      // Split only first 3 null bytes; the rest (after 3rd) is full body with newlines
+      const parts = [];
+      let pos = 0;
+      for (let i = 0; i < 3; i++) {
+        const next = trimmed.indexOf('\x00', pos);
+        if (next === -1) break;
+        parts.push(trimmed.substring(pos, next));
+        pos = next + 1;
+      }
+      parts.push(trimmed.substring(pos)); // rest is full body
+      const fullBody = (parts[3] || '').trim();
+      const firstLine = fullBody.split('\n')[0];
       return {
-        hash: parts[0],
+        hash: parts[0] || '',
         parents: parts[1] ? parts[1].split(' ') : [],
         refs: parts[2] || '',
-        subject: (parts[3] || '').replace(/[\r\n]+/g, ' '),
+        subject: firstLine,
+        body: fullBody,
       };
     });
   } catch {
@@ -424,6 +438,7 @@ function gitCommitInfo(cwd, ref) {
 }
 
 module.exports = {
+  git,
   gitExec,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
