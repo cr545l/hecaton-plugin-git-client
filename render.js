@@ -863,22 +863,23 @@ function buildLogPanel(w, h) {
         r.startsWith('HEAD -> ') ? r.substring(8) : r
       ).join(', ');
       const decoColorized = decoRaw ? colorizeDecoration(decoRaw, state.branch, isHead) : '';
+      const safeSubject = (item.subject || '').replace(/[\r\n]/g, '');
       let subjStr, decoPart;
       if (available <= 0) {
         subjStr = ''; decoPart = '';
       } else if (!decoRaw) {
-        subjStr = truncate(item.subject, available); decoPart = '';
+        subjStr = truncate(safeSubject, available); decoPart = '';
       } else {
-        const subjNeed = visLen(item.subject);
+        const subjNeed = visLen(safeSubject);
         const decoNeed = visLen(decoRaw) + 1;
         if (subjNeed + decoNeed <= available) {
-          subjStr = item.subject; decoPart = ' ' + decoColorized;
+          subjStr = safeSubject; decoPart = ' ' + decoColorized;
         } else {
           const subjW = Math.min(subjNeed, available - Math.min(decoNeed, Math.max(4, available - subjNeed)));
-          subjStr = truncate(item.subject, subjW);
+          subjStr = truncate(safeSubject, subjW);
           const decoW = available - visLen(subjStr);
           if (decoW >= 4) { decoPart = ' ' + truncate(decoColorized, decoW - 1); }
-          else { subjStr = truncate(item.subject, available); decoPart = ''; }
+          else { subjStr = truncate(safeSubject, available); decoPart = ''; }
         }
       }
       const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
@@ -987,6 +988,7 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
 }
 
 function colorizeDiffLine(rawLine, w) {
+  rawLine = rawLine.replace(/[\r\n]/g, '');
   if (rawLine.startsWith('+++') || rawLine.startsWith('---')) {
     return colors.diffHeader + truncate(rawLine, w) + ansi.reset;
   } else if (rawLine.startsWith('+')) {

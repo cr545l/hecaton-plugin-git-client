@@ -235,7 +235,7 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
     if (maxCount) args.push('-' + maxCount);
     const raw = execFileSync('git', args, {
       cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    }).replace(/\r\n/g, '\n').trim();
+    }).replace(/\r\n/g, '\n').replace(/\r/g, '').trim();
     if (!raw) return [];
     return raw.split('\x01').filter(r => r.trim()).map(record => {
       const trimmed = record.trim();
@@ -255,7 +255,7 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
         hash: parts[0] || '',
         parents: parts[1] ? parts[1].split(' ') : [],
         refs: parts[2] || '',
-        subject: firstLine,
+        subject: firstLine.replace(/[\r\n]/g, ''),
         body: fullBody,
       };
     });

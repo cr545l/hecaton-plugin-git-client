@@ -243,7 +243,7 @@ function updateLogDetail() {
   // Commit message body (full multi-line message)
   if (item.body) {
     for (const l of item.body.split('\n')) {
-      lines.push(l);
+      lines.push(l.replace(/[\r\n]/g, ''));
     }
     lines.push('');
   }
@@ -261,7 +261,7 @@ function updateLogDetail() {
     }
   }
   for (const l of raw.split('\n')) {
-    lines.push(l);
+    lines.push(l.replace(/\r/g, ''));
   }
 
   state.logDetailLines = lines;
