@@ -597,6 +597,24 @@ function handleMouseData(data) {
               ui.rightPanelCollapsed = !ui.rightPanelCollapsed;
               render();
               handled = true;
+            } else if (zone.action === 'tab-local') {
+              ui.leftPanelActiveBranch = null;
+              state.rightView = 'diff';
+              updateDiff();
+              unregisterContextMenu();
+              state.focusPanel = 'status';
+              render();
+              handled = true;
+            } else if (zone.action === 'tab-commits') {
+              state.rightView = 'log';
+              refreshLog();
+              state.logCursor = 0;
+              state.logScrollOffset = 0;
+              state.diffScrollOffset = 0;
+              updateLogDetail();
+              state.focusPanel = 'status';
+              render();
+              handled = true;
             }
             break;
           }

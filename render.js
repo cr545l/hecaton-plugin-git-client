@@ -77,6 +77,25 @@ function render() {
       return colors.dim + ' ' + pct + '%' + ansi.reset;
     }
 
+    // Tab switches: Commits / Local (always visible, before Status)
+    {
+      const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
+      const localLabel = ` Local (${totalChanges}) `;
+      const commitsLabel = ' Commits ';
+      const isLocal = state.rightView !== 'log';
+      const isCommits = state.rightView === 'log';
+      const tabActive = colors.cyan + ansi.bold + CSI + '4m';
+      const tabInactive = colors.cyan;
+      zoneIdx++;
+      ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(localLabel) - 1, action: 'tab-local' });
+      titleStr += (isLocal ? tabActive : tabInactive) + localLabel + ansi.reset;
+      col += visLen(localLabel);
+      zoneIdx++;
+      ui.titleClickZones.push({ colStart: col, colEnd: col + visLen(commitsLabel) - 1, action: 'tab-commits' });
+      titleStr += (isCommits ? tabActive : tabInactive) + commitsLabel + ansi.reset;
+      col += visLen(commitsLabel);
+    }
+
     // Left: Status
     pushZone((ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', 'toggleStatus', ui.leftPanelCollapsed);
     const statusPctStr = pctSuffix(ui.scrollPct.status);
@@ -354,19 +373,6 @@ function buildLeftPanel(w, h) {
     }
   }
 
-  // Tab buttons — two separate lines
-  {
-    const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
-    const localLabel = `Local (${totalChanges})`;
-    const allLabel = 'Commits';
-    const isLocal = state.rightView !== 'log';
-    const isAll = state.rightView === 'log';
-    const activeStyle = colors.title + ansi.bold + CSI + '4m';
-    const inactiveStyle = colors.title;
-
-    pushLine(' ' + (isLocal ? activeStyle : inactiveStyle) + localLabel + ansi.reset, { action: 'tab-local' });
-    pushLine(' ' + (isAll ? activeStyle : inactiveStyle) + allLabel + ansi.reset, { action: 'tab-commits' });
-  }
   pushLine('');
 
   if (state.loading) {
