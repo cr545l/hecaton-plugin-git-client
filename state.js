@@ -22,6 +22,7 @@ const state = {
   rebaseState: null,     // null | { type, step, total }
   mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu' | 'new-branch' | 'new-tag'
   commitMsg: '',
+  commitCursor: 0,
   inputBuffer: '',
   inputTarget: '',
   error: null,

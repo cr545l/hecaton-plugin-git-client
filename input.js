@@ -89,6 +89,7 @@ function handleKey(key) {
       }
       state.mode = 'commit';
       state.commitMsg = '';
+      state.commitCursor = 0;
       render();
       break;
     }
@@ -158,10 +159,28 @@ function handleKey(key) {
   }
 }
 
+function prevCharIndex(str, idx) {
+  if (idx <= 0) return 0;
+  if (idx >= 2) {
+    const lo = str.charCodeAt(idx - 1);
+    const hi = str.charCodeAt(idx - 2);
+    if (lo >= 0xDC00 && lo <= 0xDFFF && hi >= 0xD800 && hi <= 0xDBFF) return idx - 2;
+  }
+  return idx - 1;
+}
+
+function nextCharIndex(str, idx) {
+  if (idx >= str.length) return str.length;
+  const hi = str.charCodeAt(idx);
+  if (hi >= 0xD800 && hi <= 0xDBFF && idx + 1 < str.length) return idx + 2;
+  return idx + 1;
+}
+
 function handleCommitInput(key) {
   if (key === ESC || key === '\x1b') {
     state.mode = 'normal';
     state.commitMsg = '';
+    state.commitCursor = 0;
     render();
     return;
   }
@@ -181,27 +200,81 @@ function handleCommitInput(key) {
       setTimeout(() => { state.error = null; render(); }, 3000);
     } else {
       state.commitMsg = '';
+      state.commitCursor = 0;
       refresh();
       render();
     }
+    return;
+  }
+  // Ctrl+C → clear commit message
+  if (key === '\x03') {
+    state.commitMsg = '';
+    state.commitCursor = 0;
+    render();
     return;
   }
   // Plain Enter → ignore (prevent accidental commit)
   if (key === '\r' || key === '\n') {
     return;
   }
-  if (key === '\x7f' || key === '\b' || key === CSI + '3~') {
-    state.commitMsg = state.commitMsg.slice(0, -1);
+  // Left arrow
+  if (key === CSI + 'D') {
+    if (state.commitCursor > 0) {
+      state.commitCursor = prevCharIndex(state.commitMsg, state.commitCursor);
+    }
     render();
     return;
   }
+  // Right arrow
+  if (key === CSI + 'C') {
+    if (state.commitCursor < state.commitMsg.length) {
+      state.commitCursor = nextCharIndex(state.commitMsg, state.commitCursor);
+    }
+    render();
+    return;
+  }
+  // Home
+  if (key === CSI + 'H' || key === CSI + '1~') {
+    state.commitCursor = 0;
+    render();
+    return;
+  }
+  // End
+  if (key === CSI + 'F' || key === CSI + '4~') {
+    state.commitCursor = state.commitMsg.length;
+    render();
+    return;
+  }
+  // Backspace – delete character before cursor
+  if (key === '\x7f' || key === '\b') {
+    if (state.commitCursor > 0) {
+      const prev = prevCharIndex(state.commitMsg, state.commitCursor);
+      state.commitMsg = state.commitMsg.substring(0, prev) + state.commitMsg.substring(state.commitCursor);
+      state.commitCursor = prev;
+    }
+    render();
+    return;
+  }
+  // Delete key – delete character after cursor
+  if (key === CSI + '3~') {
+    if (state.commitCursor < state.commitMsg.length) {
+      const next = nextCharIndex(state.commitMsg, state.commitCursor);
+      state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + state.commitMsg.substring(next);
+    }
+    render();
+    return;
+  }
+  // Regular character
   if (key.length === 1 && key.charCodeAt(0) >= 32) {
-    state.commitMsg += key;
+    state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + key + state.commitMsg.substring(state.commitCursor);
+    state.commitCursor += key.length;
     render();
     return;
   }
+  // Multi-byte character (IME input)
   if (key.length > 1 && !key.startsWith('\x1b')) {
-    state.commitMsg += key;
+    state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + key + state.commitMsg.substring(state.commitCursor);
+    state.commitCursor += key.length;
     render();
     return;
   }
@@ -664,6 +737,7 @@ function handleMouseData(data) {
         } else if (state.staged.length > 0 && state.mode !== 'commit') {
           state.mode = 'commit';
           state.commitMsg = '';
+          state.commitCursor = 0;
           render();
         }
         continue;
@@ -674,6 +748,7 @@ function handleMouseData(data) {
         if (state.mode !== 'commit' && state.staged.length > 0) {
           state.mode = 'commit';
           state.commitMsg = '';
+          state.commitCursor = 0;
           render();
         }
         continue;

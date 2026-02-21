@@ -1,6 +1,6 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, CELL_W, CELL_H, SIXEL_PALETTE, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
-const { visLen, padRight, truncate } = require('./text');
+const { visLen, padRight, truncate, viewport } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef } = require('./refresh');
 
@@ -304,7 +304,17 @@ function render() {
   if (state.mode === 'commit' && state.rightView !== 'log' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const cursorRow = startRow + 2 + ui.rightDiffH + 1;
-    const cursorCol = rpStartCol + 1 + visLen(state.commitMsg);
+    const maxW = rightW - 2;
+    const beforeVis = visLen(state.commitMsg.substring(0, state.commitCursor));
+    const afterVis = visLen(state.commitMsg.substring(state.commitCursor));
+    const totalVis = beforeVis + 1 + afterVis;
+    const fits = totalVis <= maxW;
+    const leftEllipsis = fits ? 0 : (beforeVis > 0 ? 1 : 0);
+    const rightEllipsis = fits ? 0 : (afterVis > 0 ? 1 : 0);
+    const contentWidth = maxW - leftEllipsis - rightEllipsis;
+    const scrollOff = fits ? 0 : Math.max(0, beforeVis + 1 - contentWidth);
+    const showLeftEllipsis = scrollOff > 0;
+    const cursorCol = rpStartCol + 1 + (showLeftEllipsis ? 1 : 0) + (beforeVis - scrollOff);
     process.stdout.write(ansi.moveTo(cursorRow, cursorCol));
   } else if (state.mode === 'new-branch') {
     process.stdout.write(ansi.moveTo(hintRow, startCol + 13 + visLen(state.inputBuffer)));
@@ -653,7 +663,7 @@ function buildDiffCommitPanel(w, h) {
     lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
 
     if (state.mode === 'commit') {
-      lines.push(' ' + colors.value + truncate(state.commitMsg + '\u2588', w - 2) + ansi.reset);
+      lines.push(' ' + colors.value + viewport(state.commitMsg, state.commitCursor, w - 2) + ansi.reset);
     } else if (state.staged.length > 0) {
       lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + ansi.reset);
     } else {

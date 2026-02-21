@@ -51,4 +51,58 @@ function truncate(text, maxLen) {
   return text.substring(0, i) + '\u2026';
 }
 
-module.exports = { stripAnsi, isWide, visLen, padRight, truncate };
+function viewport(text, cursorPos, maxWidth) {
+  cursorPos = Math.max(0, Math.min(cursorPos, text.length));
+  const before = text.substring(0, cursorPos);
+  const after = text.substring(cursorPos);
+  const beforeVis = visLen(before);
+  const afterVis = visLen(after);
+  const totalVis = beforeVis + 1 + afterVis; // +1 for cursor block
+
+  if (totalVis <= maxWidth) {
+    return before + '\u2588' + after;
+  }
+
+  const hasLeft = beforeVis > 0;
+  const hasRight = afterVis > 0;
+
+  // Reserve 1 col for each ellipsis indicator
+  const leftEllipsis = hasLeft ? 1 : 0;
+  const rightEllipsis = hasRight ? 1 : 0;
+  const contentWidth = maxWidth - leftEllipsis - rightEllipsis;
+
+  // Scroll so cursor stays visible within content area
+  const scrollOff = Math.max(0, beforeVis + 1 - contentWidth);
+
+  // Build combined string with cursor character inserted
+  const combined = before + '\u2588' + after;
+
+  // Skip scrollOff visual columns from the left
+  let vis = 0;
+  let i = 0;
+  while (i < combined.length && vis < scrollOff) {
+    const cp = combined.codePointAt(i);
+    const cw = isWide(cp) ? 2 : 1;
+    if (vis + cw > scrollOff) break;
+    vis += cw;
+    i += cp > 0xFFFF ? 2 : 1;
+  }
+
+  // Collect up to contentWidth visual columns
+  const startI = i;
+  let displayVis = 0;
+  while (i < combined.length && displayVis < contentWidth) {
+    const cp = combined.codePointAt(i);
+    const cw = isWide(cp) ? 2 : 1;
+    if (displayVis + cw > contentWidth) break;
+    displayVis += cw;
+    i += cp > 0xFFFF ? 2 : 1;
+  }
+
+  const showLeftEllipsis = vis > 0;
+  const showRightEllipsis = i < combined.length;
+
+  return (showLeftEllipsis ? '\u2026' : '') + combined.substring(startI, i) + (showRightEllipsis ? '\u2026' : '');
+}
+
+module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport };
