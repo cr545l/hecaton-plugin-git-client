@@ -352,6 +352,61 @@ function gitMerge(cwd, ref) {
   }
 }
 
+function gitFetch(cwd) {
+  try {
+    execFileSync('git', ['fetch', '--all', '--prune'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Fetch failed';
+  }
+}
+
+function gitPull(cwd) {
+  try {
+    execFileSync('git', ['pull'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Pull failed';
+  }
+}
+
+function gitPush(cwd) {
+  try {
+    execFileSync('git', ['push'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Push failed';
+  }
+}
+
+function gitStashSave(cwd) {
+  try {
+    execFileSync('git', ['stash', 'push'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Stash failed';
+  }
+}
+
+function gitStashPop(cwd) {
+  try {
+    execFileSync('git', ['stash', 'pop'], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Stash pop failed';
+  }
+}
+
 function gitFormatPatch(cwd, ref) {
   try {
     return git(['format-patch', '-1', ref, '--stdout'], cwd);
@@ -377,4 +432,5 @@ module.exports = {
   gitBranches, gitRemoteBranches,
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
+  gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
 };

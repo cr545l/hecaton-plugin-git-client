@@ -1,6 +1,6 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag } = require('./git');
+const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave } = require('./git');
 const { sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
@@ -648,6 +648,59 @@ function handleMouseData(data) {
               updateLogDetail();
               state.focusPanel = 'status';
               render();
+              handled = true;
+            } else if (zone.action === 'git-fetch') {
+              state.error = 'Fetching...';
+              render();
+              const err = gitFetch(state.cwd);
+              if (err) {
+                state.error = 'Fetch failed: ' + err.substring(0, 60);
+                render();
+                setTimeout(() => { state.error = null; render(); }, 3000);
+              } else {
+                state.error = null;
+                refresh();
+                render();
+              }
+              handled = true;
+            } else if (zone.action === 'git-pull') {
+              state.error = 'Pulling...';
+              render();
+              const err = gitPull(state.cwd);
+              if (err) {
+                state.error = 'Pull failed: ' + err.substring(0, 60);
+                render();
+                setTimeout(() => { state.error = null; render(); }, 3000);
+              } else {
+                state.error = null;
+                refresh();
+                render();
+              }
+              handled = true;
+            } else if (zone.action === 'git-push') {
+              state.error = 'Pushing...';
+              render();
+              const err = gitPush(state.cwd);
+              if (err) {
+                state.error = 'Push failed: ' + err.substring(0, 60);
+                render();
+                setTimeout(() => { state.error = null; render(); }, 3000);
+              } else {
+                state.error = null;
+                refresh();
+                render();
+              }
+              handled = true;
+            } else if (zone.action === 'git-stash') {
+              const err = gitStashSave(state.cwd);
+              if (err) {
+                state.error = 'Stash failed: ' + err.substring(0, 60);
+                render();
+                setTimeout(() => { state.error = null; render(); }, 3000);
+              } else {
+                refresh();
+                render();
+              }
               handled = true;
             }
             break;

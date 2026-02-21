@@ -109,6 +109,30 @@ function render() {
       col1 += visLen(commitsLabel);
     }
 
+    // === Action buttons: Fetch, Pull, Push, Stash (after separator) ===
+    {
+      row1 += colors.border + ' \u2502 ' + ansi.reset;
+      col1 += 3;
+
+      const actionBtns = [
+        { label: 'Fetch', action: 'git-fetch' },
+        { label: 'Pull', action: 'git-pull' },
+        { label: 'Push', action: 'git-push' },
+        { label: 'Stash', action: 'git-stash' },
+      ];
+      for (let i = 0; i < actionBtns.length; i++) {
+        const btn = actionBtns[i];
+        const label = ' ' + btn.label + ' ';
+        const si = zoneIdx++;
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action });
+        const style = si === ui.hoveredTitleZoneIndex
+          ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+          : colors.dim;
+        row1 += style + label + ansi.reset;
+        col1 += visLen(label);
+      }
+    }
+
     // === Right side: panel toggle buttons (right-aligned) ===
     const rightStartCol = startCol + width - rightTotalW;
     const gap = Math.max(0, rightStartCol - col1);
