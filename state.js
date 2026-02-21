@@ -42,6 +42,7 @@ const ui = {
   lastLayout: { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, divider1W: 0, middleW: 0, divider2W: 0, rightW: 0, bodyH: 0 },
   rightDiffH: 0,
   lastLogListH: 0,
+  lastDetailContentH: 0,
   commitInputRow: -1,
   commitButtonZone: null,
   stashMap: new Map(),

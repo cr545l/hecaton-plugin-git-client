@@ -636,7 +636,7 @@ function handleMouseData(data) {
             state.focusPanel = 'status';
           } else {
             const prev = state.diffScrollOffset;
-            const maxDiff = Math.max(0, state.diffLines.length - (ui.rightDiffH || 1));
+            const maxDiff = Math.max(0, state.logDetailLines.length - (ui.lastDetailContentH || 1));
             if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
             else state.diffScrollOffset = Math.min(maxDiff, state.diffScrollOffset + 3);
             if (state.diffScrollOffset !== prev) changed = true;

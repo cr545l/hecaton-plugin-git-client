@@ -821,6 +821,7 @@ function buildLogPanel(w, h) {
     detailH = h - listH - separatorH;
   }
   ui.lastLogListH = listH;
+  ui.lastDetailContentH = Math.max(0, detailH - 1);
 
   const lines = [];
 
