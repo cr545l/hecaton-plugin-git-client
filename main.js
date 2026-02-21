@@ -141,9 +141,34 @@ function setupGitWatcher() {
     }));
   } catch { /* ignore */ }
 
+  // 폴링 fallback: .git/index, .git/HEAD mtime 변경 감지
+  // fs.watch가 누락할 수 있는 외부 git 클라이언트 변경을 보완
+  const pollTargets = [
+    path.join(gitDir, 'index'),
+    path.join(gitDir, 'HEAD'),
+    path.join(gitDir, 'refs'),
+  ];
+  let lastMtimes = pollTargets.map(f => {
+    try { return fs.statSync(f).mtimeMs; } catch { return 0; }
+  });
+  const pollInterval = setInterval(() => {
+    const current = pollTargets.map(f => {
+      try { return fs.statSync(f).mtimeMs; } catch { return 0; }
+    });
+    let changed = false;
+    for (let i = 0; i < current.length; i++) {
+      if (current[i] !== lastMtimes[i]) { changed = true; break; }
+    }
+    if (changed) {
+      lastMtimes = current;
+      triggerRefresh();
+    }
+  }, 1000);
+
   // 종료 시 watcher 정리
   function closeWatchers() {
     if (debounceTimer) clearTimeout(debounceTimer);
+    clearInterval(pollInterval);
     for (const w of watchers) {
       try { w.close(); } catch { /* ignore */ }
     }
