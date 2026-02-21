@@ -283,6 +283,10 @@ function render() {
     hintContent = colors.yellow + ' New Tag: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
       + colors.dim + '[Enter]create  [Esc]cancel' + ansi.reset;
+  } else if (state.mode === 'rename-stash') {
+    hintContent = colors.yellow + ' Rename Stash: ' + ansi.reset
+      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
+      + colors.dim + '[Enter]rename  [Esc]cancel' + ansi.reset;
   } else if (state.error && state.errorLines.length === 0) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
   } else if (state.errorLines.length > 0) {
@@ -414,6 +418,8 @@ function render() {
     process.stdout.write(ansi.moveTo(hintRow, startCol + 13 + visLen(state.inputBuffer)));
   } else if (state.mode === 'new-tag') {
     process.stdout.write(ansi.moveTo(hintRow, startCol + 10 + visLen(state.inputBuffer)));
+  } else if (state.mode === 'rename-stash') {
+    process.stdout.write(ansi.moveTo(hintRow, startCol + 16 + visLen(state.inputBuffer)));
   }
 }
 
@@ -575,7 +581,7 @@ function buildLeftPanel(w, h) {
       for (const s of state.stashes) {
         const isActive = activeBranch === 'stash:' + s.shortHash;
         const content = '  ' + colors.yellow + truncate(s.ref, innerW - 2) + ansi.reset;
-        pushLine(isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content, { action: 'goto-stash', shortHash: s.shortHash });
+        pushLine(isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content, { action: 'goto-stash', shortHash: s.shortHash, ref: s.ref });
       }
     }
   }

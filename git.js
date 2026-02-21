@@ -421,6 +421,43 @@ function gitStashPop(cwd) {
   }
 }
 
+function gitStashApply(cwd, ref) {
+  try {
+    execFileSync('git', ['stash', 'apply', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Stash apply failed';
+  }
+}
+
+function gitStashDrop(cwd, ref) {
+  try {
+    execFileSync('git', ['stash', 'drop', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Stash drop failed';
+  }
+}
+
+function gitStashRename(cwd, ref, newMessage) {
+  try {
+    const hash = git(['rev-parse', ref], cwd).trim();
+    execFileSync('git', ['stash', 'drop', ref], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    execFileSync('git', ['stash', 'store', '-m', newMessage, hash], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Stash rename failed';
+  }
+}
+
 function gitFormatPatch(cwd, ref) {
   try {
     return git(['format-patch', '-1', ref, '--stdout'], cwd);
@@ -448,4 +485,5 @@ module.exports = {
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
+  gitStashApply, gitStashDrop, gitStashRename,
 };

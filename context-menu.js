@@ -3,7 +3,7 @@ const { sendRpcNotify } = require('./rpc');
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
-  gitRebase,
+  gitRebase, gitStashApply, gitStashDrop,
 } = require('./git');
 const { refresh, refreshLog, selectedLogRef } = require('./refresh');
 const { render } = require('./render');
@@ -50,12 +50,50 @@ function registerHistoryContextMenu() {
   ui.contextMenuActive = true;
 }
 
+function registerStashContextMenu(stashRef) {
+  const items = [
+    { id: 'stash_apply', label: 'Apply', icon: 'add' },
+    { id: 'stash_drop', label: 'Drop', icon: 'warning' },
+    { type: 'separator' },
+    { id: 'stash_rename', label: 'Rename...' },
+  ];
+  sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
+  ui.contextMenuStashRef = stashRef;
+}
+
 function unregisterContextMenu() {
   sendRpcNotify('register_context_menu', { items: [] });
   ui.contextMenuActive = false;
+  ui.contextMenuStashRef = null;
 }
 
 function handleContextMenuAction(actionId) {
+  // Stash context menu actions
+  if (actionId.startsWith('stash_')) {
+    const ref = ui.contextMenuStashRef;
+    if (!ref) return;
+    switch (actionId) {
+      case 'stash_apply': {
+        const err = gitStashApply(state.cwd, ref);
+        afterGitOp(err, 'Stash apply');
+        break;
+      }
+      case 'stash_drop': {
+        const err = gitStashDrop(state.cwd, ref);
+        afterGitOp(err, 'Stash drop');
+        break;
+      }
+      case 'stash_rename':
+        state.mode = 'rename-stash';
+        state.inputBuffer = '';
+        state.inputTarget = ref;
+        render();
+        break;
+    }
+    return;
+  }
+
   const logItem = selectedLogRef();
   if (!logItem) return;
 
@@ -166,4 +204,4 @@ function copyToClipboard(text) {
   sendRpcNotify('set_clipboard', { text });
 }
 
-module.exports = { registerHistoryContextMenu, unregisterContextMenu, handleContextMenuAction };
+module.exports = { registerHistoryContextMenu, registerStashContextMenu, unregisterContextMenu, handleContextMenuAction };

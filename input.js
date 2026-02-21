@@ -1,10 +1,10 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave } = require('./git');
+const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename } = require('./git');
 const { sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, unregisterContextMenu } = require('./context-menu');
+const { registerHistoryContextMenu, registerStashContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -48,7 +48,7 @@ function handleKey(key) {
     handleCommitInput(key);
     return;
   }
-  if (state.mode === 'new-branch' || state.mode === 'new-tag') {
+  if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash') {
     handleNameInput(key);
     return;
   }
@@ -381,12 +381,14 @@ function handleNameInput(key) {
       return;
     }
     let err;
-    if (state.mode === 'new-branch') {
+    if (state.mode === 'rename-stash') {
+      err = gitStashRename(state.cwd, state.inputTarget, name);
+    } else if (state.mode === 'new-branch') {
       err = gitCreateBranch(state.cwd, name, state.inputTarget);
     } else {
       err = gitCreateTag(state.cwd, name, state.inputTarget);
     }
-    const opName = state.mode === 'new-branch' ? 'Branch' : 'Tag';
+    const opName = state.mode === 'rename-stash' ? 'Rename stash' : state.mode === 'new-branch' ? 'Branch' : 'Tag';
     state.mode = 'normal';
     state.inputBuffer = '';
     state.inputTarget = '';
@@ -522,6 +524,23 @@ function handleMouseData(data) {
         }
       }
 
+      // Context menu: stash items in left panel
+      if (!ui.leftPanelCollapsed && inBody) {
+        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+        if (inLeft) {
+          const bodyRowIdx2 = cy - (bodyTop);
+          const entry = bodyRowIdx2 >= 0 && bodyRowIdx2 < ui.leftPanelClickMap.length ? ui.leftPanelClickMap[bodyRowIdx2] : null;
+          if (entry && entry.action === 'goto-stash') {
+            const stashRef = entry.ref;
+            if (!ui.contextMenuActive || ui.contextMenuStashRef !== stashRef) {
+              registerStashContextMenu(stashRef);
+            }
+          } else if (ui.contextMenuStashRef && inLeft) {
+            unregisterContextMenu();
+          }
+        }
+      }
+
       // Context menu: only active when mouse is over the history list area
       if (state.rightView === 'log') {
         const bodyRowIdx = cy - (bodyTop);
@@ -529,7 +548,7 @@ function handleMouseData(data) {
           bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH;
         if (inHistoryList && !ui.contextMenuActive) {
           registerHistoryContextMenu();
-        } else if (!inHistoryList && ui.contextMenuActive) {
+        } else if (!inHistoryList && ui.contextMenuActive && !ui.contextMenuStashRef) {
           unregisterContextMenu();
         }
       }
@@ -966,6 +985,21 @@ function handleMouseData(data) {
 
     // Right click - update selection for context menu
     if (cb === 2) {
+      // Right-click on left panel stash item
+      if (!ui.leftPanelCollapsed) {
+        const bodyRowIdx = cy - (bodyTop);
+        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+        if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length) {
+          const entry = ui.leftPanelClickMap[bodyRowIdx];
+          if (entry && entry.action === 'goto-stash' && entry.ref) {
+            registerStashContextMenu(entry.ref);
+            // Also select the stash
+            ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
+            render();
+            continue;
+          }
+        }
+      }
       if (state.rightView === 'log') {
         const bodyRowIdx = cy - (bodyTop);
         const rightStart2 = midStart + L.middleW + L.divider2W;
