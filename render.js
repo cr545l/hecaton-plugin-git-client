@@ -64,23 +64,18 @@ function render() {
       return collapsed ? colors.dim : colors.title + ansi.bold;
     };
 
-    function pctSuffix(pct) {
-      if (pct < 0) return '';
-      return colors.dim + ' ' + pct + '%' + ansi.reset;
-    }
-
     // Build right-side panel buttons string first to know its width
-    let rightParts = []; // { label, action, collapsed, pctStr }
-    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', action: 'toggleStatus', collapsed: ui.leftPanelCollapsed, pctStr: pctSuffix(ui.scrollPct.status) });
+    let rightParts = []; // { label, action, collapsed }
+    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', action: 'toggleStatus', collapsed: ui.leftPanelCollapsed });
     if (state.rightView === 'log') {
-      rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + 'History', action: 'toggleHistory', collapsed: ui.rightTopCollapsed, pctStr: pctSuffix(ui.scrollPct.history) });
-      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed, pctStr: pctSuffix(ui.scrollPct.detail) });
+      rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + 'History', action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
+      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
     } else {
-      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed, pctStr: pctSuffix(ui.scrollPct.files) });
-      rightParts.push({ label: (ui.rightPanelCollapsed ? '  + ' : '  - ') + 'Diff', action: 'toggleDiff', collapsed: ui.rightPanelCollapsed, pctStr: pctSuffix(ui.scrollPct.diff) });
+      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
+      rightParts.push({ label: (ui.rightPanelCollapsed ? '  + ' : '  - ') + 'Diff', action: 'toggleDiff', collapsed: ui.rightPanelCollapsed });
     }
     let rightTotalW = 0;
-    for (const p of rightParts) rightTotalW += visLen(p.label) + visLen(p.pctStr);
+    for (const p of rightParts) rightTotalW += visLen(p.label);
 
     // === Left side: Local / Commits tabs ===
     let row1 = ansi.moveTo(startRow, startCol);
@@ -144,17 +139,45 @@ function render() {
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(p.label) - 1, action: p.action });
       row1 += zoneStyle(si, p.collapsed) + p.label + ansi.reset;
       col1 += visLen(p.label);
-      row1 += p.pctStr;
-      col1 += visLen(p.pctStr);
     }
 
     return row1;
   }
 
-  // -- Separator line --
+  // -- Separator line (with scroll percentages) --
   function buildSeparator() {
     let sepStr = ansi.moveTo(startRow + titleRows, startCol);
-    sepStr += colors.border + H.repeat(width) + ansi.reset;
+
+    function sectionLine(w, pct) {
+      if (w <= 0) return '';
+      const label = pct >= 0 ? ' ' + pct + '% ' : '';
+      if (label.length > 0 && w > label.length) {
+        return colors.border + H.repeat(w - label.length) + ansi.reset + colors.dim + label + ansi.reset;
+      }
+      return colors.border + H.repeat(w) + ansi.reset;
+    }
+
+    if (leftW > 0) {
+      sepStr += sectionLine(leftW, ui.scrollPct.status);
+      sepStr += colors.border + CROSS + ansi.reset;
+    }
+
+    if (state.rightView === 'log') {
+      sepStr += sectionLine(rightW, ui.scrollPct.history);
+    } else {
+      if (middleW > 0 && rightW > 0) {
+        sepStr += sectionLine(middleW, ui.scrollPct.files);
+        sepStr += colors.border + CROSS + ansi.reset;
+        sepStr += sectionLine(rightW, ui.scrollPct.diff);
+      } else if (middleW > 0) {
+        sepStr += sectionLine(remaining, ui.scrollPct.files);
+      } else if (rightW > 0) {
+        sepStr += sectionLine(remaining, ui.scrollPct.diff);
+      } else {
+        sepStr += colors.border + H.repeat(remaining) + ansi.reset;
+      }
+    }
+
     return sepStr;
   }
 
@@ -888,10 +911,25 @@ function buildLogPanel(w, h) {
     ui.scrollPct.history = -1;
   }
 
+  // Pre-calculate detail scroll pct for separator
+  if (detailH > 1 && state.logDetailLines.length > 0) {
+    const cH = detailH - 1;
+    const maxDetailScroll = Math.max(0, state.logDetailLines.length - cH);
+    if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
+    if (state.logDetailLines.length > cH) {
+      ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
+    }
+  }
+
   // -- Separator --
   if (separatorH > 0) {
     const hDivColor = ui.hoveredDivider === 'horizontal' ? colors.value : colors.border;
-    lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
+    const pctLabel = ui.scrollPct.detail >= 0 ? ' ' + ui.scrollPct.detail + '% ' : '';
+    if (pctLabel.length > 0 && w > pctLabel.length) {
+      lines.push(hDivColor + '\u2500'.repeat(w - pctLabel.length) + ansi.reset + colors.dim + pctLabel + ansi.reset);
+    } else {
+      lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
+    }
   }
 
   // -- Detail --
@@ -913,11 +951,6 @@ function buildLogPanel(w, h) {
       const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
         lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
-      }
-      if (state.logDetailLines.length > cH) {
-        ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
-      } else {
-        ui.scrollPct.detail = -1;
       }
     }
   }
