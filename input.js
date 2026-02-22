@@ -1,6 +1,6 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd } = require('./git');
+const { gitStage, gitUnstage, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd } = require('./git');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
@@ -595,7 +595,7 @@ function handleMouseData(data) {
           newDivHover = 'horizontal';
         }
       }
-      // Hover: file header buttons (Stage All / Unstage All)
+      // Hover: file header buttons ([Stage] / [Unstage])
       let newFileHeaderHover = -1;
       if (state.rightView !== 'log' && inBody) {
         const bodyRowIdx = cy - (bodyTop);
@@ -1050,7 +1050,7 @@ function handleMouseData(data) {
             updateLogDetail();
           }
         } else {
-          // File header button click (Stage All / Unstage All)
+          // File header button click ([Stage] / [Unstage])
           let headerHandled = false;
           for (const zone of ui.fileHeaderZones) {
             const visibleLineIdx = zone.lineIdx - state.scrollOffset;
@@ -1058,12 +1058,22 @@ function handleMouseData(data) {
               const btnScreenColStart = midStart + zone.btnColStart;
               const btnScreenColEnd = midStart + zone.btnColEnd;
               if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {
-                if (zone.action === 'stageAll') {
-                  gitStageAll(state.cwd);
-                } else if (zone.action === 'unstageAll') {
-                  gitUnstageAll(state.cwd);
+                const fileList = buildFileList();
+                const targets = state.selectedFiles.size > 0
+                  ? Array.from(state.selectedFiles).sort((a, b) => a - b)
+                  : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
+                for (const idx of targets) {
+                  const item = fileList[idx];
+                  if (zone.action === 'stageSelected') {
+                    if (item && item.type !== 'staged') gitStage(state.cwd, item.file);
+                  } else if (zone.action === 'unstageSelected') {
+                    if (item && item.type === 'staged') gitUnstage(state.cwd, item.file);
+                  }
                 }
-                refresh();
+                if (targets.length > 0) {
+                  state.selectedFiles.clear();
+                  refresh();
+                }
                 render();
                 headerHandled = true;
                 break;

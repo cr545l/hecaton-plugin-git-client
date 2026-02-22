@@ -601,7 +601,7 @@ function buildFileListPanel(w, h) {
   const unstagedCount = state.unstaged.length + state.untracked.length;
   {
     const headerLabel = ' Unstaged (' + unstagedCount + ')';
-    const btnLabel = 'Stage All';
+    const btnLabel = '[Stage]';
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - btnLabel.length - 1);
     const zoneIdx = ui.fileHeaderZones.length;
@@ -610,7 +610,7 @@ function buildFileListPanel(w, h) {
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'stageAll' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'stageSelected' });
     pushFileLine(headerLine, -1);
   }
   for (let i = 0; i < state.unstaged.length; i++) {
@@ -644,7 +644,7 @@ function buildFileListPanel(w, h) {
   // Staged
   {
     const headerLabel = ' Staged (' + state.staged.length + ')';
-    const btnLabel = 'Unstage All';
+    const btnLabel = '[Unstage]';
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - btnLabel.length - 1);
     const zoneIdx = ui.fileHeaderZones.length;
@@ -653,7 +653,7 @@ function buildFileListPanel(w, h) {
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'unstageAll' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'unstageSelected' });
     pushFileLine(headerLine, -1);
   }
   for (let i = 0; i < state.staged.length; i++) {
