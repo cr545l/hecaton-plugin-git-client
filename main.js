@@ -42,7 +42,7 @@ async function main() {
   process.stdin.setEncoding('utf-8');
 
   process.stdin.on('data', (data) => {
-    // Check for RPC messages from host.
+    // Host RPC messages
     if (data.indexOf('__HECA_RPC__') !== -1) {
       const segments = data.split('__HECA_RPC__');
       for (const seg of segments) {
@@ -50,6 +50,14 @@ async function main() {
         if (!trimmed) continue;
         try {
           const json = JSON.parse(trimmed);
+
+          // RPC response
+          if (json.id != null && (json.result || json.error)) {
+            handleRpcResponse(json);
+            continue;
+          }
+
+          // Host notifications
           if (json.method === 'resize' && json.params) {
             ui.termCols = json.params.cols || ui.termCols;
             ui.termRows = json.params.rows || ui.termRows;
@@ -61,21 +69,23 @@ async function main() {
               ui.logSixelOverlay = null;
             }
             render();
-          } else if (json.method === 'minimize') {
+          }
+          if (json.method === 'minimize') {
             state.minimized = true;
             render();
-          } else if (json.method === 'maximize') {
-            // Host handles sizing; plugin just re-renders on resize
-          } else if (json.method === 'restore') {
+          }
+          if (json.method === 'restore') {
             state.minimized = false;
             refresh();
             render();
-          } else if (json.method === 'context_menu_action' && json.params) {
-            handleContextMenuAction(json.params.id);
-          } else {
-            handleRpcResponse(json);
           }
-        } catch { /* ignore malformed segment */ }
+          if (json.method === 'maximize') {
+            // Host handles sizing; plugin just re-renders on resize
+          }
+          if (json.method === 'context_menu_action' && json.params) {
+            handleContextMenuAction(json.params.id);
+          }
+        } catch { /* ignore */ }
       }
       return;
     }

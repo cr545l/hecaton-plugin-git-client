@@ -26,8 +26,6 @@ const state = {
   inputBuffer: '',
   inputTarget: '',
   error: null,
-  errorLines: [],
-  errorScrollOffset: 0,
   loading: true,
   minimized: false,
 };
@@ -75,7 +73,6 @@ const ui = {
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
-  errorOverlay: null,  // { x, y, w, h } — error overlay bounds for mouse interaction
   lastClickTime: 0,
   lastClickFileIdx: -1,
   cellW: 8,

@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { sendRpcNotify } = require('./rpc');
+const { sendRpc, sendRpcNotify } = require('./rpc');
 const { execFileSync } = require('child_process');
 const path = require('path');
 const {
@@ -417,9 +417,13 @@ function afterGitOp(err, opName) {
 }
 
 function showError(msg) {
-  state.error = msg;
-  state.errorLines = msg.split('\n');
-  state.errorScrollOffset = 0;
+  state.error = null;
+  sendRpc('show_dialog', {
+    type: 'message',
+    title: 'Error',
+    message: msg,
+    buttons: [{ id: 'ok', label: 'OK' }],
+  });
   render();
 }
 

@@ -41,7 +41,7 @@ function refresh() {
     state.diffLines = [];
     return;
   }
-  if (state.errorLines.length === 0) state.error = null;
+  state.error = null;
   state.branch = gitBranch(state.cwd);
   sendRpcNotify('set_title', { title: state.branch });
   state.rebaseState = gitRebaseState(state.cwd);
@@ -78,7 +78,7 @@ async function refreshAsync() {
     return;
   }
   state.isGitRepo = true;
-  if (state.errorLines.length === 0) state.error = null;
+  state.error = null;
 
   // branch
   state.branch = branchRaw.trim() || 'HEAD (detached)';

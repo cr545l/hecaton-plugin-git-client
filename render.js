@@ -291,10 +291,8 @@ function render() {
     hintContent = colors.yellow + ' New Remote: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
       + colors.dim + '[Enter]create (name url)  [Esc]cancel' + ansi.reset;
-  } else if (state.error && state.errorLines.length === 0) {
+  } else if (state.error) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
-  } else if (state.errorLines.length > 0) {
-    hintContent = ' ' + colors.red + '[Error] click [X] or outside to close' + ansi.reset;
   } else {
     hintContent = ' ' + buildHintText();
   }
@@ -307,56 +305,6 @@ function render() {
     buf.push(ansi.moveTo(screenRow, graphCol) + ui.logSixelOverlay);
   }
   ui.logSixelOverlay = null;
-
-  // -- Error overlay --
-  if (state.errorLines.length > 0) {
-    const overlayW = Math.min(width - 4, 72);
-    const maxVisibleLines = Math.min(height - 6, 16);
-    const totalLines = state.errorLines.length;
-    const maxScroll = Math.max(0, totalLines - maxVisibleLines);
-    state.errorScrollOffset = Math.min(state.errorScrollOffset, maxScroll);
-    const scrollOff = state.errorScrollOffset;
-
-    const contentH = Math.min(totalLines, maxVisibleLines);
-    const overlayH = contentH + 2; // top + bottom border
-    const overlayX = startCol + Math.floor((width - overlayW) / 2);
-    const overlayY = startRow + Math.max(1, Math.floor((height - overlayH) / 2));
-
-    // 마우스 처리를 위한 오버레이 위치 저장
-    ui.errorOverlay = { x: overlayX, y: overlayY, w: overlayW, h: overlayH, contentH };
-
-    const TOP_L = '\u250c', TOP_R = '\u2510', BOT_L = '\u2514', BOT_R = '\u2518';
-    const HORIZ = '\u2500', VERT = '\u2502';
-
-    // Top border with [X] close button
-    const title = ' Error ';
-    const closeBtn = '[X]';
-    const topPad = Math.max(0, overlayW - 2 - title.length - closeBtn.length - 1);
-    buf.push(ansi.moveTo(overlayY, overlayX) + colors.red
-      + TOP_L + HORIZ + title + HORIZ.repeat(topPad) + closeBtn + HORIZ + TOP_R + ansi.reset);
-
-    // Content lines
-    const visibleLines = state.errorLines.slice(scrollOff, scrollOff + contentH);
-    for (let i = 0; i < contentH; i++) {
-      const row = overlayY + 1 + i;
-      const line = (visibleLines[i] || '').replace(/\t/g, '  ');
-      const content = truncate(' ' + line, overlayW - 3);
-      buf.push(ansi.moveTo(row, overlayX)
-        + colors.red + VERT + ansi.reset
-        + padRight(content, overlayW - 2)
-        + colors.red + VERT + ansi.reset);
-    }
-
-    // Bottom border with scroll info
-    const scrollInfo = totalLines > maxVisibleLines
-      ? ` ${scrollOff + 1}-${scrollOff + contentH}/${totalLines} `
-      : '';
-    const botPad = Math.max(0, overlayW - 2 - scrollInfo.length);
-    buf.push(ansi.moveTo(overlayY + contentH + 1, overlayX) + colors.red
-      + BOT_L + HORIZ.repeat(botPad) + scrollInfo + HORIZ + BOT_R + ansi.reset);
-  } else {
-    ui.errorOverlay = null;
-  }
 
   process.stdout.write(buf.join(''));
 

@@ -1,7 +1,7 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
 const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd } = require('./git');
-const { sendRpcNotify } = require('./rpc');
+const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
 const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, unregisterContextMenu } = require('./context-menu');
@@ -21,25 +21,17 @@ function actionToKey(action) {
   }
 }
 
-function setError(msg) {
-  state.error = msg;
-  state.errorLines = msg.split('\n');
-  state.errorScrollOffset = 0;
-}
-
-function clearError() {
+function showErrorDialog(msg) {
   state.error = null;
-  state.errorLines = [];
-  state.errorScrollOffset = 0;
+  sendRpc('show_dialog', {
+    type: 'message',
+    title: 'Error',
+    message: msg,
+    buttons: [{ id: 'ok', label: 'OK' }],
+  });
 }
 
 function handleKey(key) {
-  // 에러 오버레이가 떠 있으면 아무 키나 눌러서 닫기
-  if (state.errorLines.length > 0) {
-    clearError();
-    render();
-    return;
-  }
   if (state.mode === 'rebase-menu') {
     handleRebaseMenuInput(key);
     return;
@@ -100,7 +92,7 @@ function handleKey(key) {
   switch (key) {
     case 'c': {
       if (state.staged.length === 0) {
-        setError('Nothing staged to commit');
+        showErrorDialog('Nothing staged to commit');
         render();
         break;
       }
@@ -135,7 +127,7 @@ function handleKey(key) {
       } else {
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
-          setError('Select a commit in log view to rebase onto');
+          showErrorDialog('Select a commit in log view to rebase onto');
           render();
           break;
         }
@@ -143,7 +135,7 @@ function handleKey(key) {
         refresh();
         if (state.rightView === 'log') refreshLog();
         if (err) {
-          setError(err);
+          showErrorDialog(err);
           render();
         } else {
           render();
@@ -210,14 +202,14 @@ function handleCommitInput(key) {
   // Ctrl+Enter → submit commit
   if (key === CSI + '13;5u') {
     if (state.commitMsg.trim().length === 0) {
-      setError('Commit message cannot be empty');
+      showErrorDialog('Commit message cannot be empty');
       render();
       return;
     }
     const err = gitCommit(state.cwd, state.commitMsg);
     state.mode = 'normal';
     if (err) {
-      setError(err);
+      showErrorDialog(err);
       render();
     } else {
       state.commitMsg = '';
@@ -346,7 +338,7 @@ function handleRebaseMenuInput(key) {
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
-      setError(err);
+      showErrorDialog(err);
     }
     render();
     return;
@@ -357,7 +349,7 @@ function handleRebaseMenuInput(key) {
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
-      setError(err);
+      showErrorDialog(err);
     }
     render();
     return;
@@ -368,7 +360,7 @@ function handleRebaseMenuInput(key) {
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
-      setError(err);
+      showErrorDialog(err);
     }
     render();
     return;
@@ -395,7 +387,7 @@ function handleNameInput(key) {
   if (key === '\r' || key === '\n') {
     const name = state.inputBuffer.trim();
     if (name.length === 0) {
-      setError('Name cannot be empty');
+      showErrorDialog('Name cannot be empty');
       render();
       return;
     }
@@ -405,7 +397,7 @@ function handleNameInput(key) {
     } else if (state.mode === 'new-remote') {
       const parts = name.split(/\s+/).filter(Boolean);
       if (parts.length < 2) {
-        setError('Use: <remote-name> <remote-url>');
+        showErrorDialog('Use: <remote-name> <remote-url>');
         render();
         return;
       }
@@ -428,7 +420,7 @@ function handleNameInput(key) {
     state.inputBuffer = '';
     state.inputTarget = '';
     if (err) {
-      setError(opName + ' failed:\n' + err);
+      showErrorDialog(opName + ' failed:\n' + err);
       render();
     } else {
       refresh();
@@ -604,30 +596,6 @@ function handleMouseData(data) {
       continue;
     }
 
-    // 에러 오버레이 마우스 처리
-    if (state.errorLines.length > 0 && ui.errorOverlay) {
-      const eo = ui.errorOverlay;
-      const inOverlay = cx >= eo.x && cx < eo.x + eo.w && cy >= eo.y && cy < eo.y + eo.h;
-      // 스크롤 휠 — 오버레이 내부에서만
-      if ((cb === 64 || cb === 65) && inOverlay) {
-        const maxScroll = Math.max(0, state.errorLines.length - eo.contentH);
-        if (cb === 64) state.errorScrollOffset = Math.max(0, state.errorScrollOffset - 3);
-        else state.errorScrollOffset = Math.min(maxScroll, state.errorScrollOffset + 3);
-        render();
-        continue;
-      }
-      // 좌클릭 — [X] 닫기 버튼 또는 오버레이 바깥 클릭
-      if (cb === 0) {
-        const isCloseBtn = cy === eo.y && cx >= eo.x + eo.w - 4 && cx <= eo.x + eo.w - 1;
-        if (isCloseBtn || !inOverlay) {
-          clearError();
-          render();
-        }
-        continue;
-      }
-      continue;
-    }
-
     // Scroll wheel
     if (cb === 64 || cb === 65) {
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
@@ -741,7 +709,7 @@ function handleMouseData(data) {
               render();
               const err = gitFetch(state.cwd);
               if (err) {
-                setError(err);
+                showErrorDialog(err);
                 render();
               } else {
                 state.error = null;
@@ -754,7 +722,7 @@ function handleMouseData(data) {
               render();
               const err = gitPull(state.cwd);
               if (err) {
-                setError(err);
+                showErrorDialog(err);
                 render();
               } else {
                 state.error = null;
@@ -767,7 +735,7 @@ function handleMouseData(data) {
               render();
               const err = gitPush(state.cwd);
               if (err) {
-                setError(err);
+                showErrorDialog(err);
                 render();
               } else {
                 state.error = null;
@@ -778,7 +746,7 @@ function handleMouseData(data) {
             } else if (zone.action === 'git-stash') {
               const err = gitStashSave(state.cwd);
               if (err) {
-                setError(err);
+                showErrorDialog(err);
                 render();
               } else {
                 refresh();
