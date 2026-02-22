@@ -4,7 +4,7 @@ const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, 
 const { sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, registerStashContextMenu, unregisterContextMenu } = require('./context-menu');
+const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -565,7 +565,7 @@ function handleMouseData(data) {
         const bodyRowIdx = cy - (bodyTop);
         const inHistoryList = inBody && cx >= rightStart && cx < L.startCol + L.width &&
           bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH;
-        if (inHistoryList && !ui.contextMenuActive) {
+        if (inHistoryList && (!ui.contextMenuActive || ui.contextMenuStashRef || ui.contextMenuFileItem)) {
           registerHistoryContextMenu();
         } else if (!inHistoryList && ui.contextMenuActive && !ui.contextMenuStashRef) {
           unregisterContextMenu();
@@ -1055,10 +1055,14 @@ function handleMouseData(data) {
         const inMiddle2 = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
         if (inMiddle2 && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
           const fileIdx = ui.fileLineMap[bodyRowIdx];
+          const fileList = buildFileList();
+          const item = fileList[fileIdx];
           state.cursor = fileIdx;
           updateDiff();
           state.focusPanel = 'status';
+          if (item) registerFileContextMenu(item);
           render();
+          continue;
         }
       }
     }

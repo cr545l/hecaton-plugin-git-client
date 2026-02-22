@@ -70,6 +70,8 @@ const ui = {
   hoveredDivider: null,
   contextMenuActive: false,
   contextMenuStashRef: null,
+  contextMenuFileItem: null,
+  contextMenuFilePath: '',
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   errorOverlay: null,  // { x, y, w, h } — error overlay bounds for mouse interaction
   lastClickTime: 0,

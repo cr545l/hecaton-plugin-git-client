@@ -1,4 +1,6 @@
 const { execFileSync, execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 function gitExec(args, cwd) {
   return new Promise((resolve) => {
@@ -474,6 +476,91 @@ function gitCommitInfo(cwd, ref) {
   }
 }
 
+function gitDiscardFile(cwd, item) {
+  if (!item || !item.file) return 'No file selected';
+  try {
+    if (item.type === 'untracked') {
+      execFileSync('git', ['clean', '-f', '--', item.file], {
+        cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+      });
+      return null;
+    }
+    if (item.type === 'staged') {
+      execFileSync('git', ['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], {
+        cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+      });
+      return null;
+    }
+    execFileSync('git', ['restore', '--', item.file], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Discard failed';
+  }
+}
+
+function gitStashFile(cwd, file) {
+  if (!file) return 'No file selected';
+  try {
+    execFileSync('git', ['stash', 'push', '-u', '--', file], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Stash file failed';
+  }
+}
+
+function gitIgnorePattern(cwd, pattern) {
+  if (!pattern) return 'No ignore pattern';
+  try {
+    const ignorePath = path.join(cwd, '.gitignore');
+    const normalized = pattern.replace(/\\/g, '/');
+    let lines = [];
+    if (fs.existsSync(ignorePath)) {
+      lines = fs.readFileSync(ignorePath, 'utf-8').replace(/\r\n/g, '\n').split('\n');
+    }
+    if (lines.some(line => line.trim() === normalized)) return null;
+    const content = (lines.length > 0 ? lines.join('\n').replace(/\n*$/, '\n') : '') + normalized + '\n';
+    fs.writeFileSync(ignorePath, content, 'utf-8');
+    return null;
+  } catch (e) {
+    return e.message || 'Ignore update failed';
+  }
+}
+
+function gitFileHistory(cwd, file) {
+  try {
+    return git(['log', '--follow', '--decorate', '--oneline', '--', file], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
+function gitBlameFile(cwd, file) {
+  try {
+    return git(['blame', '--', file], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
+function gitFilePatch(cwd, item) {
+  if (!item || !item.file) return '';
+  try {
+    if (item.type === 'staged') {
+      return git(['diff', '--cached', '--', item.file], cwd);
+    }
+    if (item.type === 'untracked') {
+      return gitDiffUntracked(cwd, item.file);
+    }
+    return git(['diff', '--', item.file], cwd);
+  } catch {
+    return '';
+  }
+}
+
 module.exports = {
   git,
   gitExec,
@@ -486,4 +573,6 @@ module.exports = {
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
   gitStashApply, gitStashDrop, gitStashRename,
+  gitDiscardFile, gitStashFile, gitIgnorePattern,
+  gitFileHistory, gitBlameFile, gitFilePatch,
 };

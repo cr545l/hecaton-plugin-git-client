@@ -1,9 +1,13 @@
 const { state, ui } = require('./state');
 const { sendRpcNotify } = require('./rpc');
+const { execFileSync } = require('child_process');
+const path = require('path');
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitRebase, gitStashApply, gitStashDrop,
+  gitStage, gitUnstage, gitStageAll, gitDiscardFile,
+  gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
 } = require('./git');
 const { refresh, refreshLog, selectedLogRef } = require('./refresh');
 const { render } = require('./render');
@@ -62,13 +66,187 @@ function registerStashContextMenu(stashRef) {
   ui.contextMenuStashRef = stashRef;
 }
 
+function registerFileContextMenu(fileItem) {
+  if (!fileItem || !fileItem.file) return;
+
+  const canStage = fileItem.type !== 'staged';
+  const canUnstage = fileItem.type === 'staged';
+
+  const items = [
+    { id: 'file_open', label: 'Open' },
+    {
+      id: 'file_external_diff',
+      label: 'External Diff',
+      children: [
+        { id: 'file_external_diff_head', label: 'Compare with HEAD' },
+        { id: 'file_external_diff_index', label: 'Compare with Index' },
+      ],
+    },
+    { id: 'file_show_in_explorer', label: 'Show in Explorer' },
+    { type: 'separator' },
+    { id: 'file_blame', label: 'Blame/Timeline...' },
+    { id: 'file_history', label: 'History...' },
+    { type: 'separator' },
+    { id: 'file_stage', label: 'Stage', enabled: canStage },
+    { id: 'file_unstage', label: 'Unstage', enabled: canUnstage },
+    { id: 'file_discard', label: 'Discard changes...', icon: 'warning' },
+    { id: 'file_stage_all', label: 'Stage All' },
+    {
+      id: 'file_ignore',
+      label: 'Ignore',
+      children: [
+        { id: 'file_ignore_name', label: 'Ignore by Name' },
+        { id: 'file_ignore_ext', label: 'Ignore by Extension' },
+        { id: 'file_ignore_path', label: 'Ignore by Path' },
+      ],
+    },
+    { id: 'file_stash_one', label: 'Stash 1 File...' },
+    { id: 'file_save_patch', label: 'Save as Patch...', icon: 'save' },
+    { type: 'separator' },
+    { id: 'file_copy_path', label: 'Copy Path', icon: 'copy' },
+    { id: 'file_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
+  ];
+
+  sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
+  ui.contextMenuStashRef = null;
+  ui.contextMenuFileItem = fileItem;
+  ui.contextMenuFilePath = path.join(state.cwd, fileItem.file);
+}
+
 function unregisterContextMenu() {
   sendRpcNotify('register_context_menu', { items: [] });
   ui.contextMenuActive = false;
   ui.contextMenuStashRef = null;
+  ui.contextMenuFileItem = null;
+  ui.contextMenuFilePath = '';
 }
 
 function handleContextMenuAction(actionId) {
+  // File context menu actions
+  if (actionId.startsWith('file_')) {
+    const fileItem = ui.contextMenuFileItem;
+    const fullPath = ui.contextMenuFilePath;
+    if (!fileItem || !fileItem.file) return;
+
+    switch (actionId) {
+      case 'file_open': {
+        const err = openExternal(fullPath);
+        if (err) showError('Open failed:\n' + err);
+        break;
+      }
+      case 'file_external_diff_head': {
+        const raw = gitFilePatch(state.cwd, { ...fileItem, type: 'unstaged' });
+        if (raw) {
+          copyToClipboard(raw);
+          showError('Patch copied to clipboard');
+        } else {
+          showError('No diff with HEAD');
+        }
+        break;
+      }
+      case 'file_external_diff_index': {
+        const raw = gitFilePatch(state.cwd, { ...fileItem, type: 'staged' });
+        if (raw) {
+          copyToClipboard(raw);
+          showError('Index diff copied to clipboard');
+        } else {
+          showError('No diff with index');
+        }
+        break;
+      }
+      case 'file_show_in_explorer': {
+        const err = showInExplorer(fullPath);
+        if (err) showError('Show in Explorer failed:\n' + err);
+        break;
+      }
+      case 'file_blame': {
+        const raw = gitBlameFile(state.cwd, fileItem.file);
+        if (raw) {
+          copyToClipboard(raw);
+          showError('Blame copied to clipboard');
+        } else {
+          showError('Blame not available for this file');
+        }
+        break;
+      }
+      case 'file_history': {
+        const raw = gitFileHistory(state.cwd, fileItem.file);
+        if (raw) {
+          copyToClipboard(raw);
+          showError('History copied to clipboard');
+        } else {
+          showError('No history for this file');
+        }
+        break;
+      }
+      case 'file_stage':
+        if (fileItem.type !== 'staged') {
+          gitStage(state.cwd, fileItem.file);
+          afterGitOp(null);
+        }
+        break;
+      case 'file_unstage':
+        if (fileItem.type === 'staged') {
+          gitUnstage(state.cwd, fileItem.file);
+          afterGitOp(null);
+        }
+        break;
+      case 'file_discard': {
+        const err = gitDiscardFile(state.cwd, fileItem);
+        afterGitOp(err, 'Discard');
+        break;
+      }
+      case 'file_stage_all':
+        gitStageAll(state.cwd);
+        afterGitOp(null);
+        break;
+      case 'file_ignore_name': {
+        const pattern = path.basename(fileItem.file);
+        const err = gitIgnorePattern(state.cwd, pattern);
+        afterGitOp(err, 'Ignore');
+        break;
+      }
+      case 'file_ignore_ext': {
+        const ext = path.extname(fileItem.file);
+        if (!ext) {
+          showError('No extension to ignore');
+          break;
+        }
+        const err = gitIgnorePattern(state.cwd, '*' + ext);
+        afterGitOp(err, 'Ignore');
+        break;
+      }
+      case 'file_ignore_path': {
+        const err = gitIgnorePattern(state.cwd, fileItem.file.replace(/\\/g, '/'));
+        afterGitOp(err, 'Ignore');
+        break;
+      }
+      case 'file_stash_one': {
+        const err = gitStashFile(state.cwd, fileItem.file);
+        afterGitOp(err, 'Stash file');
+        break;
+      }
+      case 'file_save_patch': {
+        const patch = gitFilePatch(state.cwd, fileItem);
+        if (patch) {
+          copyToClipboard(patch);
+          showError('Patch copied to clipboard');
+        } else {
+          showError('No patch for this file');
+        }
+        break;
+      }
+      case 'file_copy_path':
+        copyToClipboard(fileItem.file.replace(/\\/g, '/'));
+        break;
+      case 'file_copy_full_path':
+        copyToClipboard(fullPath);
+        break;
+    }
+    return;
+  }
+
   // Stash context menu actions
   if (actionId.startsWith('stash_')) {
     const ref = ui.contextMenuStashRef;
@@ -204,4 +382,40 @@ function copyToClipboard(text) {
   sendRpcNotify('set_clipboard', { text });
 }
 
-module.exports = { registerHistoryContextMenu, registerStashContextMenu, unregisterContextMenu, handleContextMenuAction };
+function openExternal(fullPath) {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('cmd', ['/c', 'start', '', fullPath], { windowsHide: true });
+    } else if (process.platform === 'darwin') {
+      execFileSync('open', [fullPath]);
+    } else {
+      execFileSync('xdg-open', [fullPath]);
+    }
+    return null;
+  } catch (e) {
+    return e.message || 'Failed to open file';
+  }
+}
+
+function showInExplorer(fullPath) {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('explorer', ['/select,' + fullPath], { windowsHide: true });
+    } else if (process.platform === 'darwin') {
+      execFileSync('open', ['-R', fullPath]);
+    } else {
+      execFileSync('xdg-open', [path.dirname(fullPath)]);
+    }
+    return null;
+  } catch (e) {
+    return e.message || 'Failed to show file';
+  }
+}
+
+module.exports = {
+  registerHistoryContextMenu,
+  registerStashContextMenu,
+  registerFileContextMenu,
+  unregisterContextMenu,
+  handleContextMenuAction,
+};
