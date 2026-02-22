@@ -696,6 +696,27 @@ function handleMouseData(data) {
       continue;
     }
 
+    // Shift+Left click: range selection (same group only)
+    if (cb === 4) {
+      const bodyRowIdx = cy - (bodyTop);
+      const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
+      if (state.rightView !== 'log' && inMiddle && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+        const fileIdx = ui.fileLineMap[bodyRowIdx];
+        const unstagedCount = state.unstaged.length + state.untracked.length;
+        const clickedInUnstaged = fileIdx < unstagedCount;
+        const groupStart = clickedInUnstaged ? 0 : unstagedCount;
+        const groupEnd = clickedInUnstaged ? unstagedCount : buildFileList().length;
+        const anchor = Math.max(groupStart, Math.min(groupEnd - 1, state.cursor));
+        const from = Math.max(groupStart, Math.min(anchor, fileIdx));
+        const to = Math.min(groupEnd - 1, Math.max(anchor, fileIdx));
+        state.selectedFiles.clear();
+        for (let i = from; i <= to; i++) state.selectedFiles.add(i);
+        state.focusPanel = 'status';
+        render();
+      }
+      continue;
+    }
+
     // Scroll wheel
     if (cb === 64 || cb === 65) {
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
