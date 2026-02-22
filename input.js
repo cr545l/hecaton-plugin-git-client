@@ -190,6 +190,16 @@ function nextCharIndex(str, idx) {
 }
 
 function handleCommitInput(key) {
+  // IME 입력과 이스케이프 시퀀스가 하나의 청크로 합쳐진 경우 분리 처리
+  // (예: "최적화\x1b[13;5u" → "최적화" + "\x1b[13;5u")
+  const escIdx = key.indexOf('\x1b');
+  if (escIdx > 0) {
+    handleCommitInput(key.substring(0, escIdx));
+    if (state.mode === 'commit') {
+      handleCommitInput(key.substring(escIdx));
+    }
+    return;
+  }
   if (key === ESC || key === '\x1b') {
     state.mode = 'normal';
     state.commitMsg = '';
@@ -366,6 +376,15 @@ function handleRebaseMenuInput(key) {
 }
 
 function handleNameInput(key) {
+  // IME 입력과 이스케이프 시퀀스가 하나의 청크로 합쳐진 경우 분리 처리
+  const escIdx = key.indexOf('\x1b');
+  if (escIdx > 0) {
+    handleNameInput(key.substring(0, escIdx));
+    if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash') {
+      handleNameInput(key.substring(escIdx));
+    }
+    return;
+  }
   if (key === ESC || key === '\x1b') {
     state.mode = 'normal';
     state.inputBuffer = '';
