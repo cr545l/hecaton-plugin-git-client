@@ -25,7 +25,7 @@ const { handleRpcResponse } = require('./rpc');
 const { refresh, refreshAsync, refreshLog } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
-const { handleContextMenuAction } = require('./context-menu');
+const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 const fs = require('fs');
 const path = require('path');
 
@@ -84,6 +84,9 @@ async function main() {
           }
           if (json.method === 'context_menu_action' && json.params) {
             handleContextMenuAction(json.params.id);
+          }
+          if (json.method === 'dialog_result' && json.params) {
+            handleDialogResult(json.params);
           }
         } catch { /* ignore */ }
       }

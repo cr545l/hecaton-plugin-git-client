@@ -28,6 +28,7 @@ const state = {
   error: null,
   loading: true,
   minimized: false,
+  pendingRebaseRef: null,
 };
 
 const ui = {

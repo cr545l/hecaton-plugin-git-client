@@ -131,14 +131,27 @@ function handleKey(key) {
           render();
           break;
         }
-        const err = gitRebase(state.cwd, logItem.ref);
-        refresh();
-        if (state.rightView === 'log') refreshLog();
-        if (err) {
-          showErrorDialog(err);
-          render();
+        if (state.staged.length > 0 || state.unstaged.length > 0) {
+          state.pendingRebaseRef = logItem.ref;
+          sendRpc('show_dialog', {
+            type: 'message',
+            title: 'Rebase',
+            message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
+            buttons: [
+              { id: 'stash_rebase', label: 'Stash & Rebase' },
+              { id: 'cancel', label: 'Cancel' },
+            ],
+          });
         } else {
-          render();
+          const err = gitRebase(state.cwd, logItem.ref);
+          refresh();
+          if (state.rightView === 'log') refreshLog();
+          if (err) {
+            showErrorDialog(err);
+            render();
+          } else {
+            render();
+          }
         }
       }
       break;

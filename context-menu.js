@@ -5,7 +5,7 @@ const path = require('path');
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
-  gitRebase, gitStashApply, gitStashDrop,
+  gitRebase, gitStashApply, gitStashDrop, gitStashSave, gitStashPop,
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
 } = require('./git');
@@ -350,13 +350,26 @@ function handleContextMenuAction(actionId) {
       break;
     }
     case 'rebase': {
-      const err = gitRebase(state.cwd, hash);
-      refresh();
-      if (state.rightView === 'log') refreshLog();
-      if (err) {
-        showError(err);
+      if (state.staged.length > 0 || state.unstaged.length > 0) {
+        state.pendingRebaseRef = hash;
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Rebase',
+          message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
+          buttons: [
+            { id: 'stash_rebase', label: 'Stash & Rebase' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
       } else {
-        render();
+        const err = gitRebase(state.cwd, hash);
+        refresh();
+        if (state.rightView === 'log') refreshLog();
+        if (err) {
+          showError(err);
+        } else {
+          render();
+        }
       }
       break;
     }
@@ -403,6 +416,40 @@ function handleContextMenuAction(actionId) {
       }
       break;
     }
+  }
+}
+
+function handleDialogResult(params) {
+  const buttonId = params && params.buttonId;
+  if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
+    const ref = state.pendingRebaseRef;
+    state.pendingRebaseRef = null;
+
+    const stashErr = gitStashSave(state.cwd);
+    if (stashErr) {
+      showError('Stash failed:\n' + stashErr);
+      return;
+    }
+
+    const rebaseErr = gitRebase(state.cwd, ref);
+    if (rebaseErr) {
+      gitStashPop(state.cwd);
+      refresh();
+      if (state.rightView === 'log') refreshLog();
+      showError('Rebase failed:\n' + rebaseErr);
+      return;
+    }
+
+    const popErr = gitStashPop(state.cwd);
+    refresh();
+    if (state.rightView === 'log') refreshLog();
+    if (popErr) {
+      showError('Rebase succeeded, but stash pop failed:\n' + popErr);
+    } else {
+      render();
+    }
+  } else {
+    state.pendingRebaseRef = null;
   }
 }
 
@@ -468,4 +515,5 @@ module.exports = {
   registerRemotesContextMenu,
   unregisterContextMenu,
   handleContextMenuAction,
+  handleDialogResult,
 };
