@@ -20,7 +20,7 @@ const state = {
   remoteBranches: [],     // ['origin/main', ...]
   stashes: [],            // [{ hash, shortHash, ref }]
   rebaseState: null,     // null | { type, step, total }
-  mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu' | 'new-branch' | 'new-tag' | 'rename-stash'
+  mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu' | 'new-branch' | 'new-tag' | 'rename-stash' | 'new-remote'
   commitMsg: '',
   commitCursor: 0,
   inputBuffer: '',
@@ -72,6 +72,8 @@ const ui = {
   contextMenuStashRef: null,
   contextMenuFileItem: null,
   contextMenuFilePath: '',
+  remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
+  remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   errorOverlay: null,  // { x, y, w, h } — error overlay bounds for mouse interaction
   lastClickTime: 0,

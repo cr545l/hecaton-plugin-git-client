@@ -1,10 +1,10 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename } = require('./git');
+const { gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd } = require('./git');
 const { sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, unregisterContextMenu } = require('./context-menu');
+const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -48,7 +48,7 @@ function handleKey(key) {
     handleCommitInput(key);
     return;
   }
-  if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash') {
+  if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash' || state.mode === 'new-remote') {
     handleNameInput(key);
     return;
   }
@@ -380,7 +380,7 @@ function handleNameInput(key) {
   const escIdx = key.indexOf('\x1b');
   if (escIdx > 0) {
     handleNameInput(key.substring(0, escIdx));
-    if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash') {
+    if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash' || state.mode === 'new-remote') {
       handleNameInput(key.substring(escIdx));
     }
     return;
@@ -402,12 +402,28 @@ function handleNameInput(key) {
     let err;
     if (state.mode === 'rename-stash') {
       err = gitStashRename(state.cwd, state.inputTarget, name);
+    } else if (state.mode === 'new-remote') {
+      const parts = name.split(/\s+/).filter(Boolean);
+      if (parts.length < 2) {
+        setError('Use: <remote-name> <remote-url>');
+        render();
+        return;
+      }
+      const remoteName = parts.shift();
+      const remoteUrl = parts.join(' ');
+      err = gitRemoteAdd(state.cwd, remoteName, remoteUrl);
     } else if (state.mode === 'new-branch') {
       err = gitCreateBranch(state.cwd, name, state.inputTarget);
     } else {
       err = gitCreateTag(state.cwd, name, state.inputTarget);
     }
-    const opName = state.mode === 'rename-stash' ? 'Rename stash' : state.mode === 'new-branch' ? 'Branch' : 'Tag';
+    const opName = state.mode === 'rename-stash'
+      ? 'Rename stash'
+      : state.mode === 'new-remote'
+        ? 'Remote'
+        : state.mode === 'new-branch'
+          ? 'Branch'
+          : 'Tag';
     state.mode = 'normal';
     state.inputBuffer = '';
     state.inputTarget = '';
@@ -836,6 +852,9 @@ function handleMouseData(data) {
               ui.collapsedGroups[entry.group] = !ui.collapsedGroups[entry.group];
               render();
             } else if (entry.action === 'goto-branch') {
+              if (state.remoteBranches.includes(entry.branch)) {
+                ui.remoteRecentBranchUsage[entry.branch] = Date.now();
+              }
               ui.leftPanelActiveBranch = entry.branch;
               if (state.rightView !== 'log') {
                 state.rightView = 'log';
@@ -1025,6 +1044,11 @@ function handleMouseData(data) {
         const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
         if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length) {
           const entry = ui.leftPanelClickMap[bodyRowIdx];
+          if (isRemoteMenuTarget(entry)) {
+            registerRemotesContextMenu();
+            render();
+            continue;
+          }
           if (entry && entry.action === 'goto-stash' && entry.ref) {
             registerStashContextMenu(entry.ref);
             // Also select the stash
@@ -1072,6 +1096,14 @@ function handleMouseData(data) {
 
 function cleanup() {
   process.stdout.write(CSI + '?7h' + require('./ansi').ansi.showCursor + require('./ansi').ansi.reset + require('./ansi').ansi.clear);
+}
+
+function isRemoteMenuTarget(entry) {
+  if (!entry) return false;
+  if (entry.action === 'toggle-section' && entry.section === 'remotes') return true;
+  if (entry.action === 'toggle-group' && typeof entry.group === 'string' && entry.group.startsWith('r:')) return true;
+  if (entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) return true;
+  return false;
 }
 
 module.exports = { handleKey, handleMouseData, actionToKey, cleanup };

@@ -114,6 +114,23 @@ function registerFileContextMenu(fileItem) {
   ui.contextMenuFilePath = path.join(state.cwd, fileItem.file);
 }
 
+function registerRemotesContextMenu() {
+  const mode = ui.remoteSortMode || 'alpha';
+  const items = [
+    { id: 'remote_add', label: 'Add New Remote...' },
+    { type: 'separator' },
+    { id: 'remote_sort_title', label: 'Sort Branches:', enabled: false },
+    { id: 'remote_sort_alpha', label: 'Alphabetically', checked: mode === 'alpha' },
+    { id: 'remote_sort_alpha_desc', label: 'Alphabetically backward', checked: mode === 'alpha_desc' },
+    { id: 'remote_sort_recent', label: 'Recently used', checked: mode === 'recent' },
+  ];
+  sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
+  ui.contextMenuStashRef = null;
+  ui.contextMenuFileItem = null;
+  ui.contextMenuFilePath = '';
+}
+
 function unregisterContextMenu() {
   sendRpcNotify('register_context_menu', { items: [] });
   ui.contextMenuActive = false;
@@ -123,6 +140,34 @@ function unregisterContextMenu() {
 }
 
 function handleContextMenuAction(actionId) {
+  // Remotes context menu actions
+  if (actionId.startsWith('remote_')) {
+    switch (actionId) {
+      case 'remote_add':
+        state.mode = 'new-remote';
+        state.inputBuffer = '';
+        state.inputTarget = '';
+        render();
+        break;
+      case 'remote_sort_alpha':
+        ui.remoteSortMode = 'alpha';
+        render();
+        registerRemotesContextMenu();
+        break;
+      case 'remote_sort_alpha_desc':
+        ui.remoteSortMode = 'alpha_desc';
+        render();
+        registerRemotesContextMenu();
+        break;
+      case 'remote_sort_recent':
+        ui.remoteSortMode = 'recent';
+        render();
+        registerRemotesContextMenu();
+        break;
+    }
+    return;
+  }
+
   // File context menu actions
   if (actionId.startsWith('file_')) {
     const fileItem = ui.contextMenuFileItem;
@@ -416,6 +461,7 @@ module.exports = {
   registerHistoryContextMenu,
   registerStashContextMenu,
   registerFileContextMenu,
+  registerRemotesContextMenu,
   unregisterContextMenu,
   handleContextMenuAction,
 };

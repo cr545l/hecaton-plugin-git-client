@@ -287,6 +287,10 @@ function render() {
     hintContent = colors.yellow + ' Rename Stash: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
       + colors.dim + '[Enter]rename  [Esc]cancel' + ansi.reset;
+  } else if (state.mode === 'new-remote') {
+    hintContent = colors.yellow + ' New Remote: ' + ansi.reset
+      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
+      + colors.dim + '[Enter]create (name url)  [Esc]cancel' + ansi.reset;
   } else if (state.error && state.errorLines.length === 0) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
   } else if (state.errorLines.length > 0) {
@@ -420,6 +424,8 @@ function render() {
     process.stdout.write(ansi.moveTo(hintRow, startCol + 10 + visLen(state.inputBuffer)));
   } else if (state.mode === 'rename-stash') {
     process.stdout.write(ansi.moveTo(hintRow, startCol + 16 + visLen(state.inputBuffer)));
+  } else if (state.mode === 'new-remote') {
+    process.stdout.write(ansi.moveTo(hintRow, startCol + 14 + visLen(state.inputBuffer)));
   }
 }
 
@@ -536,7 +542,25 @@ function buildLeftPanel(w, h) {
           remoteGroups.get(remote).push(branch);
         }
       }
-      for (const [remote, branches] of remoteGroups) {
+      let remoteEntries = Array.from(remoteGroups.entries());
+      remoteEntries.sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [remote, branchesRaw] of remoteEntries) {
+        let branches = branchesRaw.slice();
+        const mode = ui.remoteSortMode || 'alpha';
+        if (mode === 'alpha') {
+          branches.sort((a, b) => a.localeCompare(b));
+        } else if (mode === 'alpha_desc') {
+          branches.sort((a, b) => b.localeCompare(a));
+        } else {
+          branches.sort((a, b) => {
+            const fullA = remote + '/' + a;
+            const fullB = remote + '/' + b;
+            const ta = ui.remoteRecentBranchUsage[fullA] || 0;
+            const tb = ui.remoteRecentBranchUsage[fullB] || 0;
+            if (tb !== ta) return tb - ta;
+            return a.localeCompare(b);
+          });
+        }
         const remoteKey = 'r:' + remote;
         const remoteCollapsed = !!ui.collapsedGroups[remoteKey];
         pushLine(colors.dim + '   ' + (remoteCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + remote + ansi.reset, { action: 'toggle-group', group: remoteKey });

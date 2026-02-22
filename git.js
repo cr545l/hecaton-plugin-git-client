@@ -476,6 +476,17 @@ function gitCommitInfo(cwd, ref) {
   }
 }
 
+function gitRemoteAdd(cwd, name, url) {
+  try {
+    execFileSync('git', ['remote', 'add', name, url], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Remote add failed';
+  }
+}
+
 function gitDiscardFile(cwd, item) {
   if (!item || !item.file) return 'No file selected';
   try {
@@ -568,7 +579,7 @@ module.exports = {
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
-  gitBranches, gitRemoteBranches,
+  gitBranches, gitRemoteBranches, gitRemoteAdd,
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
