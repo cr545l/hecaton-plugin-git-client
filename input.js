@@ -1184,7 +1184,18 @@ function handleMouseData(data) {
           state.cursor = fileIdx;
           updateDiff();
           state.focusPanel = 'status';
-          if (item) registerFileContextMenu(item);
+          if (item) {
+            // If right-clicked file is not in current selection, scope context menu to it.
+            if (!state.selectedFiles.has(fileIdx)) {
+              state.selectedFiles.clear();
+              state.selectedFiles.add(fileIdx);
+            }
+            const targets = Array.from(state.selectedFiles)
+              .sort((a, b) => a - b)
+              .map((idx) => fileList[idx])
+              .filter(Boolean);
+            registerFileContextMenu(item, targets);
+          }
           render();
           continue;
         }

@@ -46,7 +46,7 @@ function gitStatus(cwd) {
   const unstaged = [];
   const untracked = [];
   try {
-    const output = git(['status', '--porcelain=v1'], cwd);
+    const output = git(['status', '--porcelain=v1', '-uall'], cwd);
     for (const line of output.split('\n')) {
       if (!line) continue;
       const x = line[0]; // index status

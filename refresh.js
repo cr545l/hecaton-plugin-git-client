@@ -64,7 +64,7 @@ async function refreshAsync() {
     await Promise.all([
       gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
       gitExec(['branch', '--show-current'], state.cwd),
-      gitExec(['status', '--porcelain=v1'], state.cwd),
+      gitExec(['status', '--porcelain=v1', '-uall'], state.cwd),
       gitExec(['stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
       gitExec(['branch', '--format=%(refname:short)\t%(HEAD)'], state.cwd),
       gitExec(['branch', '-r', '--format=%(refname:short)'], state.cwd),

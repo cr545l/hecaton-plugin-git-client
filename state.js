@@ -71,6 +71,7 @@ const ui = {
   contextMenuActive: false,
   contextMenuStashRef: null,
   contextMenuFileItem: null,
+  contextMenuFileItems: [],
   contextMenuFilePath: '',
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
   remoteRecentBranchUsage: {},

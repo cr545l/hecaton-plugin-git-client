@@ -66,11 +66,12 @@ function registerStashContextMenu(stashRef) {
   ui.contextMenuStashRef = stashRef;
 }
 
-function registerFileContextMenu(fileItem) {
+function registerFileContextMenu(fileItem, fileItems) {
   if (!fileItem || !fileItem.file) return;
 
-  const canStage = fileItem.type !== 'staged';
-  const canUnstage = fileItem.type === 'staged';
+  const targets = Array.isArray(fileItems) && fileItems.length > 0 ? fileItems : [fileItem];
+  const canStage = targets.some((item) => item && item.type !== 'staged');
+  const canUnstage = targets.some((item) => item && item.type === 'staged');
 
   const items = [
     { id: 'file_open', label: 'Open' },
@@ -111,6 +112,7 @@ function registerFileContextMenu(fileItem) {
   ui.contextMenuActive = true;
   ui.contextMenuStashRef = null;
   ui.contextMenuFileItem = fileItem;
+  ui.contextMenuFileItems = targets;
   ui.contextMenuFilePath = path.join(state.cwd, fileItem.file);
 }
 
@@ -128,6 +130,7 @@ function registerRemotesContextMenu() {
   ui.contextMenuActive = true;
   ui.contextMenuStashRef = null;
   ui.contextMenuFileItem = null;
+  ui.contextMenuFileItems = [];
   ui.contextMenuFilePath = '';
 }
 
@@ -136,6 +139,7 @@ function unregisterContextMenu() {
   ui.contextMenuActive = false;
   ui.contextMenuStashRef = null;
   ui.contextMenuFileItem = null;
+  ui.contextMenuFileItems = [];
   ui.contextMenuFilePath = '';
 }
 
@@ -172,6 +176,9 @@ function handleContextMenuAction(actionId) {
   if (actionId.startsWith('file_')) {
     const fileItem = ui.contextMenuFileItem;
     const fullPath = ui.contextMenuFilePath;
+    const fileItems = Array.isArray(ui.contextMenuFileItems) && ui.contextMenuFileItems.length > 0
+      ? ui.contextMenuFileItems
+      : (fileItem ? [fileItem] : []);
     if (!fileItem || !fileItem.file) return;
 
     switch (actionId) {
@@ -226,19 +233,32 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_stage':
-        if (fileItem.type !== 'staged') {
-          gitStage(state.cwd, fileItem.file);
+        for (const item of fileItems) {
+          if (item && item.type !== 'staged') {
+            gitStage(state.cwd, item.file);
+          }
+        }
+        if (fileItems.length > 0) {
           afterGitOp(null);
         }
         break;
       case 'file_unstage':
-        if (fileItem.type === 'staged') {
-          gitUnstage(state.cwd, fileItem.file);
+        for (const item of fileItems) {
+          if (item && item.type === 'staged') {
+            gitUnstage(state.cwd, item.file);
+          }
+        }
+        if (fileItems.length > 0) {
           afterGitOp(null);
         }
         break;
       case 'file_discard': {
-        const err = gitDiscardFile(state.cwd, fileItem);
+        let err = null;
+        for (const item of fileItems) {
+          if (!item) continue;
+          const oneErr = gitDiscardFile(state.cwd, item);
+          if (!err && oneErr) err = oneErr;
+        }
         afterGitOp(err, 'Discard');
         break;
       }
@@ -247,47 +267,84 @@ function handleContextMenuAction(actionId) {
         afterGitOp(null);
         break;
       case 'file_ignore_name': {
-        const pattern = path.basename(fileItem.file);
-        const err = gitIgnorePattern(state.cwd, pattern);
+        let err = null;
+        for (const item of fileItems) {
+          if (!item) continue;
+          const pattern = path.basename(item.file);
+          const oneErr = gitIgnorePattern(state.cwd, pattern);
+          if (!err && oneErr) err = oneErr;
+        }
         afterGitOp(err, 'Ignore');
         break;
       }
       case 'file_ignore_ext': {
-        const ext = path.extname(fileItem.file);
-        if (!ext) {
+        const exts = new Set();
+        for (const item of fileItems) {
+          if (!item) continue;
+          const ext = path.extname(item.file);
+          if (ext) exts.add(ext);
+        }
+        if (exts.size === 0) {
           showError('No extension to ignore');
           break;
         }
-        const err = gitIgnorePattern(state.cwd, '*' + ext);
+        let err = null;
+        for (const ext of exts) {
+          const oneErr = gitIgnorePattern(state.cwd, '*' + ext);
+          if (!err && oneErr) err = oneErr;
+        }
         afterGitOp(err, 'Ignore');
         break;
       }
       case 'file_ignore_path': {
-        const err = gitIgnorePattern(state.cwd, fileItem.file.replace(/\\/g, '/'));
+        let err = null;
+        for (const item of fileItems) {
+          if (!item) continue;
+          const oneErr = gitIgnorePattern(state.cwd, item.file.replace(/\\/g, '/'));
+          if (!err && oneErr) err = oneErr;
+        }
         afterGitOp(err, 'Ignore');
         break;
       }
       case 'file_stash_one': {
-        const err = gitStashFile(state.cwd, fileItem.file);
+        let err = null;
+        for (const item of fileItems) {
+          if (!item) continue;
+          const oneErr = gitStashFile(state.cwd, item.file);
+          if (!err && oneErr) err = oneErr;
+        }
         afterGitOp(err, 'Stash file');
         break;
       }
       case 'file_save_patch': {
-        const patch = gitFilePatch(state.cwd, fileItem);
-        if (patch) {
-          copyToClipboard(patch);
+        const patches = [];
+        for (const item of fileItems) {
+          if (!item) continue;
+          const patch = gitFilePatch(state.cwd, item);
+          if (patch) patches.push(patch);
+        }
+        if (patches.length > 0) {
+          copyToClipboard(patches.join('\n\n'));
           showError('Patch copied to clipboard');
         } else {
           showError('No patch for this file');
         }
         break;
       }
-      case 'file_copy_path':
-        copyToClipboard(fileItem.file.replace(/\\/g, '/'));
+      case 'file_copy_path': {
+        const paths = fileItems
+          .filter(Boolean)
+          .map((item) => item.file.replace(/\\/g, '/'));
+        copyToClipboard(paths.join('\n'));
         break;
-      case 'file_copy_full_path':
-        copyToClipboard(fullPath);
+      }
+      case 'file_copy_full_path': {
+        const paths = fileItems
+          .filter(Boolean)
+          .map((item) => path.join(state.cwd, item.file));
+        copyToClipboard(paths.join('\n'));
         break;
+      }
     }
     return;
   }
