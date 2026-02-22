@@ -52,6 +52,7 @@ function refresh() {
   state.staged = status.staged;
   state.unstaged = status.unstaged;
   state.untracked = status.untracked;
+  state.selectedFiles.clear();
   clampCursor();
   updateDiff();
 }
@@ -136,6 +137,7 @@ async function refreshAsync() {
     }
   }
 
+  state.selectedFiles.clear();
   clampCursor();
   updateDiff();
 }

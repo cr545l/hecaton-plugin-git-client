@@ -615,27 +615,29 @@ function buildFileListPanel(w, h) {
   }
   for (let i = 0; i < state.unstaged.length; i++) {
     const item = state.unstaged[i];
-    const isSelected = state.cursor === listIdx;
-    if (isSelected) cursorLineIdx = lines.length;
-    const hasBg = isSelected && focused;
-    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
-    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
-    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
+    const isCursor = state.cursor === listIdx;
+    const isMultiSel = state.selectedFiles.has(listIdx);
+    if (isCursor) cursorLineIdx = lines.length;
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
+    const hasBg = bgColor !== '';
+    const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
+    const prefix = isCursor ? (focused ? bgColor + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
     const statusColor = item.status === 'D' ? colors.red : colors.orange;
     const line = prefix + statusColor + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
-    pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
+    pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
   for (let i = 0; i < state.untracked.length; i++) {
     const item = state.untracked[i];
-    const isSelected = state.cursor === listIdx;
-    if (isSelected) cursorLineIdx = lines.length;
-    const hasBg = isSelected && focused;
-    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
-    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
-    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
+    const isCursor = state.cursor === listIdx;
+    const isMultiSel = state.selectedFiles.has(listIdx);
+    if (isCursor) cursorLineIdx = lines.length;
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
+    const hasBg = bgColor !== '';
+    const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
+    const prefix = isCursor ? (focused ? bgColor + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
     const line = prefix + colors.dim + '?' + resetTo + ' ' + truncate(item.file, innerW - 6);
-    pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
+    pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
 
@@ -656,14 +658,15 @@ function buildFileListPanel(w, h) {
   }
   for (let i = 0; i < state.staged.length; i++) {
     const item = state.staged[i];
-    const isSelected = state.cursor === listIdx;
-    if (isSelected) cursorLineIdx = lines.length;
-    const hasBg = isSelected && focused;
-    const resetTo = hasBg ? ansi.reset + colors.cursorBg : ansi.reset;
-    const prefix = isSelected ? (focused ? colors.cursorBg + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : '   ';
-    const bgStyle = isSelected ? (focused ? colors.cursorBg : '') : '';
+    const isCursor = state.cursor === listIdx;
+    const isMultiSel = state.selectedFiles.has(listIdx);
+    if (isCursor) cursorLineIdx = lines.length;
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
+    const hasBg = bgColor !== '';
+    const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
+    const prefix = isCursor ? (focused ? bgColor + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
     const line = prefix + colors.green + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
-    pushFileLine(bgStyle + padRight(line, innerW) + ansi.reset, listIdx);
+    pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
 
@@ -979,6 +982,10 @@ const hintButtons = [];
 
 function buildHintText() {
   let result = '';
+  if (state.selectedFiles.size > 0) {
+    result += colors.cyan + state.selectedFiles.size + ' selected' + ansi.reset + '  ';
+    result += colors.dim + '[s]tage  [u]nstage' + ansi.reset + '  ';
+  }
   for (let i = 0; i < hintButtons.length; i++) {
     if (i > 0) result += '  ';
     const color = (i === ui.hoveredAreaIndex) ? colors.value + ansi.bold : colors.dim;

@@ -20,6 +20,7 @@ const state = {
   remoteBranches: [],     // ['origin/main', ...]
   stashes: [],            // [{ hash, shortHash, ref }]
   rebaseState: null,     // null | { type, step, total }
+  selectedFiles: new Set(),
   mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu' | 'new-branch' | 'new-tag' | 'rename-stash' | 'new-remote'
   commitMsg: '',
   commitCursor: 0,

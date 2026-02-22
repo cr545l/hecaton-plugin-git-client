@@ -33,6 +33,7 @@ const colors = {
   diffHunk: CSI + '36m',      // cyan
   diffHeader: CSI + '39m',    // default foreground
   inputBg: CSI + '100m',      // bright black bg
+  selectedBg: CSI + '44m',    // blue bg (multi-select)
 };
 
 // Branch lane colors (ANSI bright palette)

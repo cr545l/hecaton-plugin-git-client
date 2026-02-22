@@ -89,7 +89,68 @@ function handleKey(key) {
     return;
   }
 
+  // Ctrl+A: select all / deselect all in cursor's group (diff view only)
+  if (key === '\x01' && state.rightView !== 'log') {
+    const list = buildFileList();
+    if (list.length > 0) {
+      const unstagedCount = state.unstaged.length + state.untracked.length;
+      const cursorInUnstaged = state.cursor < unstagedCount;
+      const groupStart = cursorInUnstaged ? 0 : unstagedCount;
+      const groupEnd = cursorInUnstaged ? unstagedCount : list.length;
+      const groupSize = groupEnd - groupStart;
+      // Check if all in this group are already selected
+      let allSelected = groupSize > 0;
+      for (let i = groupStart; i < groupEnd; i++) {
+        if (!state.selectedFiles.has(i)) { allSelected = false; break; }
+      }
+      state.selectedFiles.clear();
+      if (!allSelected) {
+        for (let i = groupStart; i < groupEnd; i++) state.selectedFiles.add(i);
+      }
+    }
+    render();
+    return;
+  }
+
   switch (key) {
+    case 's': {
+      if (state.rightView === 'log') break;
+      const fileList = buildFileList();
+      const targets = state.selectedFiles.size > 0
+        ? Array.from(state.selectedFiles).sort((a, b) => a - b)
+        : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
+      for (const idx of targets) {
+        const item = fileList[idx];
+        if (item && item.type !== 'staged') {
+          gitStage(state.cwd, item.file);
+        }
+      }
+      if (targets.length > 0) {
+        state.selectedFiles.clear();
+        refresh();
+      }
+      render();
+      break;
+    }
+    case 'u': {
+      if (state.rightView === 'log') break;
+      const fileList = buildFileList();
+      const targets = state.selectedFiles.size > 0
+        ? Array.from(state.selectedFiles).sort((a, b) => a - b)
+        : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
+      for (const idx of targets) {
+        const item = fileList[idx];
+        if (item && item.type === 'staged') {
+          gitUnstage(state.cwd, item.file);
+        }
+      }
+      if (targets.length > 0) {
+        state.selectedFiles.clear();
+        refresh();
+      }
+      render();
+      break;
+    }
     case 'c': {
       if (state.staged.length === 0) {
         showErrorDialog('Nothing staged to commit');
@@ -609,6 +670,32 @@ function handleMouseData(data) {
       continue;
     }
 
+    // Ctrl+Left click: toggle file selection (same group only)
+    if (cb === 16) {
+      const bodyRowIdx = cy - (bodyTop);
+      const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
+      if (state.rightView !== 'log' && inMiddle && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+        const fileIdx = ui.fileLineMap[bodyRowIdx];
+        const unstagedCount = state.unstaged.length + state.untracked.length;
+        const clickedInUnstaged = fileIdx < unstagedCount;
+        // Enforce same-group constraint
+        if (state.selectedFiles.size > 0) {
+          const firstSel = state.selectedFiles.values().next().value;
+          if ((firstSel < unstagedCount) !== clickedInUnstaged) {
+            state.selectedFiles.clear();
+          }
+        }
+        if (state.selectedFiles.has(fileIdx)) {
+          state.selectedFiles.delete(fileIdx);
+        } else {
+          state.selectedFiles.add(fileIdx);
+        }
+        state.focusPanel = 'status';
+        render();
+      }
+      continue;
+    }
+
     // Scroll wheel
     if (cb === 64 || cb === 65) {
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
@@ -965,6 +1052,7 @@ function handleMouseData(data) {
           if (headerHandled) { continue; }
           // File list click
           if (bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+            state.selectedFiles.clear();
             const fileIdx = ui.fileLineMap[bodyRowIdx];
             const now = Date.now();
 
