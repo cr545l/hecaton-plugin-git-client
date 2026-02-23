@@ -1054,9 +1054,27 @@ function buildLogPanel(w, h) {
       } else {
         lines.push(colors.dim + ' (no refs)' + ansi.reset);
       }
-      const cH = detailH - 1;
+      let cH = detailH - 1;
       const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
+
+      // Sticky file header: pin file name when scrolled past it
+      let stickyFile = null;
+      if (state.diffScrollOffset > 0 && filteredDetail[state.diffScrollOffset] && !filteredDetail[state.diffScrollOffset].isFileHeader) {
+        for (let i = state.diffScrollOffset - 1; i >= 0; i--) {
+          if (filteredDetail[i].isFileHeader) { stickyFile = filteredDetail[i].file; break; }
+          if (!filteredDetail[i].inDiff) break;
+        }
+      }
+      if (stickyFile) {
+        const collapsed = ui.collapsedDetailFiles.has(stickyFile);
+        const arrow = collapsed ? '+' : '-';
+        const label = ' ' + arrow + ' ' + stickyFile;
+        lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, w), w) + ansi.reset);
+        ui.detailFileHeaderMap.push(stickyFile);
+        cH--;
+      }
+
       const visible = filteredDetail.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       const numW = filteredDetail.maxLine > 0 ? String(filteredDetail.maxLine).length : 0;
       const gutterW = numW > 0 ? numW * 2 + 2 : 0;
