@@ -74,7 +74,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       if (sRef) decoration = ' (' + sRef + ')';
     }
 
-    rows.push({ type: 'commit', chars, charColors, commitLane, hash, ref: shortHash, decoration, subject: commit.subject, body: commit.body });
+    rows.push({ type: 'commit', chars, charColors, commitLane, hash, ref: shortHash, decoration, subject: commit.subject, body: commit.body, authorName: commit.authorName, authorDate: commit.authorDate, committerName: commit.committerName, committerDate: commit.committerDate });
 
     // Collapse duplicate lanes
     const lastRow = rows[rows.length - 1];

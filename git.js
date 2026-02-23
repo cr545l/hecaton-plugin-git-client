@@ -232,7 +232,7 @@ function gitRebaseSkip(cwd) {
 function gitLogCommits(cwd, extraRefs, maxCount) {
   try {
     // %x01 as record separator to handle multi-line %B
-    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%B'];
+    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%aI%x00%cn%x00%cI%x00%B'];
     if (extraRefs && extraRefs.length > 0) args.push(...extraRefs);
     if (maxCount) args.push('-' + maxCount);
     const raw = execFileSync('git', args, {
@@ -241,22 +241,26 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
     if (!raw) return [];
     return raw.split('\x01').filter(r => r.trim()).map(record => {
       const trimmed = record.trim();
-      // Split only first 3 null bytes; the rest (after 3rd) is full body with newlines
+      // Split only first 7 null bytes; the rest (after 7th) is full body with newlines
       const parts = [];
       let pos = 0;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 7; i++) {
         const next = trimmed.indexOf('\x00', pos);
         if (next === -1) break;
         parts.push(trimmed.substring(pos, next));
         pos = next + 1;
       }
       parts.push(trimmed.substring(pos)); // rest is full body
-      const fullBody = (parts[3] || '').trim();
+      const fullBody = (parts[7] || '').trim();
       const firstLine = fullBody.split('\n')[0];
       return {
         hash: parts[0] || '',
         parents: parts[1] ? parts[1].split(' ') : [],
         refs: parts[2] || '',
+        authorName: parts[3] || '',
+        authorDate: parts[4] || '',
+        committerName: parts[5] || '',
+        committerDate: parts[6] || '',
         subject: firstLine.replace(/[\r\n]/g, ''),
         body: fullBody,
       };

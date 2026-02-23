@@ -264,13 +264,30 @@ function updateLogDetail() {
   }
   const lines = [];
 
+  // Commit info header
+  lines.push('commit ' + item.hash);
+  if (item.authorName || item.authorDate) {
+    const dateStr = item.authorDate ? formatDateTime(item.authorDate) : '';
+    lines.push('Author: ' + (item.authorName || '') + (dateStr ? '  ' + dateStr : ''));
+  }
+  if (item.committerName || item.committerDate) {
+    const dateStr = item.committerDate ? formatDateTime(item.committerDate) : '';
+    lines.push('Commit: ' + (item.committerName || '') + (dateStr ? '  ' + dateStr : ''));
+  }
+
+  // Separator before message
+  lines.push('\u2500'.repeat(40));
+
   // Commit message body (full multi-line message)
   if (item.body) {
     for (const l of item.body.split('\n')) {
       lines.push(l.replace(/[\r\n]/g, ''));
     }
-    lines.push('');
   }
+
+  // Separator after message
+  lines.push('\u2500'.repeat(40));
+  lines.push('');
 
   // Diff only (suppress commit header/message with --pretty=format:)
   let raw = '';
@@ -289,6 +306,21 @@ function updateLogDetail() {
   }
 
   state.logDetailLines = lines;
+}
+
+function formatDateTime(isoStr) {
+  try {
+    const d = new Date(isoStr);
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const h = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    return y + '-' + mo + '-' + day + ' ' + h + ':' + mi + ':' + s;
+  } catch {
+    return isoStr;
+  }
 }
 
 function updateDiff() {

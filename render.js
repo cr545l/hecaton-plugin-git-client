@@ -1039,7 +1039,11 @@ function buildLogPanel(w, h) {
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
+        if (/^\u2500{3,}$/.test(rawLine)) {
+          lines.push(colorizeDiffLine(rawLine, w));
+        } else {
+          lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
+        }
       }
     }
   }
@@ -1264,6 +1268,10 @@ function colorizeDiffLine(rawLine, w) {
     return colors.diffHunk + truncate(rawLine, w) + ansi.reset;
   } else if (rawLine.startsWith('diff ') || rawLine.startsWith('index ') || rawLine.startsWith('commit ')) {
     return colors.dim + truncate(rawLine, w) + ansi.reset;
+  } else if (rawLine.startsWith('Author: ') || rawLine.startsWith('Commit: ')) {
+    return colors.cyan + truncate(rawLine, w) + ansi.reset;
+  } else if (/^\u2500{3,}$/.test(rawLine)) {
+    return colors.border + '\u2500'.repeat(w) + ansi.reset;
   }
   return colors.label + truncate(rawLine, w) + ansi.reset;
 }
