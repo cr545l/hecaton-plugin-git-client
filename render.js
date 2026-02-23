@@ -71,7 +71,7 @@ function render() {
       rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + (state.rightView === 'fresh' ? 'Files' : 'History'), action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
       rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
     } else {
-      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
+      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Stage', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
       rightParts.push({ label: (ui.rightPanelCollapsed ? '  + ' : '  - ') + 'Diff', action: 'toggleDiff', collapsed: ui.rightPanelCollapsed });
     }
     let rightTotalW = 0;
@@ -87,7 +87,7 @@ function render() {
       const isFresh = state.rightView === 'fresh';
       const localLabel = ` Local (${totalChanges}) `;
       const commitsLabel = ' Commits ';
-      const freshLabel = ' Fresh ';
+      const freshLabel = ' Files ';
 
       const localIdx = zoneIdx++;
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
@@ -132,9 +132,11 @@ function render() {
         const label = ' ' + btn.label + ' ';
         const si = zoneIdx++;
         ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action });
+        const hasCount = (btn.action === 'git-pull' && state.behind > 0)
+          || (btn.action === 'git-push' && state.ahead > 0);
         const style = si === ui.hoveredTitleZoneIndex
           ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-          : colors.dim;
+          : hasCount ? colors.cyan + ansi.bold : colors.dim;
         row1 += style + label + ansi.reset;
         col1 += visLen(label);
       }
