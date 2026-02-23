@@ -372,6 +372,16 @@ function gitMerge(cwd, ref) {
   }
 }
 
+function gitAheadBehind(cwd) {
+  try {
+    const output = git(['rev-list', '--left-right', '--count', '@{u}...HEAD'], cwd);
+    const parts = output.trim().split(/\s+/);
+    return { behind: parseInt(parts[0]) || 0, ahead: parseInt(parts[1]) || 0 };
+  } catch {
+    return { ahead: 0, behind: 0 };
+  }
+}
+
 function gitFetch(cwd) {
   try {
     execFileSync('git', ['fetch', '--all', '--prune'], {
@@ -686,7 +696,7 @@ module.exports = {
   gitBranches, gitRemoteBranches, gitRemoteAdd,
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
-  gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
+  gitAheadBehind, gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
   gitStashApply, gitStashDrop, gitStashRename,
   gitDiscardFile, gitStashFile, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,

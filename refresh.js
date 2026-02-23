@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
+const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -61,6 +61,9 @@ function refresh() {
   state.committerEmail = gitGetConfig(state.cwd, 'user.email');
   state.committerNameIsLocal = !!gitGetConfigLocal(state.cwd, 'user.name');
   state.committerEmailIsLocal = !!gitGetConfigLocal(state.cwd, 'user.email');
+  const ab = gitAheadBehind(state.cwd);
+  state.ahead = ab.ahead;
+  state.behind = ab.behind;
   const status = gitStatus(state.cwd);
   state.staged = status.staged;
   state.unstaged = status.unstaged;
@@ -73,7 +76,7 @@ function refresh() {
 async function refreshAsync() {
   if (!state.cwd) return;
 
-  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw] =
+  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
       gitExec(['branch', '--show-current'], state.cwd),
@@ -86,6 +89,7 @@ async function refreshAsync() {
       gitExec(['config', 'user.email'], state.cwd),
       gitExec(['config', '--local', 'user.name'], state.cwd),
       gitExec(['config', '--local', 'user.email'], state.cwd),
+      gitExec(['rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
     ]);
 
   // isGitRepo 판정
@@ -158,6 +162,11 @@ async function refreshAsync() {
   state.committerEmail = emailRaw.trim();
   state.committerNameIsLocal = !!localNameRaw.trim();
   state.committerEmailIsLocal = !!localEmailRaw.trim();
+
+  // ahead/behind
+  const abParts = aheadBehindRaw.trim().split(/\s+/);
+  state.behind = parseInt(abParts[0]) || 0;
+  state.ahead = parseInt(abParts[1]) || 0;
 
   state.selectedFiles.clear();
   clampCursor();

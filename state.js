@@ -41,6 +41,8 @@ const state = {
   freshDetailLines: [],
   freshTimeWindow: 1,      // FRESH_TIME_WINDOWS index (default: 7 days)
   freshTimeWindowMode: false,
+  ahead: 0,
+  behind: 0,
 };
 
 const ui = {

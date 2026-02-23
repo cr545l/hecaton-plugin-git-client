@@ -119,10 +119,12 @@ function render() {
       row1 += colors.border + ' \u2502 ' + ansi.reset;
       col1 += 3;
 
+      const pullLabel = state.behind > 0 ? 'Pull \u2193' + state.behind : 'Pull';
+      const pushLabel = state.ahead > 0 ? 'Push \u2191' + state.ahead : 'Push';
       const actionBtns = [
         { label: 'Fetch', action: 'git-fetch' },
-        { label: 'Pull', action: 'git-pull' },
-        { label: 'Push', action: 'git-push' },
+        { label: pullLabel, action: 'git-pull' },
+        { label: pushLabel, action: 'git-push' },
         { label: 'Stash', action: 'git-stash' },
       ];
       for (let i = 0; i < actionBtns.length; i++) {
