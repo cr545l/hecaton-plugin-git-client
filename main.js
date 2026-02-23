@@ -177,6 +177,9 @@ function setupGitWatcher() {
     path.join(gitDir, 'index'),
     path.join(gitDir, 'HEAD'),
     path.join(gitDir, 'refs'),
+    path.join(gitDir, 'refs', 'heads'),
+    path.join(gitDir, 'logs', 'HEAD'),
+    path.join(gitDir, 'FETCH_HEAD'),
   ];
   let lastMtimes = pollTargets.map(f => {
     try { return fs.statSync(f).mtimeMs; } catch { return 0; }

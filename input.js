@@ -4,7 +4,7 @@ const { gitStage, gitUnstage, gitCommit, gitRebase, gitRebaseContinue, gitRebase
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, unregisterContextMenu } = require('./context-menu');
+const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, registerTabContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -628,6 +628,22 @@ function handleMouseData(data) {
             newTitleHover = i;
             break;
           }
+        }
+      }
+      // Context menu: tab buttons (Local, Commits, Fresh)
+      {
+        let onTab = false;
+        if (newTitleHover >= 0 && newTitleHover < ui.titleClickZones.length) {
+          const act = ui.titleClickZones[newTitleHover].action;
+          if (act === 'tab-local' || act === 'tab-commits' || act === 'tab-fresh') {
+            onTab = true;
+            if (!ui.contextMenuTab) {
+              registerTabContextMenu();
+            }
+          }
+        }
+        if (!onTab && ui.contextMenuTab) {
+          unregisterContextMenu();
         }
       }
       let newDivHover = null;

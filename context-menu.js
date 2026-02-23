@@ -10,7 +10,7 @@ const {
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
   gitSetConfig,
 } = require('./git');
-const { refresh, refreshLog, selectedLogRef } = require('./refresh');
+const { refresh, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
 
 function registerHistoryContextMenu() {
@@ -117,6 +117,19 @@ function registerFileContextMenu(fileItem, fileItems) {
   ui.contextMenuFilePath = path.join(state.cwd, fileItem.file);
 }
 
+function registerTabContextMenu() {
+  const items = [
+    { id: 'tab_refresh', label: 'Refresh' },
+  ];
+  sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
+  ui.contextMenuTab = true;
+  ui.contextMenuStashRef = null;
+  ui.contextMenuFileItem = null;
+  ui.contextMenuFileItems = [];
+  ui.contextMenuFilePath = '';
+}
+
 function registerRemotesContextMenu() {
   const mode = ui.remoteSortMode || 'alpha';
   const items = [
@@ -138,6 +151,7 @@ function registerRemotesContextMenu() {
 function unregisterContextMenu() {
   sendRpcNotify('register_context_menu', { items: [] });
   ui.contextMenuActive = false;
+  ui.contextMenuTab = false;
   ui.contextMenuStashRef = null;
   ui.contextMenuFileItem = null;
   ui.contextMenuFileItems = [];
@@ -145,6 +159,21 @@ function unregisterContextMenu() {
 }
 
 function handleContextMenuAction(actionId) {
+  // Tab context menu actions
+  if (actionId === 'tab_refresh') {
+    refresh();
+    if (state.rightView === 'log') {
+      refreshLog();
+      updateLogDetail();
+    }
+    if (state.rightView === 'fresh') {
+      refreshFresh();
+      updateFreshDetail();
+    }
+    render();
+    return;
+  }
+
   // Remotes context menu actions
   if (actionId.startsWith('remote_')) {
     switch (actionId) {
@@ -592,6 +621,7 @@ module.exports = {
   registerStashContextMenu,
   registerFileContextMenu,
   registerRemotesContextMenu,
+  registerTabContextMenu,
   unregisterContextMenu,
   handleContextMenuAction,
   handleDialogResult,

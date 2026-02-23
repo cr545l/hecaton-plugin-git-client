@@ -86,6 +86,7 @@ const ui = {
   contextMenuFileItem: null,
   contextMenuFileItems: [],
   contextMenuFilePath: '',
+  contextMenuTab: false,
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
