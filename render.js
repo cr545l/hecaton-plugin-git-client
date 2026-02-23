@@ -819,11 +819,26 @@ function buildDiffCommitPanel(w, h) {
       lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < diffH; i++) lines.push('');
     } else {
+      const annotated = annotateDiffLineNumbers(state.diffLines);
+      const numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
+      const gutterW = numW > 0 ? numW * 2 + 2 : 0;
       const maxScroll = Math.max(0, state.diffLines.length - diffH);
       if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
-      const visible = state.diffLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
-      for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
+      const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+      for (const entry of visible) {
+        if (entry.inDiff && gutterW > 0) {
+          let gutter;
+          if (entry.oldNum != null || entry.newNum != null) {
+            const oldStr = entry.oldNum != null ? String(entry.oldNum).padStart(numW) : ' '.repeat(numW);
+            const newStr = entry.newNum != null ? String(entry.newNum).padStart(numW) : ' '.repeat(numW);
+            gutter = colors.dim + oldStr + ' ' + newStr + ansi.reset + ' ';
+          } else {
+            gutter = ' '.repeat(gutterW);
+          }
+          lines.push(gutter + colorizeDiffLine(entry.text, w - gutterW));
+        } else {
+          lines.push(' ' + colorizeDiffLine(entry.text, w - 1));
+        }
       }
       if (state.diffLines.length > diffH) {
         ui.scrollPct.diff = Math.round((state.diffScrollOffset / maxScroll) * 100);
@@ -1043,16 +1058,29 @@ function buildLogPanel(w, h) {
       const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const visible = filteredDetail.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
+      const numW = filteredDetail.maxLine > 0 ? String(filteredDetail.maxLine).length : 0;
+      const gutterW = numW > 0 ? numW * 2 + 2 : 0;
       for (let vi = 0; vi < visible.length; vi++) {
         const entry = visible[vi];
         if (entry.isFileHeader) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
           const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
-          lines.push(colors.yellow + truncate(label, w) + ansi.reset);
+          lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, w), w) + ansi.reset);
           ui.detailFileHeaderMap.push(entry.file);
         } else if (/^\u2500{3,}$/.test(entry.text)) {
           lines.push(colorizeDiffLine(entry.text, w));
+          ui.detailFileHeaderMap.push(null);
+        } else if (entry.inDiff && gutterW > 0) {
+          let gutter;
+          if (entry.oldNum != null || entry.newNum != null) {
+            const oldStr = entry.oldNum != null ? String(entry.oldNum).padStart(numW) : ' '.repeat(numW);
+            const newStr = entry.newNum != null ? String(entry.newNum).padStart(numW) : ' '.repeat(numW);
+            gutter = colors.dim + oldStr + ' ' + newStr + ansi.reset + ' ';
+          } else {
+            gutter = ' '.repeat(gutterW);
+          }
+          lines.push(gutter + colorizeDiffLine(entry.text, w - gutterW));
           ui.detailFileHeaderMap.push(null);
         } else {
           lines.push(' ' + colorizeDiffLine(entry.text, w - 1));
@@ -1270,22 +1298,77 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
   return parts.join(colors.dim + ', ' + ansi.reset);
 }
 
+function annotateDiffLineNumbers(lines) {
+  const result = [];
+  let oldLine = 0, newLine = 0, maxLine = 0, inDiff = false;
+  for (const line of lines) {
+    if (line.match(/^diff --git /)) { inDiff = true; result.push({ text: line, inDiff: false }); continue; }
+    if (!inDiff) { result.push({ text: line, inDiff: false }); continue; }
+    const hm = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hm) { oldLine = parseInt(hm[1]); newLine = parseInt(hm[2]); result.push({ text: line, inDiff: true, oldNum: null, newNum: null }); continue; }
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ') ||
+        line.startsWith('new file') || line.startsWith('old mode') || line.startsWith('new mode') ||
+        line.startsWith('deleted file') || line.startsWith('similarity') || line.startsWith('rename') ||
+        line.startsWith('Binary')) { result.push({ text: line, inDiff: true, oldNum: null, newNum: null }); continue; }
+    if (line.startsWith('+')) { maxLine = Math.max(maxLine, newLine); result.push({ text: line, inDiff: true, oldNum: null, newNum: newLine }); newLine++; }
+    else if (line.startsWith('-')) { maxLine = Math.max(maxLine, oldLine); result.push({ text: line, inDiff: true, oldNum: oldLine, newNum: null }); oldLine++; }
+    else { maxLine = Math.max(maxLine, oldLine, newLine); result.push({ text: line, inDiff: true, oldNum: oldLine, newNum: newLine }); oldLine++; newLine++; }
+  }
+  result.maxLine = maxLine;
+  return result;
+}
+
 function filterLogDetailLines(lines, collapsedFiles) {
   const result = [];
   let currentFile = null;
   let isCollapsed = false;
+  let inDiff = false;
+  let oldLine = 0, newLine = 0;
+  let maxLine = 0;
   for (const line of lines) {
-    const match = line.match(/^diff --git a\/.+ b\/(.+)/);
-    if (match) {
-      currentFile = match[1];
+    const diffMatch = line.match(/^diff --git a\/.+ b\/(.+)/);
+    if (diffMatch) {
+      currentFile = diffMatch[1];
       isCollapsed = collapsedFiles.has(currentFile);
+      inDiff = true;
       result.push({ isFileHeader: true, file: currentFile, text: line });
       continue;
     }
-    if (!isCollapsed) {
-      result.push({ isFileHeader: false, file: null, text: line });
+    if (isCollapsed) continue;
+    if (!inDiff) {
+      result.push({ isFileHeader: false, text: line, inDiff: false });
+      continue;
+    }
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkMatch) {
+      oldLine = parseInt(hunkMatch[1]);
+      newLine = parseInt(hunkMatch[2]);
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null });
+      continue;
+    }
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ') ||
+        line.startsWith('new file') || line.startsWith('old mode') || line.startsWith('new mode') ||
+        line.startsWith('deleted file') || line.startsWith('similarity') || line.startsWith('rename') ||
+        line.startsWith('Binary')) {
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null });
+      continue;
+    }
+    if (line.startsWith('+')) {
+      maxLine = Math.max(maxLine, newLine);
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: newLine });
+      newLine++;
+    } else if (line.startsWith('-')) {
+      maxLine = Math.max(maxLine, oldLine);
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: oldLine, newNum: null });
+      oldLine++;
+    } else {
+      maxLine = Math.max(maxLine, oldLine, newLine);
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: oldLine, newNum: newLine });
+      oldLine++;
+      newLine++;
     }
   }
+  result.maxLine = maxLine;
   return result;
 }
 
