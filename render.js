@@ -138,6 +138,60 @@ function render() {
       }
     }
 
+    // === Committer info (after Stash separator) ===
+    {
+      const name = state.committerName || '(no name)';
+      const email = state.committerEmail || '(no email)';
+      const nameIsLocal = state.committerNameIsLocal;
+      const emailIsLocal = state.committerEmailIsLocal;
+      row1 += colors.border + ' \u2502 ' + ansi.reset;
+      col1 += 3;
+      // Name zone
+      const nameTag = nameIsLocal ? '[L] ' : '';
+      const nameLabel = ' ' + nameTag + name + ' ';
+      const ni = zoneIdx++;
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(nameLabel) - 1, action: 'committer-name' });
+      const nameStyle = ni === ui.hoveredTitleZoneIndex
+        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+        : nameIsLocal ? colors.cyan : colors.dim;
+      row1 += nameStyle + nameLabel + ansi.reset;
+      col1 += visLen(nameLabel);
+      // Name reset button (only if local)
+      if (nameIsLocal) {
+        const resetLabel = '\u00D7';
+        const ri = zoneIdx++;
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(resetLabel) - 1, action: 'reset-committer-name' });
+        const resetStyle = ri === ui.hoveredTitleZoneIndex
+          ? colors.cursorBg + colors.red + ansi.bold
+          : colors.red;
+        row1 += resetStyle + resetLabel + ansi.reset;
+        col1 += visLen(resetLabel);
+      }
+      row1 += ' ';
+      col1 += 1;
+      // Email zone
+      const emailTag = emailIsLocal ? '[L] ' : '';
+      const emailLabel = '<' + emailTag + email + '>';
+      const ei = zoneIdx++;
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(emailLabel) - 1, action: 'committer-email' });
+      const emailStyle = ei === ui.hoveredTitleZoneIndex
+        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+        : emailIsLocal ? colors.cyan : colors.dim;
+      row1 += emailStyle + emailLabel + ansi.reset;
+      col1 += visLen(emailLabel);
+      // Email reset button (only if local)
+      if (emailIsLocal) {
+        const resetLabel = '\u00D7';
+        const ri = zoneIdx++;
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(resetLabel) - 1, action: 'reset-committer-email' });
+        const resetStyle = ri === ui.hoveredTitleZoneIndex
+          ? colors.cursorBg + colors.red + ansi.bold
+          : colors.red;
+        row1 += resetStyle + resetLabel + ansi.reset;
+        col1 += visLen(resetLabel);
+      }
+    }
+
     // === Right side: panel toggle buttons (right-aligned) ===
     const rightStartCol = startCol + width - rightTotalW;
     const gap = Math.max(0, rightStartCol - col1);

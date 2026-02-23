@@ -8,6 +8,7 @@ const {
   gitRebase, gitStashApply, gitStashDrop, gitStashSave, gitStashPop,
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
+  gitSetConfig,
 } = require('./git');
 const { refresh, refreshLog, selectedLogRef } = require('./refresh');
 const { render } = require('./render');
@@ -478,6 +479,27 @@ function handleContextMenuAction(actionId) {
 
 function handleDialogResult(params) {
   const buttonId = params && params.buttonId;
+  // Committer input dialog result
+  if (state.pendingCommitterEdit && buttonId === 'ok' && params.value != null) {
+    const field = state.pendingCommitterEdit;
+    state.pendingCommitterEdit = null;
+    const configKey = field === 'name' ? 'user.name' : 'user.email';
+    const val = params.value.trim();
+    if (val) {
+      const err = gitSetConfig(state.cwd, configKey, val);
+      if (err) {
+        showError('Set ' + field + ' failed:\n' + err);
+      } else {
+        refresh();
+        render();
+      }
+    }
+    return;
+  }
+  if (state.pendingCommitterEdit) {
+    state.pendingCommitterEdit = null;
+    return;
+  }
   if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;

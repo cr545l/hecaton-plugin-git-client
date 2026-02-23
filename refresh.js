@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitFreshLog, gitShowCommitFile, gitFilePatch } = require('./git');
+const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -57,6 +57,10 @@ function refresh() {
   state.branches = gitBranches(state.cwd);
   state.remoteBranches = gitRemoteBranches(state.cwd);
   state.stashes = gitStashRefs(state.cwd);
+  state.committerName = gitGetConfig(state.cwd, 'user.name');
+  state.committerEmail = gitGetConfig(state.cwd, 'user.email');
+  state.committerNameIsLocal = !!gitGetConfigLocal(state.cwd, 'user.name');
+  state.committerEmailIsLocal = !!gitGetConfigLocal(state.cwd, 'user.email');
   const status = gitStatus(state.cwd);
   state.staged = status.staged;
   state.unstaged = status.unstaged;
@@ -69,7 +73,7 @@ function refresh() {
 async function refreshAsync() {
   if (!state.cwd) return;
 
-  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, gitDirRaw] =
+  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw] =
     await Promise.all([
       gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
       gitExec(['branch', '--show-current'], state.cwd),
@@ -78,6 +82,10 @@ async function refreshAsync() {
       gitExec(['branch', '--format=%(refname:short)\t%(HEAD)'], state.cwd),
       gitExec(['branch', '-r', '--format=%(refname:short)'], state.cwd),
       gitExec(['rev-parse', '--git-dir'], state.cwd),
+      gitExec(['config', 'user.name'], state.cwd),
+      gitExec(['config', 'user.email'], state.cwd),
+      gitExec(['config', '--local', 'user.name'], state.cwd),
+      gitExec(['config', '--local', 'user.email'], state.cwd),
     ]);
 
   // isGitRepo 판정
@@ -145,6 +153,11 @@ async function refreshAsync() {
       }
     }
   }
+
+  state.committerName = nameRaw.trim();
+  state.committerEmail = emailRaw.trim();
+  state.committerNameIsLocal = !!localNameRaw.trim();
+  state.committerEmailIsLocal = !!localEmailRaw.trim();
 
   state.selectedFiles.clear();
   clampCursor();

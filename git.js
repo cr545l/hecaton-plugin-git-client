@@ -557,6 +557,48 @@ function gitBlameFile(cwd, file) {
   }
 }
 
+function gitGetConfig(cwd, key) {
+  try {
+    return git(['config', key], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
+function gitGetConfigLocal(cwd, key) {
+  try {
+    return git(['config', '--local', key], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
+function gitGetConfigGlobal(cwd, key) {
+  try {
+    return git(['config', '--global', key], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
+function gitSetConfig(cwd, key, value) {
+  try {
+    git(['config', key, value], cwd);
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Config set failed';
+  }
+}
+
+function gitUnsetConfigLocal(cwd, key) {
+  try {
+    git(['config', '--local', '--unset', key], cwd);
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Config unset failed';
+  }
+}
+
 function gitFreshLog(cwd, days) {
   try {
     const raw = git(
@@ -645,4 +687,5 @@ module.exports = {
   gitDiscardFile, gitStashFile, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitFreshLog, gitShowCommitFile,
+  gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
 };

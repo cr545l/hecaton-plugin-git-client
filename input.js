@@ -1,6 +1,6 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd } = require('./git');
+const { gitStage, gitUnstage, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd, gitUnsetConfigLocal } = require('./git');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
@@ -974,6 +974,50 @@ function handleMouseData(data) {
                 refresh();
                 render();
               }
+              handled = true;
+            } else if (zone.action === 'reset-committer-name') {
+              const err = gitUnsetConfigLocal(state.cwd, 'user.name');
+              if (err) {
+                showErrorDialog(err);
+              } else {
+                refresh();
+              }
+              render();
+              handled = true;
+            } else if (zone.action === 'reset-committer-email') {
+              const err = gitUnsetConfigLocal(state.cwd, 'user.email');
+              if (err) {
+                showErrorDialog(err);
+              } else {
+                refresh();
+              }
+              render();
+              handled = true;
+            } else if (zone.action === 'committer-name') {
+              state.pendingCommitterEdit = 'name';
+              sendRpc('show_dialog', {
+                type: 'input',
+                title: 'Committer Name',
+                message: 'Enter name for local git commits:',
+                defaultValue: state.committerName || '',
+                buttons: [
+                  { id: 'ok', label: 'OK' },
+                  { id: 'cancel', label: 'Cancel' },
+                ],
+              });
+              handled = true;
+            } else if (zone.action === 'committer-email') {
+              state.pendingCommitterEdit = 'email';
+              sendRpc('show_dialog', {
+                type: 'input',
+                title: 'Committer Email',
+                message: 'Enter email for local git commits:',
+                defaultValue: state.committerEmail || '',
+                buttons: [
+                  { id: 'ok', label: 'OK' },
+                  { id: 'cancel', label: 'Cancel' },
+                ],
+              });
               handled = true;
             }
             break;

@@ -30,6 +30,11 @@ const state = {
   loading: true,
   minimized: false,
   pendingRebaseRef: null,
+  committerName: '',
+  committerEmail: '',
+  committerNameIsLocal: false,
+  committerEmailIsLocal: false,
+  pendingCommitterEdit: null, // 'name' | 'email' | null
   freshItems: [],          // [{file, status, author, date, commitHash, commitMsg, isPending, isDeleted}]
   freshCursor: 0,
   freshScrollOffset: 0,
@@ -90,6 +95,7 @@ const ui = {
   freshFileLineMap: [],
   freshWindowZone: null, // { lineIdx, colStart, colEnd }
   hoveredFreshWindow: false,
+  hoveredCommitter: false,
 };
 
 module.exports = { state, ui };
