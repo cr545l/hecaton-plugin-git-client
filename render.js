@@ -529,8 +529,8 @@ function buildLeftPanel(w, h) {
     return lines.slice(0, h);
   }
 
-  const ARROW_OPEN = '\u25be';
-  const ARROW_CLOSED = '\u25b8';
+  const ARROW_OPEN = '-';
+  const ARROW_CLOSED = '+';
   const activeBranch = ui.leftPanelActiveBranch;
 
   function branchLine(indent, name, fullRef, isCurrent) {
@@ -726,7 +726,7 @@ function buildFileListPanel(w, h) {
     const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
-    const prefix = isCursor ? (focused ? bgColor + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
+    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
     const statusColor = item.status === 'D' ? colors.red : colors.orange;
     const line = prefix + statusColor + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
@@ -740,7 +740,7 @@ function buildFileListPanel(w, h) {
     const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
-    const prefix = isCursor ? (focused ? bgColor + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
+    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
     const line = prefix + colors.dim + '?' + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
@@ -769,7 +769,7 @@ function buildFileListPanel(w, h) {
     const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
-    const prefix = isCursor ? (focused ? bgColor + colors.cursor + ' \u25b8 ' : colors.dim + ' \u25b8 ') : isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
+    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
     const line = prefix + colors.green + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
@@ -930,7 +930,7 @@ function buildLogPanel(w, h) {
     const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
 
     if (item.type === 'commit') {
-      const prefix = isCursor ? (colors.cursorBg + colors.cursor + '\u25b8') : ' ';
+      const prefix = ' ';
       const graphVisLen = visLen(item.graphStr);
       const graphPart = SIXEL_ENABLED
         ? ' '.repeat(graphVisLen) + ' '
@@ -1047,7 +1047,7 @@ function buildLogPanel(w, h) {
         const entry = visible[vi];
         if (entry.isFileHeader) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
-          const arrow = collapsed ? '\u25B8' : '\u25BE';
+          const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
           lines.push(colors.yellow + truncate(label, w) + ansi.reset);
           ui.detailFileHeaderMap.push(entry.file);
@@ -1174,7 +1174,7 @@ function buildFreshPanel(w, h) {
     if (!item) { lines.push(''); lineToFileIdx.push(-1); continue; }
 
     const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
-    const prefix = isCursor ? (colors.cursorBg + colors.cursor + ' \u25b8 ') : '   ';
+    const prefix = '   ';
     const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
 
     const statusIcon = freshStatusIcon(item.status);
