@@ -850,7 +850,7 @@ function handleMouseData(data) {
             state.focusPanel = 'status';
           } else {
             const prev = state.diffScrollOffset;
-            const maxDiff = Math.max(0, state.logDetailLines.length - (ui.lastDetailContentH || 1));
+            const maxDiff = Math.max(0, (ui.filteredDetailCount || state.logDetailLines.length) - (ui.lastDetailContentH || 1));
             if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
             else state.diffScrollOffset = Math.min(maxDiff, state.diffScrollOffset + 3);
             if (state.diffScrollOffset !== prev) changed = true;
@@ -1310,6 +1310,18 @@ function handleMouseData(data) {
             }
             state.focusPanel = 'status';
           } else {
+            // Detail area: check for file header toggle click
+            const detailRowIdx = bodyRowIdx - ui.lastLogListH - 1 - 1; // -separator -refs line
+            if (detailRowIdx >= 0 && detailRowIdx < ui.detailFileHeaderMap.length) {
+              const file = ui.detailFileHeaderMap[detailRowIdx];
+              if (file) {
+                if (ui.collapsedDetailFiles.has(file)) {
+                  ui.collapsedDetailFiles.delete(file);
+                } else {
+                  ui.collapsedDetailFiles.add(file);
+                }
+              }
+            }
             state.focusPanel = 'diff';
           }
         } else {

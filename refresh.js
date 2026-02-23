@@ -257,6 +257,7 @@ function selectedLogRef() {
 }
 
 function updateLogDetail() {
+  ui.collapsedDetailFiles.clear();
   const item = selectedLogRef();
   if (!item) {
     state.logDetailLines = [];
@@ -287,7 +288,6 @@ function updateLogDetail() {
 
   // Separator after message
   lines.push('\u2500'.repeat(40));
-  lines.push('');
 
   // Diff only (suppress commit header/message with --pretty=format:)
   let raw = '';

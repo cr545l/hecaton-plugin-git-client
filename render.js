@@ -1000,12 +1000,16 @@ function buildLogPanel(w, h) {
     ui.scrollPct.history = -1;
   }
 
+  // Build filtered detail lines (respecting collapsed files)
+  const filteredDetail = filterLogDetailLines(state.logDetailLines, ui.collapsedDetailFiles);
+  ui.filteredDetailCount = filteredDetail.length;
+
   // Pre-calculate detail scroll pct for separator
-  if (detailH > 1 && state.logDetailLines.length > 0) {
+  if (detailH > 1 && filteredDetail.length > 0) {
     const cH = detailH - 1;
-    const maxDetailScroll = Math.max(0, state.logDetailLines.length - cH);
+    const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
     if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
-    if (state.logDetailLines.length > cH) {
+    if (filteredDetail.length > cH) {
       ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
     }
   }
@@ -1022,6 +1026,7 @@ function buildLogPanel(w, h) {
   }
 
   // -- Detail --
+  ui.detailFileHeaderMap = [];
   if (detailH > 0) {
     const selItem = selectedLogRef();
     if (state.logDetailLines.length === 0) {
@@ -1035,14 +1040,23 @@ function buildLogPanel(w, h) {
         lines.push(colors.dim + ' (no refs)' + ansi.reset);
       }
       const cH = detailH - 1;
-      const maxDetailScroll = Math.max(0, state.logDetailLines.length - cH);
+      const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
-      const visible = state.logDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
-      for (const rawLine of visible) {
-        if (/^\u2500{3,}$/.test(rawLine)) {
-          lines.push(colorizeDiffLine(rawLine, w));
+      const visible = filteredDetail.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
+      for (let vi = 0; vi < visible.length; vi++) {
+        const entry = visible[vi];
+        if (entry.isFileHeader) {
+          const collapsed = ui.collapsedDetailFiles.has(entry.file);
+          const arrow = collapsed ? '\u25B8' : '\u25BE';
+          const label = ' ' + arrow + ' ' + entry.file;
+          lines.push(colors.yellow + truncate(label, w) + ansi.reset);
+          ui.detailFileHeaderMap.push(entry.file);
+        } else if (/^\u2500{3,}$/.test(entry.text)) {
+          lines.push(colorizeDiffLine(entry.text, w));
+          ui.detailFileHeaderMap.push(null);
         } else {
-          lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
+          lines.push(' ' + colorizeDiffLine(entry.text, w - 1));
+          ui.detailFileHeaderMap.push(null);
         }
       }
     }
@@ -1254,6 +1268,25 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
     }
   }
   return parts.join(colors.dim + ', ' + ansi.reset);
+}
+
+function filterLogDetailLines(lines, collapsedFiles) {
+  const result = [];
+  let currentFile = null;
+  let isCollapsed = false;
+  for (const line of lines) {
+    const match = line.match(/^diff --git a\/.+ b\/(.+)/);
+    if (match) {
+      currentFile = match[1];
+      isCollapsed = collapsedFiles.has(currentFile);
+      result.push({ isFileHeader: true, file: currentFile, text: line });
+      continue;
+    }
+    if (!isCollapsed) {
+      result.push({ isFileHeader: false, file: null, text: line });
+    }
+  }
+  return result;
 }
 
 function colorizeDiffLine(rawLine, w) {

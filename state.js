@@ -96,6 +96,9 @@ const ui = {
   freshWindowZone: null, // { lineIdx, colStart, colEnd }
   hoveredFreshWindow: false,
   hoveredCommitter: false,
+  collapsedDetailFiles: new Set(),
+  detailFileHeaderMap: [], // maps visible detail row → file path (or null)
+  filteredDetailCount: 0, // filtered logDetailLines count (respecting collapse)
 };
 
 module.exports = { state, ui };
