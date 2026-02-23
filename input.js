@@ -2,7 +2,7 @@ const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
 const { gitStage, gitUnstage, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd } = require('./git');
 const { sendRpc, sendRpcNotify } = require('./rpc');
-const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
 const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, unregisterContextMenu } = require('./context-menu');
 
@@ -32,6 +32,26 @@ function showErrorDialog(msg) {
 }
 
 function handleKey(key) {
+  // Fresh time window mode intercept
+  if (state.freshTimeWindowMode) {
+    if (key === CSI + 'D' || key === 'h') { // Left
+      state.freshTimeWindow = Math.max(0, state.freshTimeWindow - 1);
+      render();
+    } else if (key === CSI + 'C' || key === 'l') { // Right
+      state.freshTimeWindow = Math.min(FRESH_TIME_WINDOWS.length - 1, state.freshTimeWindow + 1);
+      render();
+    } else if (key === '\r' || key === '\n') { // Enter
+      state.freshTimeWindowMode = false;
+      refreshFresh();
+      state.diffScrollOffset = 0;
+      updateFreshDetail();
+      render();
+    } else if (key === ESC || key === '\x1b') { // Esc
+      state.freshTimeWindowMode = false;
+      render();
+    }
+    return;
+  }
   if (state.mode === 'rebase-menu') {
     handleRebaseMenuInput(key);
     return;
@@ -48,7 +68,13 @@ function handleKey(key) {
   // Arrow keys (VT sequences)
   if (key === CSI + 'A' || key === 'k') { // Up
     if (state.focusPanel === 'status') {
-      if (state.rightView === 'log') {
+      if (state.rightView === 'fresh') {
+        if (state.freshItems.length > 0) {
+          state.freshCursor = Math.max(0, state.freshCursor - 1);
+          state.diffScrollOffset = 0;
+          updateFreshDetail();
+        }
+      } else if (state.rightView === 'log') {
         if (state.logSelectables.length > 0) {
           state.logCursor = Math.max(0, state.logCursor - 1);
           state.diffScrollOffset = 0;
@@ -69,7 +95,13 @@ function handleKey(key) {
   }
   if (key === CSI + 'B' || key === 'j') { // Down
     if (state.focusPanel === 'status') {
-      if (state.rightView === 'log') {
+      if (state.rightView === 'fresh') {
+        if (state.freshItems.length > 0) {
+          state.freshCursor = Math.min(state.freshItems.length - 1, state.freshCursor + 1);
+          state.diffScrollOffset = 0;
+          updateFreshDetail();
+        }
+      } else if (state.rightView === 'log') {
         if (state.logSelectables.length > 0) {
           state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 1);
           state.diffScrollOffset = 0;
@@ -90,7 +122,7 @@ function handleKey(key) {
   }
 
   // Ctrl+A: select all / deselect all in cursor's group (diff view only)
-  if (key === '\x01' && state.rightView !== 'log') {
+  if (key === '\x01' && state.rightView !== 'log' && state.rightView !== 'fresh') {
     const list = buildFileList();
     if (list.length > 0) {
       const unstagedCount = state.unstaged.length + state.untracked.length;
@@ -165,17 +197,25 @@ function handleKey(key) {
     }
     case 'l':
     case 'L': {
-      if (state.rightView === 'log') {
-        state.rightView = 'diff';
-        updateDiff();
-        unregisterContextMenu();
-      } else {
+      if (state.rightView === 'diff') {
         state.rightView = 'log';
         refreshLog();
         state.logCursor = 0;
         state.logScrollOffset = 0;
         state.diffScrollOffset = 0;
         updateLogDetail();
+      } else if (state.rightView === 'log') {
+        state.rightView = 'fresh';
+        refreshFresh();
+        state.freshCursor = 0;
+        state.freshScrollOffset = 0;
+        state.diffScrollOffset = 0;
+        updateFreshDetail();
+        unregisterContextMenu();
+      } else {
+        state.rightView = 'diff';
+        updateDiff();
+        unregisterContextMenu();
       }
       state.focusPanel = 'status';
       render();
@@ -217,10 +257,21 @@ function handleKey(key) {
       }
       break;
     }
+    case 'w': {
+      if (state.rightView === 'fresh') {
+        state.freshTimeWindowMode = true;
+        render();
+      }
+      break;
+    }
     case 'r':
     case 'R': {
       refresh();
       if (state.rightView === 'log') refreshLog();
+      if (state.rightView === 'fresh') {
+        refreshFresh();
+        updateFreshDetail();
+      }
       render();
       break;
     }
@@ -589,15 +640,18 @@ function handleMouseData(data) {
       if (L.middleW > 0 && inBody && cx >= div2Col - 1 && cx <= div2Col + 1) {
         newDivHover = 'vertical2';
       }
-      if (state.rightView === 'log' && inBody && ui.lastLogListH > 0) {
-        const hDivRow = bodyTop + ui.lastLogListH;
-        if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
-          newDivHover = 'horizontal';
+      if ((state.rightView === 'log' || state.rightView === 'fresh') && inBody) {
+        const hListH = state.rightView === 'fresh' ? ui.lastFreshListH : ui.lastLogListH;
+        if (hListH > 0) {
+          const hDivRow = bodyTop + hListH;
+          if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
+            newDivHover = 'horizontal';
+          }
         }
       }
       // Hover: file header buttons ([Stage] / [Unstage])
       let newFileHeaderHover = -1;
-      if (state.rightView !== 'log' && inBody) {
+      if (state.rightView !== 'log' && state.rightView !== 'fresh' && inBody) {
         const bodyRowIdx = cy - (bodyTop);
         for (let i = 0; i < ui.fileHeaderZones.length; i++) {
           const zone = ui.fileHeaderZones[i];
@@ -654,12 +708,25 @@ function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow) {
+      // Hover: fresh window button
+      let newFreshWindowHover = false;
+      if (state.rightView === 'fresh' && inBody && ui.freshWindowZone) {
+        const bodyRowIdx = cy - bodyTop;
+        if (bodyRowIdx === ui.freshWindowZone.lineIdx) {
+          const relCol = cx - rightStart;
+          if (relCol >= ui.freshWindowZone.colStart && relCol <= ui.freshWindowZone.colEnd) {
+            newFreshWindowHover = true;
+          }
+        }
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFreshWindowHover !== ui.hoveredFreshWindow) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
         ui.hoveredFileHeaderIdx = newFileHeaderHover;
         ui.hoveredLeftPanelRow = newLeftPanelHover;
+        ui.hoveredFreshWindow = newFreshWindowHover;
         render();
       }
       continue;
@@ -743,7 +810,30 @@ function handleMouseData(data) {
         }
       } else if (inBody && inRight) {
         let changed = false;
-        if (state.rightView === 'log') {
+        if (state.rightView === 'fresh') {
+          // Fresh mode: top = file list scroll, bottom = detail scroll
+          const bodyRowIdx = cy - (bodyTop);
+          if (bodyRowIdx < ui.lastFreshListH) {
+            if (state.freshItems.length > 0) {
+              const prev = state.freshCursor;
+              if (cb === 64) state.freshCursor = Math.max(0, state.freshCursor - 3);
+              else state.freshCursor = Math.min(state.freshItems.length - 1, state.freshCursor + 3);
+              if (state.freshCursor !== prev) {
+                state.diffScrollOffset = 0;
+                updateFreshDetail();
+                changed = true;
+              }
+            }
+            state.focusPanel = 'status';
+          } else {
+            const prev = state.diffScrollOffset;
+            const maxDiff = Math.max(0, state.freshDetailLines.length - Math.max(1, Math.floor((L.bodyH - 2) * (1 - ui.logListRatio)) - 1));
+            if (cb === 64) state.diffScrollOffset = Math.max(0, state.diffScrollOffset - 3);
+            else state.diffScrollOffset = Math.min(maxDiff, state.diffScrollOffset + 3);
+            if (state.diffScrollOffset !== prev) changed = true;
+            state.focusPanel = 'diff';
+          }
+        } else if (state.rightView === 'log') {
           // Log mode: top = log scroll, bottom = detail scroll
           const bodyRowIdx = cy - (bodyTop);
           if (bodyRowIdx < ui.lastLogListH) {
@@ -825,6 +915,17 @@ function handleMouseData(data) {
               state.focusPanel = 'status';
               render();
               handled = true;
+            } else if (zone.action === 'tab-fresh') {
+              state.rightView = 'fresh';
+              refreshFresh();
+              state.freshCursor = 0;
+              state.freshScrollOffset = 0;
+              state.diffScrollOffset = 0;
+              updateFreshDetail();
+              unregisterContextMenu();
+              state.focusPanel = 'status';
+              render();
+              handled = true;
             } else if (zone.action === 'git-fetch') {
               state.error = 'Fetching...';
               render();
@@ -893,12 +994,15 @@ function handleMouseData(data) {
         ui.dragging = 'vertical2';
         continue;
       }
-      // Horizontal divider drag start (log mode only)
-      if (state.rightView === 'log' && ui.lastLogListH > 0) {
-        const hDivRow = bodyTop + ui.lastLogListH;
-        if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
-          ui.dragging = 'horizontal';
-          continue;
+      // Horizontal divider drag start (log/fresh mode)
+      if (state.rightView === 'log' || state.rightView === 'fresh') {
+        const hListH = state.rightView === 'fresh' ? ui.lastFreshListH : ui.lastLogListH;
+        if (hListH > 0) {
+          const hDivRow = bodyTop + hListH;
+          if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
+            ui.dragging = 'horizontal';
+            continue;
+          }
         }
       }
 
@@ -932,6 +1036,16 @@ function handleMouseData(data) {
               state.logScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateLogDetail();
+              state.focusPanel = 'status';
+              render();
+            } else if (entry.action === 'tab-fresh') {
+              state.rightView = 'fresh';
+              refreshFresh();
+              state.freshCursor = 0;
+              state.freshScrollOffset = 0;
+              state.diffScrollOffset = 0;
+              updateFreshDetail();
+              unregisterContextMenu();
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'toggle-section') {
@@ -1115,7 +1229,32 @@ function handleMouseData(data) {
 
       // Click on right panel
       if (inRight && bodyRowIdx >= 0 && bodyRowIdx < L.bodyH) {
-        if (state.rightView === 'log') {
+        if (state.rightView === 'fresh') {
+          // Fresh mode: check window button click first
+          if (ui.freshWindowZone && bodyRowIdx === ui.freshWindowZone.lineIdx) {
+            const relCol = cx - rightStart;
+            if (relCol >= ui.freshWindowZone.colStart && relCol <= ui.freshWindowZone.colEnd) {
+              state.freshTimeWindow = (state.freshTimeWindow + 1) % FRESH_TIME_WINDOWS.length;
+              refreshFresh();
+              state.diffScrollOffset = 0;
+              updateFreshDetail();
+              render();
+              continue;
+            }
+          }
+          // Fresh mode: top = file list, bottom = detail
+          if (bodyRowIdx < ui.lastFreshListH) {
+            const mapIdx = bodyRowIdx;
+            if (mapIdx >= 0 && mapIdx < ui.freshFileLineMap.length && ui.freshFileLineMap[mapIdx] >= 0) {
+              state.freshCursor = ui.freshFileLineMap[mapIdx];
+              state.diffScrollOffset = 0;
+              updateFreshDetail();
+            }
+            state.focusPanel = 'status';
+          } else {
+            state.focusPanel = 'diff';
+          }
+        } else if (state.rightView === 'log') {
           // Log mode: top = log list, bottom = detail
           if (bodyRowIdx < ui.lastLogListH) {
             const itemIdx = state.logScrollOffset + bodyRowIdx;

@@ -1,5 +1,14 @@
 const { state, ui } = require('./state');
-const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches } = require('./git');
+const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitFreshLog, gitShowCommitFile, gitFilePatch } = require('./git');
+
+const FRESH_TIME_WINDOWS = [
+  { label: 'Pending', days: 0 },
+  { label: '7 days',  days: 7 },
+  { label: '14 days', days: 14 },
+  { label: '30 days', days: 30 },
+  { label: '60 days', days: 60 },
+  { label: '90 days', days: 90 },
+];
 const { calcGraphRows } = require('./graph');
 const { sendRpcNotify } = require('./rpc');
 
@@ -287,7 +296,105 @@ function updateDiff() {
   state.diffLines = raw.split('\n');
 }
 
+function refreshFresh() {
+  if (!state.cwd || !state.isGitRepo) {
+    state.freshItems = [];
+    return;
+  }
+
+  const items = [];
+  const seen = new Set();
+  const now = new Date();
+
+  // Always collect pending changes (staged + unstaged + untracked)
+  const status = gitStatus(state.cwd);
+  for (const f of status.unstaged) {
+    if (seen.has(f.file)) continue;
+    seen.add(f.file);
+    items.push({
+      file: f.file,
+      status: f.status,
+      author: '',
+      date: now.toISOString(),
+      commitHash: '',
+      commitMsg: '',
+      isPending: true,
+      isDeleted: f.status === 'D',
+    });
+  }
+  for (const f of status.untracked) {
+    if (seen.has(f.file)) continue;
+    seen.add(f.file);
+    items.push({
+      file: f.file,
+      status: '?',
+      author: '',
+      date: now.toISOString(),
+      commitHash: '',
+      commitMsg: '',
+      isPending: true,
+      isDeleted: false,
+    });
+  }
+  for (const f of status.staged) {
+    if (seen.has(f.file)) continue;
+    seen.add(f.file);
+    items.push({
+      file: f.file,
+      status: f.status,
+      author: '',
+      date: now.toISOString(),
+      commitHash: '',
+      commitMsg: '',
+      isPending: true,
+      isDeleted: f.status === 'D',
+    });
+  }
+
+  // Collect historical changes if days > 0
+  const tw = FRESH_TIME_WINDOWS[state.freshTimeWindow] || FRESH_TIME_WINDOWS[1];
+  if (tw.days > 0) {
+    const logItems = gitFreshLog(state.cwd, tw.days);
+    for (const item of logItems) {
+      if (seen.has(item.file)) continue;
+      seen.add(item.file);
+      items.push(item);
+    }
+  }
+
+  // Sort by date descending
+  items.sort((a, b) => new Date(b.date) - new Date(a.date));
+  state.freshItems = items;
+
+  // Clamp cursor
+  if (state.freshItems.length === 0) {
+    state.freshCursor = 0;
+  } else {
+    state.freshCursor = Math.min(state.freshCursor, state.freshItems.length - 1);
+  }
+}
+
+function updateFreshDetail() {
+  const item = state.freshItems[state.freshCursor];
+  if (!item) {
+    state.freshDetailLines = [];
+    return;
+  }
+
+  let raw = '';
+  if (item.isPending) {
+    raw = gitFilePatch(state.cwd, {
+      file: item.file,
+      type: item.status === '?' ? 'untracked' : 'unstaged',
+    });
+  } else {
+    raw = gitShowCommitFile(state.cwd, item.commitHash, item.file);
+  }
+  state.freshDetailLines = raw.split('\n');
+}
+
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   refresh, refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
+  FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
 };

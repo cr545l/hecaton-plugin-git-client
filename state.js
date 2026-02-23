@@ -10,7 +10,7 @@ const state = {
   focusPanel: 'status',  // 'status' | 'diff'
   diffLines: [],
   diffScrollOffset: 0,
-  rightView: 'diff',     // 'diff' | 'log'
+  rightView: 'diff',     // 'diff' | 'log' | 'fresh'
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable
   logCursor: 0,           // index into logSelectables
@@ -30,6 +30,12 @@ const state = {
   loading: true,
   minimized: false,
   pendingRebaseRef: null,
+  freshItems: [],          // [{file, status, author, date, commitHash, commitMsg, isPending, isDeleted}]
+  freshCursor: 0,
+  freshScrollOffset: 0,
+  freshDetailLines: [],
+  freshTimeWindow: 1,      // FRESH_TIME_WINDOWS index (default: 7 days)
+  freshTimeWindowMode: false,
 };
 
 const ui = {
@@ -80,6 +86,10 @@ const ui = {
   lastClickFileIdx: -1,
   cellW: 8,
   cellH: 16,
+  lastFreshListH: 0,
+  freshFileLineMap: [],
+  freshWindowZone: null, // { lineIdx, colStart, colEnd }
+  hoveredFreshWindow: false,
 };
 
 module.exports = { state, ui };

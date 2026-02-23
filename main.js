@@ -22,7 +22,7 @@
 const { state, ui } = require('./state');
 const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
-const { refresh, refreshAsync, refreshLog } = require('./refresh');
+const { refresh, refreshAsync, refreshLog, refreshFresh } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
@@ -147,6 +147,7 @@ function setupGitWatcher() {
       if (state.mode !== 'normal') return;
       refresh();
       if (state.rightView === 'log') refreshLog();
+      if (state.rightView === 'fresh') refreshFresh();
       render();
     }, 300);
   }

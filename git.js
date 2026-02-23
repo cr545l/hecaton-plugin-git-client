@@ -557,6 +557,64 @@ function gitBlameFile(cwd, file) {
   }
 }
 
+function gitFreshLog(cwd, days) {
+  try {
+    const raw = git(
+      ['log', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],
+      cwd
+    );
+    const items = [];
+    const seen = new Set();
+    let currentCommit = null;
+
+    for (const line of raw.split('\n')) {
+      if (line.startsWith('__COMMIT__')) {
+        const parts = line.substring(10).split('|');
+        currentCommit = {
+          hash: parts[0] || '',
+          author: parts[1] || '',
+          date: parts[2] || '',
+          msg: parts.slice(3).join('|'),
+        };
+        continue;
+      }
+      if (!currentCommit || !line.trim()) continue;
+      const tabs = line.split('\t');
+      if (tabs.length < 2) continue;
+      const status = tabs[0].charAt(0);
+      let file;
+      if (status === 'R' && tabs.length >= 3) {
+        file = tabs[2]; // renamed: use new name
+      } else {
+        file = tabs[1];
+      }
+      if (seen.has(file)) continue;
+      seen.add(file);
+      items.push({
+        file,
+        status,
+        author: currentCommit.author,
+        date: currentCommit.date,
+        commitHash: currentCommit.hash,
+        commitMsg: currentCommit.msg,
+        isPending: false,
+        isDeleted: status === 'D',
+      });
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+function gitShowCommitFile(cwd, commitHash, file) {
+  try {
+    return git(['show', commitHash, '--', file], cwd);
+  } catch {
+    return '';
+  }
+}
+
 function gitFilePatch(cwd, item) {
   if (!item || !item.file) return '';
   try {
@@ -586,4 +644,5 @@ module.exports = {
   gitStashApply, gitStashDrop, gitStashRename,
   gitDiscardFile, gitStashFile, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,
+  gitFreshLog, gitShowCommitFile,
 };

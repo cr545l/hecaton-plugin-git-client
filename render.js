@@ -2,7 +2,7 @@ const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
 const { visLen, padRight, truncate, viewport } = require('./text');
 const { state, ui } = require('./state');
-const { buildFileList, selectedItem, selectedLogRef } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 
 function render() {
   if (state.minimized) {
@@ -30,7 +30,7 @@ function render() {
 
   // Layout depends on view mode
   let middleW, divider2W, rightW;
-  if (state.rightView === 'log') {
+  if (state.rightView === 'log' || state.rightView === 'fresh') {
     // 2-column: left | right (history+detail top/bottom)
     middleW = 0;
     divider2W = 0;
@@ -67,8 +67,8 @@ function render() {
     // Build right-side panel buttons string first to know its width
     let rightParts = []; // { label, action, collapsed }
     rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', action: 'toggleStatus', collapsed: ui.leftPanelCollapsed });
-    if (state.rightView === 'log') {
-      rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + 'History', action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
+    if (state.rightView === 'log' || state.rightView === 'fresh') {
+      rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + (state.rightView === 'fresh' ? 'Files' : 'History'), action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
       rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
     } else {
       rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
@@ -82,10 +82,12 @@ function render() {
     let col1 = startCol;
     {
       const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
-      const isLocal = state.rightView !== 'log';
+      const isLocal = state.rightView === 'diff';
       const isCommits = state.rightView === 'log';
+      const isFresh = state.rightView === 'fresh';
       const localLabel = ` Local (${totalChanges}) `;
       const commitsLabel = ' Commits ';
+      const freshLabel = ' Fresh ';
 
       const localIdx = zoneIdx++;
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
@@ -102,6 +104,14 @@ function render() {
         : isCommits ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
       row1 += commitsStyle + commitsLabel + ansi.reset;
       col1 += visLen(commitsLabel);
+
+      const freshIdx = zoneIdx++;
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(freshLabel) - 1, action: 'tab-fresh' });
+      const freshStyle = freshIdx === ui.hoveredTitleZoneIndex
+        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+        : isFresh ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
+      row1 += freshStyle + freshLabel + ansi.reset;
+      col1 += visLen(freshLabel);
     }
 
     // === Action buttons: Fetch, Pull, Push, Stash (after separator) ===
@@ -162,7 +172,7 @@ function render() {
       sepStr += colors.border + CROSS + ansi.reset;
     }
 
-    if (state.rightView === 'log') {
+    if (state.rightView === 'log' || state.rightView === 'fresh') {
       sepStr += sectionLine(rightW, ui.scrollPct.history);
     } else {
       if (middleW > 0 && rightW > 0) {
@@ -189,7 +199,34 @@ function render() {
   ui.scrollPct = { status: -1, files: -1, diff: -1, history: -1, detail: -1 };
 
   // -- Body --
-  if (state.rightView === 'log') {
+  if (state.rightView === 'fresh') {
+    // 2-column body: left | right (fresh panel with top/bottom split)
+    ui.fileLineMap = [];
+    const rightLines = buildFreshPanel(rightW, contentH);
+
+    if (ui.leftPanelCollapsed) {
+      for (let i = 0; i < bodyH; i++) {
+        const row = startRow + titleRows + 1 + i;
+        const rContent = i < rightLines.length ? rightLines[i] : '';
+        buf.push(ansi.moveTo(row, startCol) + padRight(rContent, width));
+      }
+      ui.leftTabZones = [];
+      ui.leftPanelClickMap = [];
+    } else {
+      const leftLines = buildLeftPanel(leftW, contentH);
+      for (let i = 0; i < bodyH; i++) {
+        const row = startRow + titleRows + 1 + i;
+        const lContent = i < leftLines.length ? leftLines[i] : '';
+        const rContent = i < rightLines.length ? rightLines[i] : '';
+        buf.push(
+          ansi.moveTo(row, startCol) +
+          padRight(lContent, leftW) +
+          vDiv1Color + V + ansi.reset +
+          padRight(rContent, rightW)
+        );
+      }
+    }
+  } else if (state.rightView === 'log') {
     // 2-column body: left | right (log panel with top/bottom split)
     ui.fileLineMap = [];
     const rightLines = buildLogPanel(rightW, contentH);
@@ -291,8 +328,22 @@ function render() {
     hintContent = colors.yellow + ' New Remote: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
       + colors.dim + '[Enter]create (name url)  [Esc]cancel' + ansi.reset;
+  } else if (state.freshTimeWindowMode) {
+    const tw = FRESH_TIME_WINDOWS;
+    let windowHint = colors.yellow + ' Time Window: ' + ansi.reset;
+    for (let i = 0; i < tw.length; i++) {
+      if (i === state.freshTimeWindow) {
+        windowHint += colors.cursorBg + colors.cyan + ansi.bold + ' ' + tw[i].label + ' ' + ansi.reset + ' ';
+      } else {
+        windowHint += colors.dim + ' ' + tw[i].label + ' ' + ansi.reset + ' ';
+      }
+    }
+    windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply  [Esc]cancel' + ansi.reset;
+    hintContent = windowHint;
   } else if (state.error) {
     hintContent = ' ' + colors.red + state.error + ansi.reset;
+  } else if (state.rightView === 'fresh') {
+    hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else {
     hintContent = ' ' + buildHintText();
   }
@@ -312,7 +363,7 @@ function render() {
   ui.lastLayout = { startRow, startCol, width, height, leftW, divider1W, middleW, divider2W, rightW, bodyH, titleRows };
 
   // Commit button zone (diff mode only)
-  if (state.rightView !== 'log' && ui.rightDiffH >= 0) {
+  if (state.rightView !== 'log' && state.rightView !== 'fresh' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const visLines = ui.commitMsgVisibleLines || 1;
     ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + 1;
@@ -939,6 +990,191 @@ function buildLogPanel(w, h) {
     }
   }
 
+  return lines;
+}
+
+// ── Right panel (fresh mode): file list + detail (top/bottom split) ──
+
+function heatmapColor(date, windowDays) {
+  const now = Date.now();
+  const fileTime = new Date(date).getTime();
+  const ageMs = now - fileTime;
+  const windowMs = (windowDays || 7) * 24 * 60 * 60 * 1000;
+  const fraction = Math.min(1, Math.max(0, ageMs / windowMs));
+  const t = Math.pow(fraction, 0.6);
+
+  // 5 stops: #00E5FF → #00C8C8 → #0096C8 → #646464 → #3C3C3C
+  const stops = [
+    [0, 229, 255],
+    [0, 200, 200],
+    [0, 150, 200],
+    [100, 100, 100],
+    [60, 60, 60],
+  ];
+  const pos = t * (stops.length - 1);
+  const idx = Math.min(Math.floor(pos), stops.length - 2);
+  const f = pos - idx;
+  const r = Math.round(stops[idx][0] + (stops[idx + 1][0] - stops[idx][0]) * f);
+  const g = Math.round(stops[idx][1] + (stops[idx + 1][1] - stops[idx][1]) * f);
+  const b = Math.round(stops[idx][2] + (stops[idx + 1][2] - stops[idx][2]) * f);
+  return ansi.fg(r, g, b);
+}
+
+function relativeDate(date) {
+  const now = Date.now();
+  const d = new Date(date).getTime();
+  const diffSec = Math.floor((now - d) / 1000);
+  if (diffSec < 60) return 'now';
+  if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm';
+  if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h';
+  const days = Math.floor(diffSec / 86400);
+  if (days < 7) return days + 'd';
+  return Math.floor(days / 7) + 'w';
+}
+
+function freshStatusIcon(status) {
+  switch (status) {
+    case 'M': return colors.yellow + 'M' + ansi.reset;
+    case 'A': return colors.green + 'A' + ansi.reset;
+    case 'D': return colors.red + 'D' + ansi.reset;
+    case 'R': return colors.cyan + 'R' + ansi.reset;
+    case '?': return colors.dim + '?' + ansi.reset;
+    default:  return colors.dim + status + ansi.reset;
+  }
+}
+
+function buildFreshPanel(w, h) {
+  if (state.freshItems.length === 0) {
+    return [colors.dim + ' No fresh files' + ansi.reset];
+  }
+
+  let listH, detailH, separatorH;
+  if (ui.rightTopCollapsed && ui.rightBottomCollapsed) {
+    listH = 0; separatorH = 0; detailH = 0;
+  } else if (ui.rightTopCollapsed) {
+    listH = 0; separatorH = 0; detailH = h;
+  } else if (ui.rightBottomCollapsed) {
+    listH = h; separatorH = 0; detailH = 0;
+  } else {
+    listH = Math.min(Math.max(1, Math.floor(h * ui.logListRatio)), h - 2);
+    separatorH = 1;
+    detailH = h - listH - separatorH;
+  }
+  ui.lastFreshListH = listH;
+
+  const lines = [];
+  const lineToFileIdx = [];
+  const tw = FRESH_TIME_WINDOWS[state.freshTimeWindow] || FRESH_TIME_WINDOWS[1];
+
+  // -- Header line (time window indicator, clickable) --
+  ui.freshWindowZone = null;
+  if (listH > 0) {
+    const btnLabel = ' ' + tw.label + ' ';
+    const btnLen = visLen(btnLabel);
+    const suffix = '  ' + colors.dim + state.freshItems.length + ' file(s)' + ansi.reset;
+    const isHovered = ui.hoveredFreshWindow;
+    const btnStyle = isHovered ? colors.cursorBg + colors.cyan + ansi.bold + CSI + '4m' : colors.cyan;
+    const headerLabel = btnStyle + btnLabel + ansi.reset + suffix;
+    lines.push(truncate(headerLabel, w));
+    lineToFileIdx.push(-1);
+    // Record click zone (relative col within right panel, will be resolved in input.js)
+    ui.freshWindowZone = { lineIdx: 0, colStart: 0, colEnd: btnLen - 1 };
+  }
+
+  // -- File list --
+  const fileListH = Math.max(0, listH - 1);
+  const selectedItemIdx = Math.min(state.freshCursor, state.freshItems.length - 1);
+
+  // Auto-scroll
+  if (selectedItemIdx >= 0) {
+    if (selectedItemIdx < state.freshScrollOffset) {
+      state.freshScrollOffset = selectedItemIdx;
+    } else if (selectedItemIdx >= state.freshScrollOffset + fileListH) {
+      state.freshScrollOffset = selectedItemIdx - fileListH + 1;
+    }
+  }
+  state.freshScrollOffset = Math.max(0, Math.min(state.freshScrollOffset, Math.max(0, state.freshItems.length - fileListH)));
+
+  const visibleItems = state.freshItems.slice(state.freshScrollOffset, state.freshScrollOffset + fileListH);
+  for (let i = 0; i < fileListH; i++) {
+    const itemIdx = state.freshScrollOffset + i;
+    const item = visibleItems[i];
+    if (!item) { lines.push(''); lineToFileIdx.push(-1); continue; }
+
+    const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+    const prefix = isCursor ? (colors.cursorBg + colors.cursor + ' \u25b8 ') : '   ';
+    const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
+
+    const statusIcon = freshStatusIcon(item.status);
+    const fileColor = heatmapColor(item.date, tw.days || 7);
+    const fileName = truncate(item.file, Math.max(10, w - 25));
+    const relTime = relativeDate(item.date);
+    const authorPart = item.author ? truncate(item.author, 12) : (item.isPending ? 'pending' : '');
+
+    const line = prefix + statusIcon + resetTo + ' ' + fileColor + fileName + resetTo
+      + '  ' + colors.dim + padRight(relTime, 4) + resetTo
+      + ' ' + colors.dim + authorPart + resetTo;
+
+    lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
+    lineToFileIdx.push(itemIdx);
+  }
+
+  // Scroll pct
+  if (fileListH > 0 && state.freshItems.length > fileListH) {
+    const maxScroll = Math.max(1, state.freshItems.length - fileListH);
+    ui.scrollPct.history = Math.round((state.freshScrollOffset / maxScroll) * 100);
+  } else {
+    ui.scrollPct.history = -1;
+  }
+
+  // Pre-calculate detail scroll pct
+  if (detailH > 1 && state.freshDetailLines.length > 0) {
+    const cH = detailH - 1;
+    const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
+    if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
+    if (state.freshDetailLines.length > cH) {
+      ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
+    }
+  }
+
+  // -- Separator --
+  if (separatorH > 0) {
+    const hDivColor = ui.hoveredDivider === 'horizontal' ? colors.value : colors.border;
+    const pctLabel = ui.scrollPct.detail >= 0 ? ' ' + ui.scrollPct.detail + '% ' : '';
+    if (pctLabel.length > 0 && w > pctLabel.length) {
+      lines.push(hDivColor + '\u2500'.repeat(w - pctLabel.length) + ansi.reset + colors.dim + pctLabel + ansi.reset);
+    } else {
+      lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
+    }
+  }
+
+  // -- Detail (diff) --
+  if (detailH > 0) {
+    const selItem = state.freshItems[state.freshCursor];
+    if (state.freshDetailLines.length === 0) {
+      lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
+      for (let i = 1; i < detailH; i++) lines.push('');
+    } else {
+      // Header: file info
+      if (selItem) {
+        const info = selItem.isPending
+          ? colors.cyan + ' \u25c6 ' + truncate(selItem.file, w - 4) + ' (pending)' + ansi.reset
+          : colors.cyan + ' \u25c6 ' + truncate(selItem.file, w - 20) + ' ' + colors.dim + selItem.commitHash + ansi.reset;
+        lines.push(truncate(info, w));
+      } else {
+        lines.push('');
+      }
+      const cH = detailH - 1;
+      const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
+      if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
+      const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
+      for (const rawLine of visible) {
+        lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
+      }
+    }
+  }
+
+  ui.freshFileLineMap = lineToFileIdx.slice(0, listH);
   return lines;
 }
 
