@@ -571,6 +571,18 @@ function handleNameInput(key) {
   }
 }
 
+function applyScrollbarOffset(target, offset) {
+  switch (target) {
+    case 'left': ui.leftPanelScrollOffset = offset; break;
+    case 'files': state.scrollOffset = offset; break;
+    case 'diff': state.diffScrollOffset = offset; break;
+    case 'logList': state.logScrollOffset = offset; break;
+    case 'logDetail': state.diffScrollOffset = offset; break;
+    case 'freshList': state.freshScrollOffset = offset; break;
+    case 'freshDetail': state.diffScrollOffset = offset; break;
+  }
+}
+
 function handleMouseData(data) {
   const mouseRegex = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
   let mouseMatch;
@@ -608,6 +620,14 @@ function handleMouseData(data) {
         const contentH = Math.max(1, L.bodyH - 2);
         const relY = cy - bodyTop;
         ui.logListRatio = Math.max(0.1, Math.min(0.9, relY / contentH));
+        render();
+        continue;
+      }
+      if (ui.dragging === 'scrollbar') {
+        const info = ui.scrollbarDragInfo;
+        const relY = cy - info.trackTop;
+        const ratio = Math.max(0, Math.min(1, relY / Math.max(1, info.trackH - 1)));
+        applyScrollbarOffset(info.target, Math.round(ratio * info.maxScroll));
         render();
         continue;
       }
@@ -649,18 +669,18 @@ function handleMouseData(data) {
       let newDivHover = null;
       const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (!ui.leftPanelCollapsed && inBody) {
-        if (cx >= div1Col - 1 && cx <= div1Col + 1) {
+        if (cx === div1Col) {
           newDivHover = 'vertical';
         }
       }
-      if (L.middleW > 0 && inBody && cx >= div2Col - 1 && cx <= div2Col + 1) {
+      if (L.middleW > 0 && inBody && cx === div2Col) {
         newDivHover = 'vertical2';
       }
       if ((state.rightView === 'log' || state.rightView === 'fresh') && inBody) {
         const hListH = state.rightView === 'fresh' ? ui.lastFreshListH : ui.lastLogListH;
         if (hListH > 0) {
           const hDivRow = bodyTop + hListH;
-          if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
+          if (cy === hDivRow && cx >= rightStart) {
             newDivHover = 'horizontal';
           }
         }
@@ -736,13 +756,23 @@ function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFreshWindowHover !== ui.hoveredFreshWindow) {
+      // Hover: scrollbar
+      let newScrollbarHover = null;
+      for (const sb of ui.scrollbarOverlays) {
+        if (cx === sb.screenCol && cy >= sb.screenRow && cy < sb.screenRow + sb.viewportRows) {
+          newScrollbarHover = sb.target;
+          break;
+        }
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
         ui.hoveredFileHeaderIdx = newFileHeaderHover;
         ui.hoveredLeftPanelRow = newLeftPanelHover;
         ui.hoveredFreshWindow = newFreshWindowHover;
+        ui.hoveredScrollbarTarget = newScrollbarHover;
         render();
       }
       continue;
@@ -1044,13 +1074,13 @@ function handleMouseData(data) {
 
       // Divider drag start: first vertical divider
       if (!ui.leftPanelCollapsed) {
-        if (cx >= div1Col - 1 && cx <= div1Col + 1 && cy >= bodyTop && cy < bodyTop + L.bodyH) {
+        if (cx === div1Col && cy >= bodyTop && cy < bodyTop + L.bodyH) {
           ui.dragging = 'vertical';
           continue;
         }
       }
       // Divider drag start: second vertical divider (diff mode only)
-      if (L.middleW > 0 && cx >= div2Col - 1 && cx <= div2Col + 1 && cy >= bodyTop && cy < bodyTop + L.bodyH) {
+      if (L.middleW > 0 && cx === div2Col && cy >= bodyTop && cy < bodyTop + L.bodyH) {
         ui.dragging = 'vertical2';
         continue;
       }
@@ -1059,11 +1089,34 @@ function handleMouseData(data) {
         const hListH = state.rightView === 'fresh' ? ui.lastFreshListH : ui.lastLogListH;
         if (hListH > 0) {
           const hDivRow = bodyTop + hListH;
-          if (cy >= hDivRow - 1 && cy <= hDivRow + 1 && cx >= rightStart) {
+          if (cy === hDivRow && cx >= rightStart) {
             ui.dragging = 'horizontal';
             continue;
           }
         }
+      }
+
+      // Scrollbar drag start
+      {
+        let sbHandled = false;
+        for (const sb of ui.scrollbarOverlays) {
+          if (cx === sb.screenCol && cy >= sb.screenRow && cy < sb.screenRow + sb.viewportRows) {
+            ui.dragging = 'scrollbar';
+            ui.scrollbarDragInfo = {
+              target: sb.target,
+              trackTop: sb.screenRow,
+              trackH: sb.viewportRows,
+              maxScroll: sb.maxScroll
+            };
+            const relY = cy - sb.screenRow;
+            const ratio = Math.max(0, Math.min(1, relY / Math.max(1, sb.viewportRows - 1)));
+            applyScrollbarOffset(sb.target, Math.round(ratio * sb.maxScroll));
+            render();
+            sbHandled = true;
+            break;
+          }
+        }
+        if (sbHandled) continue;
       }
 
       // Click on hint bar buttons

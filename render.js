@@ -1,5 +1,5 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
-const { SIXEL_ENABLED, SIXEL_PALETTE, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
+const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
 const { visLen, padRight, truncate, viewport } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
@@ -216,31 +216,27 @@ function render() {
   function buildSeparator() {
     let sepStr = ansi.moveTo(startRow + titleRows, startCol);
 
-    function sectionLine(w, pct) {
+    function sectionLine(w) {
       if (w <= 0) return '';
-      const label = pct >= 0 ? ' ' + pct + '% ' : '';
-      if (label.length > 0 && w > label.length) {
-        return colors.border + H.repeat(w - label.length) + ansi.reset + colors.dim + label + ansi.reset;
-      }
       return colors.border + H.repeat(w) + ansi.reset;
     }
 
     if (leftW > 0) {
-      sepStr += sectionLine(leftW, ui.scrollPct.status);
+      sepStr += sectionLine(leftW);
       sepStr += colors.border + CROSS + ansi.reset;
     }
 
     if (state.rightView === 'log' || state.rightView === 'fresh') {
-      sepStr += sectionLine(rightW, ui.scrollPct.history);
+      sepStr += sectionLine(rightW);
     } else {
       if (middleW > 0 && rightW > 0) {
-        sepStr += sectionLine(middleW, ui.scrollPct.files);
+        sepStr += sectionLine(middleW);
         sepStr += colors.border + CROSS + ansi.reset;
-        sepStr += sectionLine(rightW, ui.scrollPct.diff);
+        sepStr += sectionLine(rightW);
       } else if (middleW > 0) {
-        sepStr += sectionLine(remaining, ui.scrollPct.files);
+        sepStr += sectionLine(remaining);
       } else if (rightW > 0) {
-        sepStr += sectionLine(remaining, ui.scrollPct.diff);
+        sepStr += sectionLine(remaining);
       } else {
         sepStr += colors.border + H.repeat(remaining) + ansi.reset;
       }
@@ -414,6 +410,71 @@ function render() {
     buf.push(ansi.moveTo(screenRow, graphCol) + ui.logSixelOverlay);
   }
   ui.logSixelOverlay = null;
+
+  // Scrollbar overlays
+  ui.scrollbarOverlays = [];
+  if (SIXEL_ENABLED) {
+    const sbBodyTop = startRow + titleRows + 1;
+    const midStart = startCol + leftW + divider1W;
+
+    function addScrollbar(scrollOffset, maxScroll, viewportRows, screenRow, screenCol, target) {
+      if (maxScroll <= 0 || viewportRows <= 0) return;
+      const pixBuf = renderScrollbarPixels(ui.cellW, ui.cellH, viewportRows, scrollOffset, maxScroll);
+      if (pixBuf) {
+        const isActive = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === target;
+        const isHovered = ui.hoveredScrollbarTarget === target;
+        const palette = isActive ? SCROLLBAR_ACTIVE_PALETTE : isHovered ? SCROLLBAR_HOVER_PALETTE : SCROLLBAR_PALETTE;
+        const sixelStr = encodeSixel(pixBuf, ui.cellW, viewportRows * ui.cellH, palette);
+        ui.scrollbarOverlays.push({ sixelStr, screenRow, screenCol, viewportRows, maxScroll, target });
+      }
+    }
+
+    // Left panel
+    if (!ui.leftPanelCollapsed && leftW > 0) {
+      addScrollbar(ui.leftPanelScrollOffset, ui.leftMaxScroll, contentH, sbBodyTop, startCol + leftW - 1, 'left');
+    }
+
+    // Middle panel (files) - diff mode only
+    if (state.rightView === 'diff' && middleW > 0) {
+      addScrollbar(state.scrollOffset, ui.filesMaxScroll, contentH, sbBodyTop, midStart + middleW - 1, 'files');
+    }
+
+    // Right panels
+    if (state.rightView === 'diff') {
+      // Diff section
+      if (rightW > 0) {
+        addScrollbar(state.diffScrollOffset, ui.diffMaxScroll, ui.rightDiffH, sbBodyTop, startCol + width - 1, 'diff');
+      }
+    } else if (state.rightView === 'log') {
+      // Log history list
+      if (rightW > 0 && ui.lastLogListH > 0) {
+        addScrollbar(state.logScrollOffset, ui.logListMaxScroll, ui.lastLogListH, sbBodyTop, startCol + width - 1, 'logList');
+      }
+      // Log detail
+      if (rightW > 0 && ui.lastDetailContentH > 0) {
+        const detailTop = sbBodyTop + ui.lastLogListH + 1 + 1; // +1 separator +1 refs line
+        addScrollbar(state.diffScrollOffset, ui.logDetailMaxScroll, ui.lastDetailContentH, detailTop, startCol + width - 1, 'logDetail');
+      }
+    } else if (state.rightView === 'fresh') {
+      // Fresh file list
+      const freshFileListH = Math.max(0, ui.lastFreshListH - 1);
+      if (rightW > 0 && freshFileListH > 0) {
+        addScrollbar(state.freshScrollOffset, ui.freshListMaxScroll, freshFileListH, sbBodyTop + 1, startCol + width - 1, 'freshList');
+      }
+      // Fresh detail
+      if (rightW > 0 && ui.lastFreshListH > 0) {
+        const freshDetailH = contentH - ui.lastFreshListH - 1; // -1 separator
+        if (freshDetailH > 1) {
+          const detailTop = sbBodyTop + ui.lastFreshListH + 1 + 1; // +1 separator +1 header
+          addScrollbar(state.diffScrollOffset, ui.freshDetailMaxScroll, freshDetailH - 1, detailTop, startCol + width - 1, 'freshDetail');
+        }
+      }
+    }
+
+    for (const sb of ui.scrollbarOverlays) {
+      buf.push(ansi.moveTo(sb.screenRow, sb.screenCol) + sb.sixelStr);
+    }
+  }
 
   process.stdout.write(buf.join(''));
 
@@ -783,15 +844,17 @@ function buildFileListPanel(w, h) {
     pushFileLine(colors.dim + ' Working tree clean' + ansi.reset, -1);
   }
 
-  // Scroll
-  if (lines.length > h && cursorLineIdx >= 0) {
+  // Scroll (skip auto-scroll when scrollbar is being dragged)
+  const sbDraggingFiles = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === 'files';
+  if (!sbDraggingFiles && lines.length > h && cursorLineIdx >= 0) {
     if (cursorLineIdx < state.scrollOffset) state.scrollOffset = cursorLineIdx;
     else if (cursorLineIdx >= state.scrollOffset + h) state.scrollOffset = cursorLineIdx - h + 1;
-  } else {
+  } else if (!sbDraggingFiles) {
     state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, lines.length - h));
   }
 
   const filesMaxScroll = Math.max(0, lines.length - h);
+  ui.filesMaxScroll = filesMaxScroll;
   if (filesMaxScroll > 0) {
     ui.scrollPct.files = Math.round((state.scrollOffset / filesMaxScroll) * 100);
   } else {
@@ -805,6 +868,7 @@ function buildFileListPanel(w, h) {
 
 function buildDiffCommitPanel(w, h) {
   const lines = [];
+  const innerW = w - 1;
 
   // Calculate commit area height
   let msgLineCount = 1;
@@ -822,11 +886,13 @@ function buildDiffCommitPanel(w, h) {
     if (state.diffLines.length === 0) {
       lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < diffH; i++) lines.push('');
+      ui.diffMaxScroll = 0;
     } else {
       const annotated = annotateDiffLineNumbers(state.diffLines);
       const numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
       const gutterW = numW > 0 ? numW * 2 + 2 : 0;
       const maxScroll = Math.max(0, state.diffLines.length - diffH);
+      ui.diffMaxScroll = maxScroll;
       if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
       const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
       for (const entry of visible) {
@@ -839,9 +905,9 @@ function buildDiffCommitPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, w - gutterW));
+          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW));
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, w - 1));
+          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1));
         }
       }
       if (state.diffLines.length > diffH) {
@@ -907,6 +973,7 @@ function buildLogPanel(w, h) {
     return [colors.dim + ' No commits yet' + ansi.reset];
   }
 
+  const innerW = w - 1;
   let listH, detailH, separatorH;
   if (ui.rightTopCollapsed && ui.rightBottomCollapsed) {
     listH = 0; separatorH = 0; detailH = 0;
@@ -928,7 +995,8 @@ function buildLogPanel(w, h) {
     ? state.logSelectables[Math.min(state.logCursor, state.logSelectables.length - 1)]
     : -1;
 
-  if (selectedItemIdx >= 0) {
+  const sbDraggingLog = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === 'logList';
+  if (!sbDraggingLog && selectedItemIdx >= 0) {
     if (selectedItemIdx < state.logScrollOffset) {
       state.logScrollOffset = selectedItemIdx;
     } else if (selectedItemIdx >= state.logScrollOffset + listH) {
@@ -955,7 +1023,7 @@ function buildLogPanel(w, h) {
         ? ' '.repeat(graphVisLen) + ' '
         : item.graphStr + ' ';
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
-      const available = w - fixedLen;
+      const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
       const isHead = decoRawOrig.includes('HEAD');
       const decoRaw = decoRawOrig.split(', ').map(r =>
@@ -985,10 +1053,10 @@ function buildLogPanel(w, h) {
       const subjPart = colors.value + subjStr + resetTo;
       const hashPart = (isHead ? colors.green + ansi.bold : colors.yellow) + item.ref + resetTo;
       const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
-      const pad = Math.max(1, w - usedLen - 7);
+      const pad = Math.max(1, innerW - usedLen - 7);
       const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
       const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
-      lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
+      lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
       graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
     } else {
@@ -1014,8 +1082,10 @@ function buildLogPanel(w, h) {
   // Scroll pct for title
   if (listH > 0 && state.logItems.length > listH) {
     const maxScroll = Math.max(1, state.logItems.length - listH);
+    ui.logListMaxScroll = maxScroll;
     ui.scrollPct.history = Math.round((state.logScrollOffset / maxScroll) * 100);
   } else {
+    ui.logListMaxScroll = 0;
     ui.scrollPct.history = -1;
   }
 
@@ -1027,21 +1097,19 @@ function buildLogPanel(w, h) {
   if (detailH > 1 && filteredDetail.length > 0) {
     const cH = detailH - 1;
     const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
+    ui.logDetailMaxScroll = maxDetailScroll;
     if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
     if (filteredDetail.length > cH) {
       ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
     }
+  } else {
+    ui.logDetailMaxScroll = 0;
   }
 
   // -- Separator --
   if (separatorH > 0) {
     const hDivColor = ui.hoveredDivider === 'horizontal' ? colors.value : colors.border;
-    const pctLabel = ui.scrollPct.detail >= 0 ? ' ' + ui.scrollPct.detail + '% ' : '';
-    if (pctLabel.length > 0 && w > pctLabel.length) {
-      lines.push(hDivColor + '\u2500'.repeat(w - pctLabel.length) + ansi.reset + colors.dim + pctLabel + ansi.reset);
-    } else {
-      lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
-    }
+    lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
   }
 
   // -- Detail --
@@ -1054,7 +1122,7 @@ function buildLogPanel(w, h) {
     } else {
       const refsRaw = selItem && selItem.decoration ? selItem.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
       if (refsRaw) {
-        lines.push(colors.cyan + ' \u2387 ' + truncate(refsRaw, w - 4) + ansi.reset);
+        lines.push(colors.cyan + ' \u2387 ' + truncate(refsRaw, innerW - 4) + ansi.reset);
       } else {
         lines.push(colors.dim + ' (no refs)' + ansi.reset);
       }
@@ -1074,7 +1142,7 @@ function buildLogPanel(w, h) {
         const collapsed = ui.collapsedDetailFiles.has(stickyFile);
         const arrow = collapsed ? '+' : '-';
         const label = ' ' + arrow + ' ' + stickyFile;
-        lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, w), w) + ansi.reset);
+        lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
         ui.detailFileHeaderMap.push(stickyFile);
         cH--;
       }
@@ -1088,10 +1156,10 @@ function buildLogPanel(w, h) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
           const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
-          lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, w), w) + ansi.reset);
+          lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
           ui.detailFileHeaderMap.push(entry.file);
         } else if (/^\u2500{3,}$/.test(entry.text)) {
-          lines.push(colorizeDiffLine(entry.text, w));
+          lines.push(colorizeDiffLine(entry.text, innerW));
           ui.detailFileHeaderMap.push(null);
         } else if (entry.inDiff && gutterW > 0) {
           let gutter;
@@ -1102,10 +1170,10 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, w - gutterW));
+          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW));
           ui.detailFileHeaderMap.push(null);
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, w - 1));
+          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1));
           ui.detailFileHeaderMap.push(null);
         }
       }
@@ -1170,6 +1238,7 @@ function buildFreshPanel(w, h) {
     return [colors.dim + ' No fresh files' + ansi.reset];
   }
 
+  const innerW = w - 1;
   let listH, detailH, separatorH;
   if (ui.rightTopCollapsed && ui.rightBottomCollapsed) {
     listH = 0; separatorH = 0; detailH = 0;
@@ -1197,7 +1266,7 @@ function buildFreshPanel(w, h) {
     const isHovered = ui.hoveredFreshWindow;
     const btnStyle = isHovered ? colors.cursorBg + colors.cyan + ansi.bold + CSI + '4m' : colors.cyan;
     const headerLabel = btnStyle + btnLabel + ansi.reset + suffix;
-    lines.push(truncate(headerLabel, w));
+    lines.push(truncate(headerLabel, innerW));
     lineToFileIdx.push(-1);
     // Record click zone (relative col within right panel, will be resolved in input.js)
     ui.freshWindowZone = { lineIdx: 0, colStart: 0, colEnd: btnLen - 1 };
@@ -1207,8 +1276,9 @@ function buildFreshPanel(w, h) {
   const fileListH = Math.max(0, listH - 1);
   const selectedItemIdx = Math.min(state.freshCursor, state.freshItems.length - 1);
 
-  // Auto-scroll
-  if (selectedItemIdx >= 0) {
+  // Auto-scroll (skip when scrollbar is being dragged)
+  const sbDraggingFresh = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === 'freshList';
+  if (!sbDraggingFresh && selectedItemIdx >= 0) {
     if (selectedItemIdx < state.freshScrollOffset) {
       state.freshScrollOffset = selectedItemIdx;
     } else if (selectedItemIdx >= state.freshScrollOffset + fileListH) {
@@ -1229,7 +1299,7 @@ function buildFreshPanel(w, h) {
 
     const statusIcon = freshStatusIcon(item.status);
     const fileColor = heatmapColor(item.date, tw.days || 7);
-    const fileName = truncate(item.file, Math.max(10, w - 25));
+    const fileName = truncate(item.file, Math.max(10, innerW - 25));
     const relTime = relativeDate(item.date);
     const authorPart = item.author ? truncate(item.author, 12) : (item.isPending ? 'pending' : '');
 
@@ -1237,15 +1307,17 @@ function buildFreshPanel(w, h) {
       + '  ' + colors.dim + padRight(relTime, 4) + resetTo
       + ' ' + colors.dim + authorPart + resetTo;
 
-    lines.push((isCursor ? colors.cursorBg : '') + padRight(line, w) + ansi.reset);
+    lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
     lineToFileIdx.push(itemIdx);
   }
 
   // Scroll pct
   if (fileListH > 0 && state.freshItems.length > fileListH) {
     const maxScroll = Math.max(1, state.freshItems.length - fileListH);
+    ui.freshListMaxScroll = maxScroll;
     ui.scrollPct.history = Math.round((state.freshScrollOffset / maxScroll) * 100);
   } else {
+    ui.freshListMaxScroll = 0;
     ui.scrollPct.history = -1;
   }
 
@@ -1253,21 +1325,19 @@ function buildFreshPanel(w, h) {
   if (detailH > 1 && state.freshDetailLines.length > 0) {
     const cH = detailH - 1;
     const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
+    ui.freshDetailMaxScroll = maxDetailScroll;
     if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
     if (state.freshDetailLines.length > cH) {
       ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
     }
+  } else {
+    ui.freshDetailMaxScroll = 0;
   }
 
   // -- Separator --
   if (separatorH > 0) {
     const hDivColor = ui.hoveredDivider === 'horizontal' ? colors.value : colors.border;
-    const pctLabel = ui.scrollPct.detail >= 0 ? ' ' + ui.scrollPct.detail + '% ' : '';
-    if (pctLabel.length > 0 && w > pctLabel.length) {
-      lines.push(hDivColor + '\u2500'.repeat(w - pctLabel.length) + ansi.reset + colors.dim + pctLabel + ansi.reset);
-    } else {
-      lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
-    }
+    lines.push(hDivColor + '\u2500'.repeat(w) + ansi.reset);
   }
 
   // -- Detail (diff) --
@@ -1280,9 +1350,9 @@ function buildFreshPanel(w, h) {
       // Header: file info
       if (selItem) {
         const info = selItem.isPending
-          ? colors.cyan + ' \u25c6 ' + truncate(selItem.file, w - 4) + ' (pending)' + ansi.reset
-          : colors.cyan + ' \u25c6 ' + truncate(selItem.file, w - 20) + ' ' + colors.dim + selItem.commitHash + ansi.reset;
-        lines.push(truncate(info, w));
+          ? colors.cyan + ' \u25c6 ' + truncate(selItem.file, innerW - 4) + ' (pending)' + ansi.reset
+          : colors.cyan + ' \u25c6 ' + truncate(selItem.file, innerW - 20) + ' ' + colors.dim + selItem.commitHash + ansi.reset;
+        lines.push(truncate(info, innerW));
       } else {
         lines.push('');
       }
@@ -1291,7 +1361,7 @@ function buildFreshPanel(w, h) {
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, w - 1));
+        lines.push(' ' + colorizeDiffLine(rawLine, innerW - 1));
       }
     }
   }

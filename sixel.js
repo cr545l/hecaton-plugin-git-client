@@ -183,7 +183,35 @@ function encodeSixel(buf, w, h, palette) {
   return out;
 }
 
+const SCROLLBAR_PALETTE = [[100, 110, 130]];
+const SCROLLBAR_HOVER_PALETTE = [[160, 175, 200]];
+const SCROLLBAR_ACTIVE_PALETTE = [[210, 225, 245]];
+
+function renderScrollbarPixels(cellW, cellH, viewportRows, scrollOffset, maxScroll) {
+  if (maxScroll <= 0) return null;
+  const w = cellW;
+  const trackH = viewportRows * cellH;
+  if (w <= 0 || trackH <= 0) return null;
+  const totalItems = viewportRows + maxScroll;
+  const handleH = Math.max(cellH, Math.floor(trackH * viewportRows / totalItems));
+  const handleY = Math.floor((trackH - handleH) * scrollOffset / maxScroll);
+  const buf = new Uint8Array(w * trackH);
+  const padX = 2;
+  const roundY = 1;
+  for (let y = handleY; y < handleY + handleH && y < trackH; y++) {
+    const dy = y - handleY;
+    const dyEnd = handleY + handleH - 1 - y;
+    for (let x = padX; x < w - padX; x++) {
+      if (dy < roundY && (x === padX || x === w - padX - 1)) continue;
+      if (dyEnd < roundY && (x === padX || x === w - padX - 1)) continue;
+      buf[y * w + x] = 1;
+    }
+  }
+  return buf;
+}
+
 module.exports = {
   SIXEL_ENABLED, SIXEL_PALETTE,
+  SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels,
   renderCombinedGraphPixels, encodeSixel,
 };
