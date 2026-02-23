@@ -844,12 +844,13 @@ function buildFileListPanel(w, h) {
     pushFileLine(colors.dim + ' Working tree clean' + ansi.reset, -1);
   }
 
-  // Scroll (skip auto-scroll when scrollbar is being dragged)
-  const sbDraggingFiles = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === 'files';
-  if (!sbDraggingFiles && lines.length > h && cursorLineIdx >= 0) {
+  // Scroll (skip auto-scroll when scrollbar pin is active)
+  const filesPinned = ui.filesScrollPin !== undefined && ui.filesScrollPin === state.cursor;
+  if (ui.filesScrollPin !== undefined && ui.filesScrollPin !== state.cursor) ui.filesScrollPin = undefined;
+  if (!filesPinned && lines.length > h && cursorLineIdx >= 0) {
     if (cursorLineIdx < state.scrollOffset) state.scrollOffset = cursorLineIdx;
     else if (cursorLineIdx >= state.scrollOffset + h) state.scrollOffset = cursorLineIdx - h + 1;
-  } else if (!sbDraggingFiles) {
+  } else if (!filesPinned) {
     state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, lines.length - h));
   }
 
@@ -995,8 +996,9 @@ function buildLogPanel(w, h) {
     ? state.logSelectables[Math.min(state.logCursor, state.logSelectables.length - 1)]
     : -1;
 
-  const sbDraggingLog = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === 'logList';
-  if (!sbDraggingLog && selectedItemIdx >= 0) {
+  const logPinned = ui.logScrollPin !== undefined && ui.logScrollPin === state.logCursor;
+  if (ui.logScrollPin !== undefined && ui.logScrollPin !== state.logCursor) ui.logScrollPin = undefined;
+  if (!logPinned && selectedItemIdx >= 0) {
     if (selectedItemIdx < state.logScrollOffset) {
       state.logScrollOffset = selectedItemIdx;
     } else if (selectedItemIdx >= state.logScrollOffset + listH) {
@@ -1276,9 +1278,10 @@ function buildFreshPanel(w, h) {
   const fileListH = Math.max(0, listH - 1);
   const selectedItemIdx = Math.min(state.freshCursor, state.freshItems.length - 1);
 
-  // Auto-scroll (skip when scrollbar is being dragged)
-  const sbDraggingFresh = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === 'freshList';
-  if (!sbDraggingFresh && selectedItemIdx >= 0) {
+  // Auto-scroll (skip when scrollbar pin is active)
+  const freshPinned = ui.freshScrollPin !== undefined && ui.freshScrollPin === state.freshCursor;
+  if (ui.freshScrollPin !== undefined && ui.freshScrollPin !== state.freshCursor) ui.freshScrollPin = undefined;
+  if (!freshPinned && selectedItemIdx >= 0) {
     if (selectedItemIdx < state.freshScrollOffset) {
       state.freshScrollOffset = selectedItemIdx;
     } else if (selectedItemIdx >= state.freshScrollOffset + fileListH) {

@@ -574,11 +574,11 @@ function handleNameInput(key) {
 function applyScrollbarOffset(target, offset) {
   switch (target) {
     case 'left': ui.leftPanelScrollOffset = offset; break;
-    case 'files': state.scrollOffset = offset; break;
+    case 'files': state.scrollOffset = offset; ui.filesScrollPin = state.cursor; break;
     case 'diff': state.diffScrollOffset = offset; break;
-    case 'logList': state.logScrollOffset = offset; break;
+    case 'logList': state.logScrollOffset = offset; ui.logScrollPin = state.logCursor; break;
     case 'logDetail': state.diffScrollOffset = offset; break;
-    case 'freshList': state.freshScrollOffset = offset; break;
+    case 'freshList': state.freshScrollOffset = offset; ui.freshScrollPin = state.freshCursor; break;
     case 'freshDetail': state.diffScrollOffset = offset; break;
   }
 }

@@ -105,6 +105,9 @@ const ui = {
   scrollbarOverlays: [],
   scrollbarDragInfo: null,    // { target, trackTop, trackH, maxScroll }
   hoveredScrollbarTarget: null, // 'left' | 'files' | 'diff' | 'logList' | 'logDetail' | 'freshList' | 'freshDetail'
+  filesScrollPin: undefined,     // pinned cursor value when scrollbar used
+  logScrollPin: undefined,       // pinned logCursor value when scrollbar used
+  freshScrollPin: undefined,     // pinned freshCursor value when scrollbar used
   filesMaxScroll: 0,
   diffMaxScroll: 0,
   logListMaxScroll: 0,
