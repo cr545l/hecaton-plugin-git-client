@@ -1012,14 +1012,16 @@ function handleMouseData(data) {
               }
               handled = true;
             } else if (zone.action === 'git-stash') {
-              const err = gitStashSave(state.cwd);
-              if (err) {
-                showErrorDialog(err);
-                render();
-              } else {
-                refresh();
-                render();
-              }
+              state.pendingStash = true;
+              sendRpc('show_dialog', {
+                type: 'message',
+                title: 'Stash',
+                message: 'Stash changes?',
+                buttons: [
+                  { id: 'stash_confirm', label: 'Stash' },
+                  { id: 'cancel', label: 'Cancel' },
+                ],
+              });
               handled = true;
             } else if (zone.action === 'reset-committer-name') {
               const err = gitUnsetConfigLocal(state.cwd, 'user.name');

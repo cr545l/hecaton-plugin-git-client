@@ -29,6 +29,7 @@ const state = {
   error: null,
   loading: true,
   minimized: false,
+  pendingStash: false,
   pendingRebaseRef: null,
   committerName: '',
   committerEmail: '',

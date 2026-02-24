@@ -529,6 +529,21 @@ function handleDialogResult(params) {
     state.pendingCommitterEdit = null;
     return;
   }
+  if (state.pendingStash && buttonId === 'stash_confirm') {
+    state.pendingStash = false;
+    const stashErr = gitStashSave(state.cwd);
+    if (stashErr) {
+      showError('Stash failed:\n' + stashErr);
+    } else {
+      refresh();
+      render();
+    }
+    return;
+  }
+  if (state.pendingStash) {
+    state.pendingStash = false;
+    return;
+  }
   if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
