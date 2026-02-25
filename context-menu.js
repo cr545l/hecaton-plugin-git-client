@@ -432,6 +432,8 @@ function handleContextMenuAction(actionId) {
       render();
       break;
     case 'merge': {
+      state.error = 'Merging...';
+      render();
       const err = gitMerge(state.cwd, hash);
       afterGitOp(err, 'Merge');
       break;
@@ -449,7 +451,10 @@ function handleContextMenuAction(actionId) {
           ],
         });
       } else {
+        state.error = 'Rebasing...';
+        render();
         const err = gitRebase(state.cwd, hash);
+        state.error = null;
         refresh();
         if (state.rightView === 'log') refreshLog();
         if (err) {
@@ -461,22 +466,30 @@ function handleContextMenuAction(actionId) {
       break;
     }
     case 'reset': {
+      state.error = 'Resetting...';
+      render();
       const err = gitReset(state.cwd, hash);
       afterGitOp(err, 'Reset');
       break;
     }
     case 'checkout': {
+      state.error = 'Checking out...';
+      render();
       const err = gitCheckoutRef(state.cwd, hash);
       afterGitOp(err, 'Checkout');
       if (!err) registerHistoryContextMenu();
       break;
     }
     case 'cherry_pick': {
+      state.error = 'Cherry-picking...';
+      render();
       const err = gitCherryPick(state.cwd, hash);
       afterGitOp(err, 'Cherry-pick');
       break;
     }
     case 'revert': {
+      state.error = 'Reverting...';
+      render();
       const err = gitRevert(state.cwd, hash);
       afterGitOp(err, 'Revert');
       break;
@@ -531,7 +544,10 @@ function handleDialogResult(params) {
   }
   if (state.pendingStash && buttonId === 'stash_confirm') {
     state.pendingStash = false;
+    state.error = 'Stashing...';
+    render();
     const stashErr = gitStashSave(state.cwd);
+    state.error = null;
     if (stashErr) {
       showError('Stash failed:\n' + stashErr);
     } else {
@@ -548,22 +564,33 @@ function handleDialogResult(params) {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
 
+    state.error = 'Stash & Rebase... (1/3) Stashing';
+    render();
     const stashErr = gitStashSave(state.cwd);
     if (stashErr) {
+      state.error = null;
       showError('Stash failed:\n' + stashErr);
       return;
     }
 
+    state.error = 'Stash & Rebase... (2/3) Rebasing';
+    render();
     const rebaseErr = gitRebase(state.cwd, ref);
     if (rebaseErr) {
+      state.error = 'Stash & Rebase... (3/3) Restoring stash';
+      render();
       gitStashPop(state.cwd);
+      state.error = null;
       refresh();
       if (state.rightView === 'log') refreshLog();
       showError('Rebase failed:\n' + rebaseErr);
       return;
     }
 
+    state.error = 'Stash & Rebase... (3/3) Restoring stash';
+    render();
     const popErr = gitStashPop(state.cwd);
+    state.error = null;
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (popErr) {
@@ -577,6 +604,7 @@ function handleDialogResult(params) {
 }
 
 function afterGitOp(err, opName) {
+  state.error = null;
   refresh();
   if (state.rightView === 'log') refreshLog();
   if (err) {

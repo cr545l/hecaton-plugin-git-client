@@ -362,27 +362,26 @@ function render() {
     hintContent = colors.yellow + ' Rebase: ' + ansi.reset
       + colors.value + '[c]ontinue' + ansi.reset + '  '
       + colors.value + '[a]bort' + ansi.reset + '  '
-      + colors.value + '[s]kip' + ansi.reset + '  '
-      + colors.dim + '[Esc]cancel' + ansi.reset;
+      + colors.value + '[s]kip' + ansi.reset;
   } else if (state.mode === 'commit') {
     hintContent = colors.yellow + ' Commit: ' + ansi.reset
-      + colors.dim + '[Ctrl+Enter]submit  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Ctrl+Enter]submit' + ansi.reset;
   } else if (state.mode === 'new-branch') {
     hintContent = colors.yellow + ' New Branch: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Enter]create' + ansi.reset;
   } else if (state.mode === 'new-tag') {
     hintContent = colors.yellow + ' New Tag: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Enter]create' + ansi.reset;
   } else if (state.mode === 'rename-stash') {
     hintContent = colors.yellow + ' Rename Stash: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]rename  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Enter]rename' + ansi.reset;
   } else if (state.mode === 'new-remote') {
     hintContent = colors.yellow + ' New Remote: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create (name url)  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Enter]create (name url)' + ansi.reset;
   } else if (state.freshTimeWindowMode) {
     const tw = FRESH_TIME_WINDOWS;
     let windowHint = colors.yellow + ' Time Window: ' + ansi.reset;
@@ -393,10 +392,11 @@ function render() {
         windowHint += colors.dim + ' ' + tw[i].label + ' ' + ansi.reset + ' ';
       }
     }
-    windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply  [Esc]cancel' + ansi.reset;
+    windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply' + ansi.reset;
     hintContent = windowHint;
   } else if (state.error) {
-    hintContent = ' ' + colors.red + state.error + ansi.reset;
+    const msgColor = state.error.endsWith('...') ? colors.yellow : colors.red;
+    hintContent = ' ' + msgColor + state.error + ansi.reset;
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else {
@@ -969,9 +969,7 @@ function buildDiffCommitPanel(w, h) {
 
     const commitLabel = '[Commit]';
     if (state.mode === 'commit' && state.commitMsg.trim().length > 0) {
-      lines.push(' ' + colors.green + ansi.bold + commitLabel + ansi.reset + colors.dim + '  Ctrl+Enter \u2190 submit  Esc \u2190 cancel' + ansi.reset);
-    } else if (state.mode === 'commit') {
-      lines.push(' ' + colors.dim + commitLabel + '  Esc \u2190 cancel' + ansi.reset);
+      lines.push(' ' + colors.green + ansi.bold + commitLabel + ansi.reset);
     } else {
       lines.push(' ' + colors.dim + commitLabel + ansi.reset);
     }

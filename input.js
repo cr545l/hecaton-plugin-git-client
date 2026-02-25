@@ -151,13 +151,18 @@ function handleKey(key) {
       const targets = state.selectedFiles.size > 0
         ? Array.from(state.selectedFiles).sort((a, b) => a - b)
         : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
-      for (const idx of targets) {
-        const item = fileList[idx];
-        if (item && item.type !== 'staged') {
-          gitStage(state.cwd, item.file);
-        }
-      }
       if (targets.length > 0) {
+        const total = targets.length;
+        for (let i = 0; i < total; i++) {
+          const item = fileList[targets[i]];
+          if (item && item.type !== 'staged') {
+            gitStage(state.cwd, item.file);
+          }
+          const pct = Math.round(((i + 1) / total) * 100);
+          state.error = `Staging... (${i + 1}/${total}) ${pct}%`;
+          render();
+        }
+        state.error = null;
         state.selectedFiles.clear();
         refresh();
       }
@@ -170,13 +175,18 @@ function handleKey(key) {
       const targets = state.selectedFiles.size > 0
         ? Array.from(state.selectedFiles).sort((a, b) => a - b)
         : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
-      for (const idx of targets) {
-        const item = fileList[idx];
-        if (item && item.type === 'staged') {
-          gitUnstage(state.cwd, item.file);
-        }
-      }
       if (targets.length > 0) {
+        const total = targets.length;
+        for (let i = 0; i < total; i++) {
+          const item = fileList[targets[i]];
+          if (item && item.type === 'staged') {
+            gitUnstage(state.cwd, item.file);
+          }
+          const pct = Math.round(((i + 1) / total) * 100);
+          state.error = `Unstaging... (${i + 1}/${total}) ${pct}%`;
+          render();
+        }
+        state.error = null;
         state.selectedFiles.clear();
         refresh();
       }
@@ -244,7 +254,10 @@ function handleKey(key) {
             ],
           });
         } else {
+          state.error = 'Rebasing...';
+          render();
           const err = gitRebase(state.cwd, logItem.ref);
+          state.error = null;
           refresh();
           if (state.rightView === 'log') refreshLog();
           if (err) {
@@ -459,7 +472,10 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'c') {
     state.mode = 'normal';
+    state.error = 'Rebase continue...';
+    render();
     const err = gitRebaseContinue(state.cwd);
+    state.error = null;
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
@@ -470,7 +486,10 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'a') {
     state.mode = 'normal';
+    state.error = 'Aborting rebase...';
+    render();
     const err = gitRebaseAbort(state.cwd);
+    state.error = null;
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
@@ -481,7 +500,10 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 's') {
     state.mode = 'normal';
+    state.error = 'Rebase skip...';
+    render();
     const err = gitRebaseSkip(state.cwd);
+    state.error = null;
     refresh();
     if (state.rightView === 'log') refreshLog();
     if (err) {
@@ -1291,15 +1313,21 @@ function handleMouseData(data) {
                 const targets = state.selectedFiles.size > 0
                   ? Array.from(state.selectedFiles).sort((a, b) => a - b)
                   : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
-                for (const idx of targets) {
-                  const item = fileList[idx];
-                  if (zone.action === 'stageSelected') {
-                    if (item && item.type !== 'staged') gitStage(state.cwd, item.file);
-                  } else if (zone.action === 'unstageSelected') {
-                    if (item && item.type === 'staged') gitUnstage(state.cwd, item.file);
-                  }
-                }
                 if (targets.length > 0) {
+                  const total = targets.length;
+                  const label = zone.action === 'stageSelected' ? 'Staging' : 'Unstaging';
+                  for (let i = 0; i < total; i++) {
+                    const item = fileList[targets[i]];
+                    if (zone.action === 'stageSelected') {
+                      if (item && item.type !== 'staged') gitStage(state.cwd, item.file);
+                    } else if (zone.action === 'unstageSelected') {
+                      if (item && item.type === 'staged') gitUnstage(state.cwd, item.file);
+                    }
+                    const pct = Math.round(((i + 1) / total) * 100);
+                    state.error = `${label}... (${i + 1}/${total}) ${pct}%`;
+                    render();
+                  }
+                  state.error = null;
                   state.selectedFiles.clear();
                   refresh();
                 }
