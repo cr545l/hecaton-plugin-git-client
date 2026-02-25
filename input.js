@@ -1,6 +1,6 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitCommit, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip, gitCreateBranch, gitCreateTag, gitFetch, gitPull, gitPush, gitStashSave, gitStashRename, gitRemoteAdd, gitUnsetConfigLocal } = require('./git');
+const { gitStage, gitUnstage, gitCommit, gitRebase, gitFetch, gitPull, gitPush, gitStashSave, gitUnsetConfigLocal } = require('./git');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
@@ -52,16 +52,8 @@ function handleKey(key) {
     }
     return;
   }
-  if (state.mode === 'rebase-menu') {
-    handleRebaseMenuInput(key);
-    return;
-  }
   if (state.mode === 'commit') {
     handleCommitInput(key);
-    return;
-  }
-  if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash' || state.mode === 'new-remote') {
-    handleNameInput(key);
     return;
   }
 
@@ -233,8 +225,18 @@ function handleKey(key) {
     }
     case 'b': {
       if (state.rebaseState) {
-        state.mode = 'rebase-menu';
-        render();
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Rebase',
+          message: 'Choose rebase action:',
+          buttons: [
+            { id: 'continue', label: 'Continue' },
+            { id: 'abort', label: 'Abort' },
+            { id: 'skip', label: 'Skip' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+        state.pendingRebaseMenu = true;
       } else {
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
@@ -1004,6 +1006,8 @@ function handleMouseData(data) {
               } else {
                 state.error = null;
                 refresh();
+                if (state.rightView === 'log') refreshLog();
+                if (state.rightView === 'fresh') refreshFresh();
                 render();
               }
               handled = true;
@@ -1017,6 +1021,8 @@ function handleMouseData(data) {
               } else {
                 state.error = null;
                 refresh();
+                if (state.rightView === 'log') refreshLog();
+                if (state.rightView === 'fresh') refreshFresh();
                 render();
               }
               handled = true;
@@ -1030,6 +1036,8 @@ function handleMouseData(data) {
               } else {
                 state.error = null;
                 refresh();
+                if (state.rightView === 'log') refreshLog();
+                if (state.rightView === 'fresh') refreshFresh();
                 render();
               }
               handled = true;

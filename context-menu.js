@@ -5,10 +5,11 @@ const path = require('path');
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
-  gitRebase, gitStashApply, gitStashDrop, gitStashSave, gitStashPop,
+  gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
+  gitStashApply, gitStashDrop, gitStashSave, gitStashPop, gitStashRename,
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
-  gitSetConfig,
+  gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
 } = require('./git');
 const { refresh, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
@@ -178,10 +179,14 @@ function handleContextMenuAction(actionId) {
   if (actionId.startsWith('remote_')) {
     switch (actionId) {
       case 'remote_add':
-        state.mode = 'new-remote';
-        state.inputBuffer = '';
-        state.inputTarget = '';
-        render();
+        sendRpc('show_dialog', {
+          type: 'input',
+          title: 'Add Remote',
+          message: 'Enter remote name and URL (e.g. origin https://...):',
+          defaultValue: '',
+          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-remote';
         break;
       case 'remote_sort_alpha':
         ui.remoteSortMode = 'alpha';
@@ -395,10 +400,15 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'stash_rename':
-        state.mode = 'rename-stash';
-        state.inputBuffer = '';
-        state.inputTarget = ref;
-        render();
+        sendRpc('show_dialog', {
+          type: 'input',
+          title: 'Rename Stash',
+          message: 'Enter new name for stash:',
+          defaultValue: '',
+          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'rename-stash';
+        state.pendingDialogTarget = ref;
         break;
     }
     return;
@@ -420,16 +430,26 @@ function handleContextMenuAction(actionId) {
 
   switch (actionId) {
     case 'new_branch':
-      state.mode = 'new-branch';
-      state.inputBuffer = '';
-      state.inputTarget = hash;
-      render();
+      sendRpc('show_dialog', {
+        type: 'input',
+        title: 'New Branch',
+        message: 'Enter branch name:',
+        defaultValue: '',
+        buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+      });
+      state.pendingDialogAction = 'new-branch';
+      state.pendingDialogTarget = hash;
       break;
     case 'new_tag':
-      state.mode = 'new-tag';
-      state.inputBuffer = '';
-      state.inputTarget = hash;
-      render();
+      sendRpc('show_dialog', {
+        type: 'input',
+        title: 'New Tag',
+        message: 'Enter tag name:',
+        defaultValue: '',
+        buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+      });
+      state.pendingDialogAction = 'new-tag';
+      state.pendingDialogTarget = hash;
       break;
     case 'merge': {
       state.error = 'Merging...';
@@ -521,6 +541,68 @@ function handleContextMenuAction(actionId) {
 
 function handleDialogResult(params) {
   const buttonId = params && params.buttonId;
+
+  // Name input dialog results (new-branch, new-tag, rename-stash, new-remote)
+  if (state.pendingDialogAction) {
+    const action = state.pendingDialogAction;
+    const target = state.pendingDialogTarget || '';
+    state.pendingDialogAction = null;
+    state.pendingDialogTarget = null;
+    if (buttonId === 'ok' && params.value != null) {
+      const name = params.value.trim();
+      if (!name) {
+        showError('Name cannot be empty');
+        return;
+      }
+      let err;
+      if (action === 'rename-stash') {
+        err = gitStashRename(state.cwd, target, name);
+      } else if (action === 'new-remote') {
+        const parts = name.split(/\s+/).filter(Boolean);
+        if (parts.length < 2) {
+          showError('Use: <remote-name> <remote-url>');
+          return;
+        }
+        const remoteName = parts.shift();
+        const remoteUrl = parts.join(' ');
+        err = gitRemoteAdd(state.cwd, remoteName, remoteUrl);
+      } else if (action === 'new-branch') {
+        err = gitCreateBranch(state.cwd, name, target);
+      } else if (action === 'new-tag') {
+        err = gitCreateTag(state.cwd, name, target);
+      }
+      const opName = action === 'rename-stash' ? 'Rename stash'
+        : action === 'new-remote' ? 'Remote'
+        : action === 'new-branch' ? 'Branch'
+        : 'Tag';
+      afterGitOp(err, opName);
+    }
+    return;
+  }
+
+  // Rebase menu dialog result
+  if (state.pendingRebaseMenu) {
+    state.pendingRebaseMenu = false;
+    let err;
+    if (buttonId === 'continue') {
+      err = gitRebaseContinue(state.cwd);
+    } else if (buttonId === 'abort') {
+      err = gitRebaseAbort(state.cwd);
+    } else if (buttonId === 'skip') {
+      err = gitRebaseSkip(state.cwd);
+    } else {
+      return;
+    }
+    refresh();
+    if (state.rightView === 'log') refreshLog();
+    if (err) {
+      showError(err);
+    } else {
+      render();
+    }
+    return;
+  }
+
   // Committer input dialog result
   if (state.pendingCommitterEdit && buttonId === 'ok' && params.value != null) {
     const field = state.pendingCommitterEdit;

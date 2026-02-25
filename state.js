@@ -22,11 +22,12 @@ const state = {
   stashes: [],            // [{ hash, shortHash, ref }]
   rebaseState: null,     // null | { type, step, total }
   selectedFiles: new Set(),
-  mode: 'normal',        // 'normal' | 'commit' | 'rebase-menu' | 'new-branch' | 'new-tag' | 'rename-stash' | 'new-remote'
+  mode: 'normal',        // 'normal' | 'commit'
   commitMsg: '',
   commitCursor: 0,
-  inputBuffer: '',
-  inputTarget: '',
+  pendingDialogAction: null,  // 'new-branch' | 'new-tag' | 'rename-stash' | 'new-remote' | null
+  pendingDialogTarget: null,
+  pendingRebaseMenu: false,
   error: null,
   loading: true,
   minimized: false,

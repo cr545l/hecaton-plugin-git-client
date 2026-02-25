@@ -365,7 +365,7 @@ function render() {
       + colors.value + '[s]kip' + ansi.reset;
   } else if (state.mode === 'commit') {
     hintContent = colors.yellow + ' Commit: ' + ansi.reset
-      + colors.dim + '[Ctrl+Enter]submit' + ansi.reset;
+      + colors.dim + '[Ctrl+Enter]submit  [Esc]cancel' + ansi.reset;
   } else if (state.mode === 'new-branch') {
     hintContent = colors.yellow + ' New Branch: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
@@ -537,14 +537,6 @@ function render() {
     const showLeftEllipsis = scrollOff > 0;
     const cursorCol = rpStartCol + 1 + (showLeftEllipsis ? 1 : 0) + (beforeVis - scrollOff);
     process.stdout.write(ansi.moveTo(cursorRow, cursorCol));
-  } else if (state.mode === 'new-branch') {
-    process.stdout.write(ansi.moveTo(hintRow, startCol + 13 + visLen(state.inputBuffer)));
-  } else if (state.mode === 'new-tag') {
-    process.stdout.write(ansi.moveTo(hintRow, startCol + 10 + visLen(state.inputBuffer)));
-  } else if (state.mode === 'rename-stash') {
-    process.stdout.write(ansi.moveTo(hintRow, startCol + 16 + visLen(state.inputBuffer)));
-  } else if (state.mode === 'new-remote') {
-    process.stdout.write(ansi.moveTo(hintRow, startCol + 14 + visLen(state.inputBuffer)));
   }
 }
 
