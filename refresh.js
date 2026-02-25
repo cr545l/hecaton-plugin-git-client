@@ -48,6 +48,7 @@ function refresh() {
     state.unstaged = [];
     state.untracked = [];
     state.diffLines = [];
+    state.currentDiffFile = null;
     return;
   }
   state.error = null;
@@ -96,7 +97,7 @@ async function refreshAsync() {
   if (isRepoRaw.trim() !== 'true') {
     state.isGitRepo = false;
     state.error = 'Not a git repository: ' + state.cwd;
-    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.diffLines = [];
+    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.diffLines = []; state.currentDiffFile = null;
     return;
   }
   state.isGitRepo = true;
@@ -337,8 +338,13 @@ function updateDiff() {
   state.diffScrollOffset = 0;
   if (!item) {
     state.diffLines = [];
+    state.currentDiffFile = null;
     return;
   }
+  
+  // Track current diff file for syntax highlighting
+  state.currentDiffFile = item.file;
+  
   let raw = '';
   if (item.type === 'staged') {
     raw = gitDiff(state.cwd, item.file, true);

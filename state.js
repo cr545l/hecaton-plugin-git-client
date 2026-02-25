@@ -10,6 +10,7 @@ const state = {
   focusPanel: 'status',  // 'status' | 'diff'
   diffLines: [],
   diffScrollOffset: 0,
+  currentDiffFile: null, // Current file being viewed in diff panel
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable

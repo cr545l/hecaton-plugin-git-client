@@ -3,6 +3,7 @@ const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE
 const { visLen, padRight, truncate, viewport } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
+const { highlightCode, getLanguage } = require('./highlighter');
 
 function render() {
   if (state.minimized) {
@@ -767,6 +768,13 @@ function buildFileListPanel(w, h) {
     lines.push(content);
   }
 
+  function statusColor(s) {
+    if (s === 'D') return colors.red;
+    if (s === 'A') return colors.green;
+    if (s === 'R' || s === 'C') return colors.cyan;
+    return colors.orange;
+  }
+
   // Unstaged (includes untracked)
   const unstagedCount = state.unstaged.length + state.untracked.length;
   {
@@ -792,8 +800,7 @@ function buildFileListPanel(w, h) {
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const statusColor = item.status === 'D' ? colors.red : colors.orange;
-    const line = prefix + statusColor + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -835,7 +842,7 @@ function buildFileListPanel(w, h) {
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + colors.green + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -848,8 +855,14 @@ function buildFileListPanel(w, h) {
   const filesPinned = ui.filesScrollPin !== undefined && ui.filesScrollPin === state.cursor;
   if (ui.filesScrollPin !== undefined && ui.filesScrollPin !== state.cursor) ui.filesScrollPin = undefined;
   if (!filesPinned && lines.length > h && cursorLineIdx >= 0) {
-    if (cursorLineIdx < state.scrollOffset) state.scrollOffset = cursorLineIdx;
-    else if (cursorLineIdx >= state.scrollOffset + h) state.scrollOffset = cursorLineIdx - h + 1;
+    if (cursorLineIdx < state.scrollOffset) {
+      // Include section headers above the cursor in the viewport
+      let target = cursorLineIdx;
+      while (target > 0 && lineToFileIdx[target - 1] === -1) target--;
+      state.scrollOffset = target;
+    } else if (cursorLineIdx >= state.scrollOffset + h) {
+      state.scrollOffset = cursorLineIdx - h + 1;
+    }
   } else if (!filesPinned) {
     state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, lines.length - h));
   }
@@ -906,9 +919,9 @@ function buildDiffCommitPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW));
+          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, state.currentDiffFile));
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1));
+          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile));
         }
       }
       if (state.diffLines.length > diffH) {
@@ -1161,7 +1174,7 @@ function buildLogPanel(w, h) {
           lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
           ui.detailFileHeaderMap.push(entry.file);
         } else if (/^\u2500{3,}$/.test(entry.text)) {
-          lines.push(colorizeDiffLine(entry.text, innerW));
+          lines.push(colorizeDiffLine(entry.text, innerW, entry.file));
           ui.detailFileHeaderMap.push(null);
         } else if (entry.inDiff && gutterW > 0) {
           let gutter;
@@ -1172,10 +1185,10 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW));
+          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file));
           ui.detailFileHeaderMap.push(null);
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1));
+          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file));
           ui.detailFileHeaderMap.push(null);
         }
       }
@@ -1364,7 +1377,7 @@ function buildFreshPanel(w, h) {
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, innerW - 1));
+        lines.push(' ' + colorizeDiffLine(rawLine, innerW - 1, selItem ? selItem.file : null));
       }
     }
   }
@@ -1438,27 +1451,27 @@ function filterLogDetailLines(lines, collapsedFiles) {
     if (hunkMatch) {
       oldLine = parseInt(hunkMatch[1]);
       newLine = parseInt(hunkMatch[2]);
-      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null });
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null, file: currentFile });
       continue;
     }
     if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ') ||
         line.startsWith('new file') || line.startsWith('old mode') || line.startsWith('new mode') ||
-        line.startsWith('deleted file') || line.startsWith('similarity') || line.startsWith('rename') ||
+        line.startsWith('similarity') || line.startsWith('rename') ||
         line.startsWith('Binary')) {
-      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null });
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null, file: currentFile });
       continue;
     }
     if (line.startsWith('+')) {
       maxLine = Math.max(maxLine, newLine);
-      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: newLine });
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: newLine, file: currentFile });
       newLine++;
     } else if (line.startsWith('-')) {
       maxLine = Math.max(maxLine, oldLine);
-      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: oldLine, newNum: null });
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: oldLine, newNum: null, file: currentFile });
       oldLine++;
     } else {
       maxLine = Math.max(maxLine, oldLine, newLine);
-      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: oldLine, newNum: newLine });
+      result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: oldLine, newNum: newLine, file: currentFile });
       oldLine++;
       newLine++;
     }
@@ -1467,14 +1480,20 @@ function filterLogDetailLines(lines, collapsedFiles) {
   return result;
 }
 
-function colorizeDiffLine(rawLine, w) {
+/**
+ * Colorize a diff line with syntax highlighting for code content
+ * Adds background color for additions (green) and deletions (red)
+ * @param {string} rawLine - The raw diff line
+ * @param {number} w - Maximum width
+ * @param {string} filePath - File path for language detection
+ * @returns {string} Colorized line with background
+ */
+function colorizeDiffLine(rawLine, w, filePath) {
   rawLine = rawLine.replace(/[\r\n]/g, '');
+  
+  // Diff metadata lines (no background, just foreground color)
   if (rawLine.startsWith('+++') || rawLine.startsWith('---')) {
     return colors.diffHeader + truncate(rawLine, w) + ansi.reset;
-  } else if (rawLine.startsWith('+')) {
-    return colors.diffAdd + truncate(rawLine, w) + ansi.reset;
-  } else if (rawLine.startsWith('-')) {
-    return colors.diffDel + truncate(rawLine, w) + ansi.reset;
   } else if (rawLine.startsWith('@@')) {
     return colors.diffHunk + truncate(rawLine, w) + ansi.reset;
   } else if (rawLine.startsWith('diff ') || rawLine.startsWith('index ') || rawLine.startsWith('commit ')) {
@@ -1484,7 +1503,38 @@ function colorizeDiffLine(rawLine, w) {
   } else if (/^\u2500{3,}$/.test(rawLine)) {
     return colors.border + '\u2500'.repeat(w) + ansi.reset;
   }
-  return colors.label + truncate(rawLine, w) + ansi.reset;
+  
+  // Code lines with diff markers
+  const isAdd = rawLine.startsWith('+');
+  const isDel = rawLine.startsWith('-');
+  
+  // Determine background and foreground colors
+  const bgColor = isAdd ? colors.diffAddBg : isDel ? colors.diffDelBg : '';
+  const fgColor = isAdd ? colors.diffAdd : isDel ? colors.diffDel : colors.label;
+  
+  // Extract code content (remove diff marker)
+  const codeContent = rawLine.substring(1);
+  
+  // Try to apply syntax highlighting if we have a file path
+  if (filePath && codeContent.trim()) {
+    const lang = getLanguage(filePath);
+    if (lang) {
+      try {
+        // Highlight the code content
+        const highlighted = highlightCode(codeContent, filePath);
+        // Reconstruct with diff marker, background, and highlighted code
+        const prefix = isAdd ? '+' : isDel ? '-' : ' ';
+        // Apply background to entire line, then add highlighted content
+        // The highlighted content already has foreground colors embedded
+        return bgColor + fgColor + prefix + highlighted + ansi.reset;
+      } catch (e) {
+        // Fall back to basic coloring
+      }
+    }
+  }
+  
+  // Fallback: basic diff coloring with background (no syntax highlighting)
+  return bgColor + fgColor + truncate(rawLine, w) + ansi.reset;
 }
 
 const hintButtons = [];

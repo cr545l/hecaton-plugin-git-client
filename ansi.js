@@ -18,7 +18,7 @@ const colors = {
   title: CSI + '94m',         // bright blue
   label: CSI + '39m',         // default foreground
   value: CSI + '39m',         // default foreground
-  dim: CSI + '2m',             // SGR dim (faint)
+  dim: CSI + '2m',            // SGR dim (faint)
   green: CSI + '32m',         // green
   red: CSI + '31m',           // red
   yellow: CSI + '33m',        // yellow
@@ -28,8 +28,10 @@ const colors = {
   sectionHeader: CSI + '39m', // default foreground
   cursor: CSI + '39m',        // default foreground
   cursorBg: CSI + '100m',     // bright black bg
-  diffAdd: CSI + '32m',       // green
-  diffDel: CSI + '31m',       // red
+  diffAdd: CSI + '32m',       // green text
+  diffDel: CSI + '31m',       // red text
+  diffAddBg: CSI + '48;2;34;78;28m',   // dark green bg (like crush)
+  diffDelBg: CSI + '48;2;90;30;30m',   // dark red bg (like crush)
   diffHunk: CSI + '36m',      // cyan
   diffHeader: CSI + '39m',    // default foreground
   inputBg: CSI + '100m',      // bright black bg
