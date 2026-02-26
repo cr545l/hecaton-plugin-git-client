@@ -28,6 +28,7 @@ const colors = {
   sectionHeader: CSI + '39m', // default foreground
   cursor: CSI + '39m',        // default foreground
   cursorBg: CSI + '100m',     // bright black bg
+  hoverBg: CSI + '48;2;50;50;50m', // dark gray bg (hover)
   diffAdd: CSI + '32m',       // green text
   diffDel: CSI + '31m',       // red text
   diffAddBg: CSI + '48;2;34;78;28m',   // dark green bg (like crush)

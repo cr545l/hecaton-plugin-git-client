@@ -867,7 +867,18 @@ function buildFileListPanel(w, h) {
     ui.scrollPct.files = -1;
   }
   ui.fileLineMap = lineToFileIdx.slice(state.scrollOffset, state.scrollOffset + h);
-  return lines.slice(state.scrollOffset, state.scrollOffset + h);
+  const visibleLines = lines.slice(state.scrollOffset, state.scrollOffset + h);
+
+  // Apply hover highlight to file list
+  const hoverRow = ui.hoveredFileRow;
+  if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.fileLineMap[hoverRow] >= 0) {
+    const orig = visibleLines[hoverRow];
+    // Remove existing background and apply hover
+    const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
+    visibleLines[hoverRow] = colors.hoverBg + padRight(deBg.replace(/\x1b\[0m/g, ansi.reset + colors.hoverBg), innerW) + ansi.reset;
+  }
+
+  return visibleLines;
 }
 
 // ── Right panel (diff mode): diff + commit area ──
@@ -960,10 +971,14 @@ function buildDiffCommitPanel(w, h) {
     }
 
     const commitLabel = '[Commit]';
-    if (state.mode === 'commit' && state.commitMsg.trim().length > 0) {
-      lines.push(' ' + colors.green + ansi.bold + commitLabel + ansi.reset);
+    const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0;
+    const isHovered = ui.hoveredCommitButton;
+    if (canCommit) {
+      const style = isHovered ? colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold;
+      lines.push(' ' + style + commitLabel + ansi.reset);
     } else {
-      lines.push(' ' + colors.dim + commitLabel + ansi.reset);
+      const style = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+      lines.push(' ' + style + commitLabel + ansi.reset);
     }
   }
 
@@ -1069,6 +1084,22 @@ function buildLogPanel(w, h) {
       lines.push(' ' + graphPart);
       graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
+    }
+  }
+
+  // Apply hover highlight to log list
+  const hoverRow = ui.hoveredLogRow;
+  if (hoverRow >= 0 && hoverRow < listH) {
+    const itemIdx = state.logScrollOffset + hoverRow;
+    const item = state.logItems[itemIdx];
+    // Only apply hover to commit items (not graph-only rows) and not to cursor
+    if (item && item.type === 'commit') {
+      const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+      if (!isCursor) {
+        const orig = lines[hoverRow];
+        const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
+        lines[hoverRow] = colors.hoverBg + padRight(deBg.replace(/\x1b\[0m/g, ansi.reset + colors.hoverBg), innerW) + ansi.reset;
+      }
     }
   }
 
@@ -1315,6 +1346,18 @@ function buildFreshPanel(w, h) {
 
     lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
     lineToFileIdx.push(itemIdx);
+  }
+
+  // Apply hover highlight to fresh file list (skip header at row 0)
+  const hoverRow = ui.hoveredFreshRow;
+  if (hoverRow > 0 && hoverRow < lines.length) {
+    const itemIdx = hoverRow > 0 && hoverRow - 1 < visibleItems.length ? state.freshScrollOffset + (hoverRow - 1) : -1;
+    const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+    if (!isCursor) {
+      const orig = lines[hoverRow];
+      const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
+      lines[hoverRow] = colors.hoverBg + padRight(deBg.replace(/\x1b\[0m/g, ansi.reset + colors.hoverBg), innerW) + ansi.reset;
+    }
   }
 
   // Scroll pct

@@ -739,6 +739,42 @@ function handleMouseData(data) {
         }
       }
 
+      // Hover: file list (middle panel)
+      let newFileRowHover = -1;
+      if (state.rightView !== 'log' && state.rightView !== 'fresh' && L.middleW > 0 && inBody) {
+        const inMiddle = cx >= midStart && cx < midStart + L.middleW;
+        if (inMiddle) {
+          const bodyRowIdx = cy - (bodyTop);
+          if (bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+            newFileRowHover = bodyRowIdx;
+          }
+        }
+      }
+
+      // Hover: log list (right panel)
+      let newLogRowHover = -1;
+      if (state.rightView === 'log' && inBody) {
+        const inRight = cx >= rightStart && cx < L.startCol + L.width;
+        if (inRight) {
+          const bodyRowIdx = cy - (bodyTop);
+          if (bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
+            newLogRowHover = bodyRowIdx;
+          }
+        }
+      }
+
+      // Hover: fresh list (right panel)
+      let newFreshRowHover = -1;
+      if (state.rightView === 'fresh' && inBody) {
+        const inRight = cx >= rightStart && cx < L.startCol + L.width;
+        if (inRight) {
+          const bodyRowIdx = cy - (bodyTop);
+          if (bodyRowIdx >= 0 && bodyRowIdx < ui.freshFileLineMap.length && ui.freshFileLineMap[bodyRowIdx] >= 0) {
+            newFreshRowHover = bodyRowIdx;
+          }
+        }
+      }
+
       // Context menu: stash items in left panel
       if (!ui.leftPanelCollapsed && inBody) {
         const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
@@ -789,14 +825,26 @@ function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget) {
+      // Hover: commit button
+      let newCommitButtonHover = false;
+      if (ui.commitButtonZone && state.rightView !== 'log' && state.rightView !== 'fresh') {
+        if (cy === ui.commitButtonZone.row && cx >= ui.commitButtonZone.colStart && cx <= ui.commitButtonZone.colEnd) {
+          newCommitButtonHover = true;
+        }
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
         ui.hoveredFileHeaderIdx = newFileHeaderHover;
         ui.hoveredLeftPanelRow = newLeftPanelHover;
+        ui.hoveredFileRow = newFileRowHover;
+        ui.hoveredLogRow = newLogRowHover;
+        ui.hoveredFreshRow = newFreshRowHover;
         ui.hoveredFreshWindow = newFreshWindowHover;
         ui.hoveredScrollbarTarget = newScrollbarHover;
+        ui.hoveredCommitButton = newCommitButtonHover;
         render();
       }
       continue;

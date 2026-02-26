@@ -83,6 +83,10 @@ const ui = {
   hoveredTitleZoneIndex: -1,
   hoveredFileHeaderIdx: -1,
   hoveredLeftPanelRow: -1,
+  hoveredFileRow: -1,         // hover row in file list (middle panel)
+  hoveredLogRow: -1,          // hover row in log list (right panel)
+  hoveredFreshRow: -1,        // hover row in fresh list (right panel)
+  hoveredCommitButton: false, // hover on [Commit] button
   hoveredDivider: null,
   contextMenuActive: false,
   contextMenuStashRef: null,
