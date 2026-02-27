@@ -415,6 +415,44 @@ function gitPush(cwd) {
   }
 }
 
+// Async helpers for long-running operations (spinner-compatible)
+function gitAsync(args, cwd, opts) {
+  return new Promise((resolve) => {
+    execFile('git', args, {
+      cwd, encoding: 'utf-8', timeout: (opts && opts.timeout) || 30000,
+      env: (opts && opts.env) || process.env,
+    }, (err, _stdout, stderr) => {
+      if (err) resolve(stderr || err.message || 'Operation failed');
+      else resolve(null);
+    });
+  });
+}
+
+function gitFetchAsync(cwd) { return gitAsync(['fetch', '--all', '--prune'], cwd); }
+function gitPullAsync(cwd) { return gitAsync(['pull'], cwd); }
+function gitPushAsync(cwd) { return gitAsync(['push'], cwd); }
+function gitRebaseAsync(cwd, ref) { return gitAsync(['rebase', ref], cwd); }
+function gitRebaseContinueAsync(cwd) { return gitAsync(['rebase', '--continue'], cwd, { env: { ...process.env, GIT_EDITOR: 'true' } }); }
+function gitRebaseAbortAsync(cwd) { return gitAsync(['rebase', '--abort'], cwd); }
+function gitRebaseSkipAsync(cwd) { return gitAsync(['rebase', '--skip'], cwd); }
+function gitMergeAsync(cwd, ref) { return gitAsync(['merge', ref], cwd); }
+function gitResetAsync(cwd, ref) { return gitAsync(['reset', '--hard', ref], cwd); }
+function gitCheckoutRefAsync(cwd, ref) { return gitAsync(['checkout', ref], cwd, { timeout: 10000 }); }
+function gitCherryPickAsync(cwd, ref) { return gitAsync(['cherry-pick', ref], cwd); }
+function gitRevertAsync(cwd, ref) { return gitAsync(['revert', '--no-edit', ref], cwd); }
+function gitStashSaveAsync(cwd) { return gitAsync(['stash', 'push'], cwd, { timeout: 10000 }); }
+function gitStashPopAsync(cwd) { return gitAsync(['stash', 'pop'], cwd, { timeout: 10000 }); }
+function gitStageAsync(cwd, file) {
+  return new Promise((resolve) => {
+    execFile('git', ['add', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
+  });
+}
+function gitUnstageAsync(cwd, file) {
+  return new Promise((resolve) => {
+    execFile('git', ['restore', '--staged', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
+  });
+}
+
 function gitStashSave(cwd) {
   try {
     execFileSync('git', ['stash', 'push'], {
@@ -702,4 +740,9 @@ module.exports = {
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitFreshLog, gitShowCommitFile,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
+  gitFetchAsync, gitPullAsync, gitPushAsync,
+  gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
+  gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitRevertAsync,
+  gitStashSaveAsync, gitStashPopAsync,
+  gitStageAsync, gitUnstageAsync,
 };

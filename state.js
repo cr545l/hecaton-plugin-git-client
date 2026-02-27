@@ -46,6 +46,8 @@ const state = {
   freshTimeWindowMode: false,
   ahead: 0,
   behind: 0,
+  spinnerActive: false,
+  spinnerFrame: 0,
 };
 
 const ui = {

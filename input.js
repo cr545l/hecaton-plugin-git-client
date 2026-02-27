@@ -1,6 +1,11 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitCommit, gitRebase, gitFetch, gitPull, gitPush, gitStashSave, gitUnsetConfigLocal } = require('./git');
+const { gitStage, gitUnstage, gitCommit, gitStashSave, gitUnsetConfigLocal,
+  gitFetchAsync, gitPullAsync, gitPushAsync,
+  gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
+  gitStageAsync, gitUnstageAsync,
+} = require('./git');
+const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refresh, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
@@ -145,20 +150,22 @@ function handleKey(key) {
         : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
       if (targets.length > 0) {
         const total = targets.length;
-        for (let i = 0; i < total; i++) {
-          const item = fileList[targets[i]];
-          if (item && item.type !== 'staged') {
-            gitStage(state.cwd, item.file);
+        startSpinner(`Staging... (0/${total}) 0%`);
+        (async () => {
+          for (let i = 0; i < total; i++) {
+            const item = fileList[targets[i]];
+            if (item && item.type !== 'staged') {
+              await gitStageAsync(state.cwd, item.file);
+            }
+            const pct = Math.round(((i + 1) / total) * 100);
+            state.error = `Staging... (${i + 1}/${total}) ${pct}%`;
           }
-          const pct = Math.round(((i + 1) / total) * 100);
-          state.error = `Staging... (${i + 1}/${total}) ${pct}%`;
+          stopSpinner();
+          state.selectedFiles.clear();
+          refresh();
           render();
-        }
-        state.error = null;
-        state.selectedFiles.clear();
-        refresh();
+        })();
       }
-      render();
       break;
     }
     case 'u': {
@@ -169,20 +176,22 @@ function handleKey(key) {
         : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
       if (targets.length > 0) {
         const total = targets.length;
-        for (let i = 0; i < total; i++) {
-          const item = fileList[targets[i]];
-          if (item && item.type === 'staged') {
-            gitUnstage(state.cwd, item.file);
+        startSpinner(`Unstaging... (0/${total}) 0%`);
+        (async () => {
+          for (let i = 0; i < total; i++) {
+            const item = fileList[targets[i]];
+            if (item && item.type === 'staged') {
+              await gitUnstageAsync(state.cwd, item.file);
+            }
+            const pct = Math.round(((i + 1) / total) * 100);
+            state.error = `Unstaging... (${i + 1}/${total}) ${pct}%`;
           }
-          const pct = Math.round(((i + 1) / total) * 100);
-          state.error = `Unstaging... (${i + 1}/${total}) ${pct}%`;
+          stopSpinner();
+          state.selectedFiles.clear();
+          refresh();
           render();
-        }
-        state.error = null;
-        state.selectedFiles.clear();
-        refresh();
+        })();
       }
-      render();
       break;
     }
     case 'c': {
@@ -256,18 +265,18 @@ function handleKey(key) {
             ],
           });
         } else {
-          state.error = 'Rebasing...';
-          render();
-          const err = gitRebase(state.cwd, logItem.ref);
-          state.error = null;
-          refresh();
-          if (state.rightView === 'log') refreshLog();
-          if (err) {
-            showErrorDialog(err);
-            render();
-          } else {
-            render();
-          }
+          startSpinner('Rebasing...');
+          gitRebaseAsync(state.cwd, logItem.ref).then(err => {
+            stopSpinner();
+            refresh();
+            if (state.rightView === 'log') refreshLog();
+            if (err) {
+              showErrorDialog(err);
+              render();
+            } else {
+              render();
+            }
+          });
         }
       }
       break;
@@ -474,44 +483,38 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'c') {
     state.mode = 'normal';
-    state.error = 'Rebase continue...';
-    render();
-    const err = gitRebaseContinue(state.cwd);
-    state.error = null;
-    refresh();
-    if (state.rightView === 'log') refreshLog();
-    if (err) {
-      showErrorDialog(err);
-    }
-    render();
+    startSpinner('Rebase continue...');
+    gitRebaseContinueAsync(state.cwd).then(err => {
+      stopSpinner();
+      refresh();
+      if (state.rightView === 'log') refreshLog();
+      if (err) showErrorDialog(err);
+      render();
+    });
     return;
   }
   if (key === 'a') {
     state.mode = 'normal';
-    state.error = 'Aborting rebase...';
-    render();
-    const err = gitRebaseAbort(state.cwd);
-    state.error = null;
-    refresh();
-    if (state.rightView === 'log') refreshLog();
-    if (err) {
-      showErrorDialog(err);
-    }
-    render();
+    startSpinner('Aborting rebase...');
+    gitRebaseAbortAsync(state.cwd).then(err => {
+      stopSpinner();
+      refresh();
+      if (state.rightView === 'log') refreshLog();
+      if (err) showErrorDialog(err);
+      render();
+    });
     return;
   }
   if (key === 's') {
     state.mode = 'normal';
-    state.error = 'Rebase skip...';
-    render();
-    const err = gitRebaseSkip(state.cwd);
-    state.error = null;
-    refresh();
-    if (state.rightView === 'log') refreshLog();
-    if (err) {
-      showErrorDialog(err);
-    }
-    render();
+    startSpinner('Rebase skip...');
+    gitRebaseSkipAsync(state.cwd).then(err => {
+      stopSpinner();
+      refresh();
+      if (state.rightView === 'log') refreshLog();
+      if (err) showErrorDialog(err);
+      render();
+    });
     return;
   }
 }
@@ -1045,49 +1048,49 @@ function handleMouseData(data) {
               render();
               handled = true;
             } else if (zone.action === 'git-fetch') {
-              state.error = 'Fetching...';
-              render();
-              const err = gitFetch(state.cwd);
-              if (err) {
-                showErrorDialog(err);
-                render();
-              } else {
-                state.error = null;
-                refresh();
-                if (state.rightView === 'log') refreshLog();
-                if (state.rightView === 'fresh') refreshFresh();
-                render();
-              }
+              startSpinner('Fetching...');
+              gitFetchAsync(state.cwd).then(err => {
+                stopSpinner();
+                if (err) {
+                  showErrorDialog(err);
+                  render();
+                } else {
+                  refresh();
+                  if (state.rightView === 'log') refreshLog();
+                  if (state.rightView === 'fresh') refreshFresh();
+                  render();
+                }
+              });
               handled = true;
             } else if (zone.action === 'git-pull') {
-              state.error = 'Pulling...';
-              render();
-              const err = gitPull(state.cwd);
-              if (err) {
-                showErrorDialog(err);
-                render();
-              } else {
-                state.error = null;
-                refresh();
-                if (state.rightView === 'log') refreshLog();
-                if (state.rightView === 'fresh') refreshFresh();
-                render();
-              }
+              startSpinner('Pulling...');
+              gitPullAsync(state.cwd).then(err => {
+                stopSpinner();
+                if (err) {
+                  showErrorDialog(err);
+                  render();
+                } else {
+                  refresh();
+                  if (state.rightView === 'log') refreshLog();
+                  if (state.rightView === 'fresh') refreshFresh();
+                  render();
+                }
+              });
               handled = true;
             } else if (zone.action === 'git-push') {
-              state.error = 'Pushing...';
-              render();
-              const err = gitPush(state.cwd);
-              if (err) {
-                showErrorDialog(err);
-                render();
-              } else {
-                state.error = null;
-                refresh();
-                if (state.rightView === 'log') refreshLog();
-                if (state.rightView === 'fresh') refreshFresh();
-                render();
-              }
+              startSpinner('Pushing...');
+              gitPushAsync(state.cwd).then(err => {
+                stopSpinner();
+                if (err) {
+                  showErrorDialog(err);
+                  render();
+                } else {
+                  refresh();
+                  if (state.rightView === 'log') refreshLog();
+                  if (state.rightView === 'fresh') refreshFresh();
+                  render();
+                }
+              });
               handled = true;
             } else if (zone.action === 'git-stash') {
               state.pendingStash = true;
@@ -1372,22 +1375,25 @@ function handleMouseData(data) {
                 if (targets.length > 0) {
                   const total = targets.length;
                   const label = zone.action === 'stageSelected' ? 'Staging' : 'Unstaging';
-                  for (let i = 0; i < total; i++) {
-                    const item = fileList[targets[i]];
-                    if (zone.action === 'stageSelected') {
-                      if (item && item.type !== 'staged') gitStage(state.cwd, item.file);
-                    } else if (zone.action === 'unstageSelected') {
-                      if (item && item.type === 'staged') gitUnstage(state.cwd, item.file);
+                  const isStage = zone.action === 'stageSelected';
+                  startSpinner(`${label}... (0/${total}) 0%`);
+                  (async () => {
+                    for (let i = 0; i < total; i++) {
+                      const item = fileList[targets[i]];
+                      if (isStage) {
+                        if (item && item.type !== 'staged') await gitStageAsync(state.cwd, item.file);
+                      } else {
+                        if (item && item.type === 'staged') await gitUnstageAsync(state.cwd, item.file);
+                      }
+                      const pct = Math.round(((i + 1) / total) * 100);
+                      state.error = `${label}... (${i + 1}/${total}) ${pct}%`;
                     }
-                    const pct = Math.round(((i + 1) / total) * 100);
-                    state.error = `${label}... (${i + 1}/${total}) ${pct}%`;
+                    stopSpinner();
+                    state.selectedFiles.clear();
+                    refresh();
                     render();
-                  }
-                  state.error = null;
-                  state.selectedFiles.clear();
-                  refresh();
+                  })();
                 }
-                render();
                 headerHandled = true;
                 break;
               }
@@ -1405,12 +1411,14 @@ function handleMouseData(data) {
               const fileList = buildFileList();
               const item = fileList[fileIdx];
               if (item) {
-                if (item.type === 'staged') {
-                  gitUnstage(state.cwd, item.file);
-                } else {
-                  gitStage(state.cwd, item.file);
-                }
-                refresh();
+                const isUnstage = item.type === 'staged';
+                const msg = isUnstage ? 'Unstaging...' : 'Staging...';
+                startSpinner(msg);
+                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(() => {
+                  stopSpinner();
+                  refresh();
+                  render();
+                });
               }
               ui.lastClickFileIdx = -1;
               ui.lastClickTime = 0;

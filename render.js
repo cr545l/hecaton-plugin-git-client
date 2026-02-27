@@ -395,8 +395,14 @@ function render() {
     windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply' + ansi.reset;
     hintContent = windowHint;
   } else if (state.error) {
-    const msgColor = state.error.endsWith('...') ? colors.yellow : colors.red;
-    hintContent = ' ' + msgColor + state.error + ansi.reset;
+    const isInProgress = state.error.endsWith('...');
+    const msgColor = isInProgress ? colors.yellow : colors.red;
+    if (state.spinnerActive) {
+      const BRAILLE = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+      hintContent = ' ' + msgColor + BRAILLE[state.spinnerFrame % BRAILLE.length] + ' ' + state.error + ansi.reset;
+    } else {
+      hintContent = ' ' + msgColor + state.error + ansi.reset;
+    }
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else {

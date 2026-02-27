@@ -93,8 +93,8 @@ async function main() {
       return;
     }
 
-    // Ignore input while loading
-    if (state.loading) return;
+    // Ignore input while loading or spinner active
+    if (state.loading || state.spinnerActive) return;
 
     // Handle SGR mouse sequences
     const hadMouse = handleMouseData(data);

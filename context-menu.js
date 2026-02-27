@@ -10,9 +10,13 @@ const {
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
   gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
+  gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
+  gitCherryPickAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
+  gitStageAsync, gitUnstageAsync,
 } = require('./git');
 const { refresh, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
+const { startSpinner, stopSpinner } = require('./spinner');
 
 function registerHistoryContextMenu() {
   const branch = state.branch || 'HEAD';
@@ -268,23 +272,27 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_stage':
-        for (const item of fileItems) {
-          if (item && item.type !== 'staged') {
-            gitStage(state.cwd, item.file);
-          }
-        }
         if (fileItems.length > 0) {
-          afterGitOp(null);
+          startSpinner('Staging...');
+          (async () => {
+            for (const item of fileItems) {
+              if (item && item.type !== 'staged') await gitStageAsync(state.cwd, item.file);
+            }
+            stopSpinner();
+            afterGitOp(null);
+          })();
         }
         break;
       case 'file_unstage':
-        for (const item of fileItems) {
-          if (item && item.type === 'staged') {
-            gitUnstage(state.cwd, item.file);
-          }
-        }
         if (fileItems.length > 0) {
-          afterGitOp(null);
+          startSpinner('Unstaging...');
+          (async () => {
+            for (const item of fileItems) {
+              if (item && item.type === 'staged') await gitUnstageAsync(state.cwd, item.file);
+            }
+            stopSpinner();
+            afterGitOp(null);
+          })();
         }
         break;
       case 'file_discard': {
@@ -452,10 +460,8 @@ function handleContextMenuAction(actionId) {
       state.pendingDialogTarget = hash;
       break;
     case 'merge': {
-      state.error = 'Merging...';
-      render();
-      const err = gitMerge(state.cwd, hash);
-      afterGitOp(err, 'Merge');
+      startSpinner('Merging...');
+      gitMergeAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Merge'); });
       break;
     }
     case 'rebase': {
@@ -471,47 +477,42 @@ function handleContextMenuAction(actionId) {
           ],
         });
       } else {
-        state.error = 'Rebasing...';
-        render();
-        const err = gitRebase(state.cwd, hash);
-        state.error = null;
-        refresh();
-        if (state.rightView === 'log') refreshLog();
-        if (err) {
-          showError(err);
-        } else {
-          render();
-        }
+        startSpinner('Rebasing...');
+        gitRebaseAsync(state.cwd, hash).then(err => {
+          stopSpinner();
+          refresh();
+          if (state.rightView === 'log') refreshLog();
+          if (err) {
+            showError(err);
+          } else {
+            render();
+          }
+        });
       }
       break;
     }
     case 'reset': {
-      state.error = 'Resetting...';
-      render();
-      const err = gitReset(state.cwd, hash);
-      afterGitOp(err, 'Reset');
+      startSpinner('Resetting...');
+      gitResetAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Reset'); });
       break;
     }
     case 'checkout': {
-      state.error = 'Checking out...';
-      render();
-      const err = gitCheckoutRef(state.cwd, hash);
-      afterGitOp(err, 'Checkout');
-      if (!err) registerHistoryContextMenu();
+      startSpinner('Checking out...');
+      gitCheckoutRefAsync(state.cwd, hash).then(err => {
+        stopSpinner();
+        afterGitOp(err, 'Checkout');
+        if (!err) registerHistoryContextMenu();
+      });
       break;
     }
     case 'cherry_pick': {
-      state.error = 'Cherry-picking...';
-      render();
-      const err = gitCherryPick(state.cwd, hash);
-      afterGitOp(err, 'Cherry-pick');
+      startSpinner('Cherry-picking...');
+      gitCherryPickAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Cherry-pick'); });
       break;
     }
     case 'revert': {
-      state.error = 'Reverting...';
-      render();
-      const err = gitRevert(state.cwd, hash);
-      afterGitOp(err, 'Revert');
+      startSpinner('Reverting...');
+      gitRevertAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Revert'); });
       break;
     }
     case 'save_patch': {
@@ -626,16 +627,16 @@ function handleDialogResult(params) {
   }
   if (state.pendingStash && buttonId === 'stash_confirm') {
     state.pendingStash = false;
-    state.error = 'Stashing...';
-    render();
-    const stashErr = gitStashSave(state.cwd);
-    state.error = null;
-    if (stashErr) {
-      showError('Stash failed:\n' + stashErr);
-    } else {
-      refresh();
-      render();
-    }
+    startSpinner('Stashing...');
+    gitStashSaveAsync(state.cwd).then(stashErr => {
+      stopSpinner();
+      if (stashErr) {
+        showError('Stash failed:\n' + stashErr);
+      } else {
+        refresh();
+        render();
+      }
+    });
     return;
   }
   if (state.pendingStash) {
@@ -645,41 +646,36 @@ function handleDialogResult(params) {
   if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
-
-    state.error = 'Stash & Rebase... (1/3) Stashing';
-    render();
-    const stashErr = gitStashSave(state.cwd);
-    if (stashErr) {
-      state.error = null;
-      showError('Stash failed:\n' + stashErr);
-      return;
-    }
-
-    state.error = 'Stash & Rebase... (2/3) Rebasing';
-    render();
-    const rebaseErr = gitRebase(state.cwd, ref);
-    if (rebaseErr) {
+    (async () => {
+      startSpinner('Stash & Rebase... (1/3) Stashing');
+      const stashErr = await gitStashSaveAsync(state.cwd);
+      if (stashErr) {
+        stopSpinner();
+        showError('Stash failed:\n' + stashErr);
+        return;
+      }
+      state.error = 'Stash & Rebase... (2/3) Rebasing';
+      const rebaseErr = await gitRebaseAsync(state.cwd, ref);
+      if (rebaseErr) {
+        state.error = 'Stash & Rebase... (3/3) Restoring stash';
+        await gitStashPopAsync(state.cwd);
+        stopSpinner();
+        refresh();
+        if (state.rightView === 'log') refreshLog();
+        showError('Rebase failed:\n' + rebaseErr);
+        return;
+      }
       state.error = 'Stash & Rebase... (3/3) Restoring stash';
-      render();
-      gitStashPop(state.cwd);
-      state.error = null;
+      const popErr = await gitStashPopAsync(state.cwd);
+      stopSpinner();
       refresh();
       if (state.rightView === 'log') refreshLog();
-      showError('Rebase failed:\n' + rebaseErr);
-      return;
-    }
-
-    state.error = 'Stash & Rebase... (3/3) Restoring stash';
-    render();
-    const popErr = gitStashPop(state.cwd);
-    state.error = null;
-    refresh();
-    if (state.rightView === 'log') refreshLog();
-    if (popErr) {
-      showError('Rebase succeeded, but stash pop failed:\n' + popErr);
-    } else {
-      render();
-    }
+      if (popErr) {
+        showError('Rebase succeeded, but stash pop failed:\n' + popErr);
+      } else {
+        render();
+      }
+    })();
   } else {
     state.pendingRebaseRef = null;
   }
