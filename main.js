@@ -76,8 +76,7 @@ async function main() {
           }
           if (json.method === 'restore') {
             state.minimized = false;
-            refresh();
-            render();
+            refreshAsync().then(() => render());
           }
           if (json.method === 'maximize') {
             // Host handles sizing; plugin just re-renders on resize
@@ -142,10 +141,10 @@ function setupGitWatcher() {
 
   function triggerRefresh() {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
+    debounceTimer = setTimeout(async () => {
       if (state.loading || state.minimized) return;
       if (state.mode !== 'normal') return;
-      refresh();
+      await refreshAsync();
       if (state.rightView === 'log') refreshLog();
       if (state.rightView === 'fresh') refreshFresh();
       render();
