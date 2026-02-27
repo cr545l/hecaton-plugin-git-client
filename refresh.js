@@ -11,9 +11,9 @@ const FRESH_TIME_WINDOWS = [
 ];
 const { calcGraphRows } = require('./graph');
 const { sendRpcNotify } = require('./rpc');
+const { acquireSpinner, releaseSpinner } = require('./spinner');
 
 let refreshCount = 0;
-let refreshTimer = null;
 
 function buildFileList() {
   const list = [];
@@ -82,13 +82,7 @@ async function refreshAsync() {
 
   refreshCount++;
   if (refreshCount === 1) {
-    state.refreshing = true;
-    state.refreshFrame = 0;
-    refreshTimer = setInterval(() => {
-      state.refreshFrame = (state.refreshFrame + 1) % 10;
-      const { render } = require('./render');
-      render();
-    }, 80);
+    acquireSpinner();
   }
 
   try {
@@ -192,9 +186,7 @@ async function refreshAsync() {
   } finally {
     refreshCount--;
     if (refreshCount === 0) {
-      state.refreshing = false;
-      state.refreshFrame = 0;
-      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+      releaseSpinner();
     }
   }
 }

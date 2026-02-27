@@ -197,17 +197,11 @@ function render() {
       }
     }
 
-    // === Refresh indicator + Right side: panel toggle buttons (right-aligned) ===
-    const BRAILLE_R = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    const refreshW = state.refreshing ? 2 : 0; // spinner char + space
-    const rightStartCol = startCol + width - rightTotalW - refreshW;
+    // === Right side: panel toggle buttons (right-aligned) ===
+    const rightStartCol = startCol + width - rightTotalW;
     const gap = Math.max(0, rightStartCol - col1);
     row1 += ' '.repeat(gap);
     col1 += gap;
-    if (state.refreshing) {
-      row1 += colors.dim + BRAILLE_R[state.refreshFrame % BRAILLE_R.length] + ' ' + ansi.reset;
-      col1 += refreshW;
-    }
 
     for (const p of rightParts) {
       const si = zoneIdx++;

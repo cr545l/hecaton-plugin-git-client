@@ -3,28 +3,59 @@ const { state } = require('./state');
 const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 let spinnerTimer = null;
+let refCount = 0;
+
+function acquireSpinner() {
+  refCount++;
+  if (refCount === 1) {
+    state.spinnerFrame = 0;
+    updateTitle();
+    spinnerTimer = setInterval(() => {
+      state.spinnerFrame = (state.spinnerFrame + 1) % BRAILLE_FRAMES.length;
+      updateTitle();
+      const { render } = require('./render');
+      render();
+    }, 80);
+  }
+}
+
+function releaseSpinner() {
+  refCount--;
+  if (refCount <= 0) {
+    refCount = 0;
+    state.spinnerFrame = 0;
+    if (spinnerTimer) {
+      clearInterval(spinnerTimer);
+      spinnerTimer = null;
+    }
+    updateTitle();
+  }
+}
+
+function updateTitle() {
+  const { sendRpcNotify } = require('./rpc');
+  if (!state.branch) return;
+  if (refCount > 0) {
+    sendRpcNotify('set_title', { title: state.branch + ' ' + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] });
+  } else {
+    sendRpcNotify('set_title', { title: state.branch });
+  }
+}
+
+function isSpinning() {
+  return refCount > 0;
+}
 
 function startSpinner(msg) {
   state.spinnerActive = true;
-  state.spinnerFrame = 0;
   state.error = msg;
-  const { render } = require('./render');
-  render();
-  spinnerTimer = setInterval(() => {
-    state.spinnerFrame = (state.spinnerFrame + 1) % BRAILLE_FRAMES.length;
-    const { render } = require('./render');
-    render();
-  }, 80);
+  acquireSpinner();
 }
 
 function stopSpinner() {
   state.spinnerActive = false;
-  state.spinnerFrame = 0;
   state.error = null;
-  if (spinnerTimer) {
-    clearInterval(spinnerTimer);
-    spinnerTimer = null;
-  }
+  releaseSpinner();
 }
 
-module.exports = { BRAILLE_FRAMES, startSpinner, stopSpinner };
+module.exports = { BRAILLE_FRAMES, startSpinner, stopSpinner, acquireSpinner, releaseSpinner, isSpinning };
