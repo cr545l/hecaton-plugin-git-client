@@ -14,7 +14,7 @@ const {
   gitCherryPickAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync,
 } = require('./git');
-const { refresh, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
+const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
@@ -166,16 +166,17 @@ function unregisterContextMenu() {
 function handleContextMenuAction(actionId) {
   // Tab context menu actions
   if (actionId === 'tab_refresh') {
-    refresh();
-    if (state.rightView === 'log') {
-      refreshLog();
-      updateLogDetail();
-    }
-    if (state.rightView === 'fresh') {
-      refreshFresh();
-      updateFreshDetail();
-    }
-    render();
+    refreshAsync().then(() => {
+      if (state.rightView === 'log') {
+        refreshLog();
+        updateLogDetail();
+      }
+      if (state.rightView === 'fresh') {
+        refreshFresh();
+        updateFreshDetail();
+      }
+      render();
+    });
     return;
   }
 
@@ -279,7 +280,7 @@ function handleContextMenuAction(actionId) {
               if (item && item.type !== 'staged') await gitStageAsync(state.cwd, item.file);
             }
             stopSpinner();
-            afterGitOp(null);
+            await afterGitOp(null);
           })();
         }
         break;
@@ -291,7 +292,7 @@ function handleContextMenuAction(actionId) {
               if (item && item.type === 'staged') await gitUnstageAsync(state.cwd, item.file);
             }
             stopSpinner();
-            afterGitOp(null);
+            await afterGitOp(null);
           })();
         }
         break;
@@ -461,7 +462,7 @@ function handleContextMenuAction(actionId) {
       break;
     case 'merge': {
       startSpinner('Merging...');
-      gitMergeAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Merge'); });
+      gitMergeAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Merge'); });
       break;
     }
     case 'rebase': {
@@ -478,9 +479,9 @@ function handleContextMenuAction(actionId) {
         });
       } else {
         startSpinner('Rebasing...');
-        gitRebaseAsync(state.cwd, hash).then(err => {
+        gitRebaseAsync(state.cwd, hash).then(async err => {
           stopSpinner();
-          refresh();
+          await refreshAsync();
           if (state.rightView === 'log') refreshLog();
           if (err) {
             showError(err);
@@ -493,26 +494,26 @@ function handleContextMenuAction(actionId) {
     }
     case 'reset': {
       startSpinner('Resetting...');
-      gitResetAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Reset'); });
+      gitResetAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Reset'); });
       break;
     }
     case 'checkout': {
       startSpinner('Checking out...');
-      gitCheckoutRefAsync(state.cwd, hash).then(err => {
+      gitCheckoutRefAsync(state.cwd, hash).then(async err => {
         stopSpinner();
-        afterGitOp(err, 'Checkout');
+        await afterGitOp(err, 'Checkout');
         if (!err) registerHistoryContextMenu();
       });
       break;
     }
     case 'cherry_pick': {
       startSpinner('Cherry-picking...');
-      gitCherryPickAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Cherry-pick'); });
+      gitCherryPickAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Cherry-pick'); });
       break;
     }
     case 'revert': {
       startSpinner('Reverting...');
-      gitRevertAsync(state.cwd, hash).then(err => { stopSpinner(); afterGitOp(err, 'Revert'); });
+      gitRevertAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Revert'); });
       break;
     }
     case 'save_patch': {
@@ -594,13 +595,14 @@ function handleDialogResult(params) {
     } else {
       return;
     }
-    refresh();
-    if (state.rightView === 'log') refreshLog();
-    if (err) {
-      showError(err);
-    } else {
-      render();
-    }
+    refreshAsync().then(() => {
+      if (state.rightView === 'log') refreshLog();
+      if (err) {
+        showError(err);
+      } else {
+        render();
+      }
+    });
     return;
   }
 
@@ -615,8 +617,7 @@ function handleDialogResult(params) {
       if (err) {
         showError('Set ' + field + ' failed:\n' + err);
       } else {
-        refresh();
-        render();
+        refreshAsync().then(() => render());
       }
     }
     return;
@@ -628,12 +629,12 @@ function handleDialogResult(params) {
   if (state.pendingStash && buttonId === 'stash_confirm') {
     state.pendingStash = false;
     startSpinner('Stashing...');
-    gitStashSaveAsync(state.cwd).then(stashErr => {
+    gitStashSaveAsync(state.cwd).then(async stashErr => {
       stopSpinner();
       if (stashErr) {
         showError('Stash failed:\n' + stashErr);
       } else {
-        refresh();
+        await refreshAsync();
         render();
       }
     });
@@ -660,7 +661,7 @@ function handleDialogResult(params) {
         state.error = 'Stash & Rebase... (3/3) Restoring stash';
         await gitStashPopAsync(state.cwd);
         stopSpinner();
-        refresh();
+        await refreshAsync();
         if (state.rightView === 'log') refreshLog();
         showError('Rebase failed:\n' + rebaseErr);
         return;
@@ -668,7 +669,7 @@ function handleDialogResult(params) {
       state.error = 'Stash & Rebase... (3/3) Restoring stash';
       const popErr = await gitStashPopAsync(state.cwd);
       stopSpinner();
-      refresh();
+      await refreshAsync();
       if (state.rightView === 'log') refreshLog();
       if (popErr) {
         showError('Rebase succeeded, but stash pop failed:\n' + popErr);
@@ -681,9 +682,9 @@ function handleDialogResult(params) {
   }
 }
 
-function afterGitOp(err, opName) {
+async function afterGitOp(err, opName) {
   state.error = null;
-  refresh();
+  await refreshAsync();
   if (state.rightView === 'log') refreshLog();
   if (err) {
     showError(opName + ' failed:\n' + err);

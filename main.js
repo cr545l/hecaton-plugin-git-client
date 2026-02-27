@@ -22,7 +22,7 @@
 const { state, ui } = require('./state');
 const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
-const { refresh, refreshAsync, refreshLog, refreshFresh } = require('./refresh');
+const { refreshAsync, refreshLog, refreshFresh } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
