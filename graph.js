@@ -108,6 +108,15 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     }
   }
 
+  // Compute naturalWidth for each row (last non-space char position + 1)
+  for (const row of rows) {
+    let nw = 1;
+    for (let i = row.chars.length - 1; i >= 0; i--) {
+      if (row.chars[i] !== ' ') { nw = i + 1; break; }
+    }
+    row.naturalWidth = nw;
+  }
+
   // Post-process: align all rows to same width
   const graphWidth = maxLanes;
   for (let idx = 0; idx < rows.length; idx++) {
@@ -183,4 +192,4 @@ function renderGraphCharsFixed(chars, charColors, width) {
   return result;
 }
 
-module.exports = { calcGraphRows };
+module.exports = { calcGraphRows, renderGraphCharsFixed };

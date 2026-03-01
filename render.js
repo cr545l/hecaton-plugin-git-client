@@ -5,6 +5,7 @@ const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
+const { renderGraphCharsFixed } = require('./graph');
 
 function render() {
   if (state.minimized) {
@@ -1040,6 +1041,15 @@ function buildLogPanel(w, h) {
 
   // -- Item list --
   const visibleItems = state.logItems.slice(state.logScrollOffset, state.logScrollOffset + listH);
+
+  // Compute max natural width among visible rows (trim trailing empty lanes)
+  let maxNaturalWidth = 1;
+  for (const item of visibleItems) {
+    if (item && item.naturalWidth && item.naturalWidth > maxNaturalWidth) {
+      maxNaturalWidth = item.naturalWidth;
+    }
+  }
+
   const graphRows = [];
   let graphWidth = 0;
   for (let i = 0; i < listH; i++) {
@@ -1051,10 +1061,10 @@ function buildLogPanel(w, h) {
 
     if (item.type === 'commit') {
       const prefix = ' ';
-      const graphVisLen = visLen(item.graphStr);
+      const graphVisLen = maxNaturalWidth;
       const graphPart = SIXEL_ENABLED
         ? ' '.repeat(graphVisLen) + ' '
-        : item.graphStr + ' ';
+        : renderGraphCharsFixed(item.chars, item.charColors, maxNaturalWidth) + ' ';
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
       const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
@@ -1093,7 +1103,9 @@ function buildLogPanel(w, h) {
       graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
     } else {
-      const graphPart = SIXEL_ENABLED ? ' '.repeat(visLen(item.graphStr)) : item.graphStr;
+      const graphPart = SIXEL_ENABLED
+        ? ' '.repeat(maxNaturalWidth)
+        : renderGraphCharsFixed(item.chars, item.charColors, maxNaturalWidth);
       lines.push(' ' + graphPart);
       graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
@@ -1117,14 +1129,14 @@ function buildLogPanel(w, h) {
   }
 
   // Sixel
-  if (SIXEL_ENABLED && graphRows.length > 0 && graphWidth > 0) {
+  if (SIXEL_ENABLED && graphRows.length > 0 && maxNaturalWidth > 0) {
     const prevItem = state.logScrollOffset > 0 ? state.logItems[state.logScrollOffset - 1] : null;
     const nextItem = state.logScrollOffset + listH < state.logItems.length ? state.logItems[state.logScrollOffset + listH] : null;
     const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
     const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
-    const pixBuf = renderCombinedGraphPixels(graphRows, graphWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
+    const pixBuf = renderCombinedGraphPixels(graphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
     if (pixBuf) {
-      ui.logSixelOverlay = encodeSixel(pixBuf, graphWidth * ui.cellW, graphRows.length * ui.cellH, SIXEL_PALETTE);
+      ui.logSixelOverlay = encodeSixel(pixBuf, maxNaturalWidth * ui.cellW, graphRows.length * ui.cellH, SIXEL_PALETTE);
     }
   }
 
