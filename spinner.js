@@ -35,11 +35,7 @@ function releaseSpinner() {
 function updateTitle() {
   const { sendRpcNotify } = require('./rpc');
   if (!state.branch) return;
-  if (refCount > 0) {
-    sendRpcNotify('set_title', { title: state.branch + ' ' + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] });
-  } else {
-    sendRpcNotify('set_title', { title: state.branch });
-  }
+  sendRpcNotify('set_title', { title: state.branch });
 }
 
 function isSpinning() {

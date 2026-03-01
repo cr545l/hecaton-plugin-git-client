@@ -4,6 +4,7 @@ const { visLen, padRight, truncate, viewport } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
+const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 
 function render() {
   if (state.minimized) {
@@ -408,7 +409,13 @@ function render() {
   } else {
     hintContent = ' ' + buildHintText();
   }
-  buf.push(ansi.moveTo(hintRow, startCol) + padRight(hintContent, width));
+  if (isSpinning()) {
+    const spinnerPart = colors.dim + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ansi.reset;
+    const gap = Math.max(0, width - visLen(hintContent) - 1);
+    buf.push(ansi.moveTo(hintRow, startCol) + hintContent + ' '.repeat(gap) + spinnerPart);
+  } else {
+    buf.push(ansi.moveTo(hintRow, startCol) + padRight(hintContent, width));
+  }
 
   // Append Sixel overlay (for log graph)
   if (SIXEL_ENABLED && ui.logSixelOverlay && state.rightView === 'log') {
