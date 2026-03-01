@@ -213,7 +213,7 @@ function refreshLog() {
     stashFullHashes.add(s.hash);
   }
 
-  const rawCommits = gitLogCommits(state.cwd, stashHashes);
+  const rawCommits = gitLogCommits(state.cwd, stashHashes, 2000);
 
   // Filter stash sub-commits (index, untracked) to keep graph clean.
   const stashSubHashes = new Set();
