@@ -46,6 +46,27 @@ function clampCursor() {
   else state.cursor = Math.min(state.cursor, list.length - 1);
 }
 
+function remapSelectedFiles() {
+  if (state.selectedFiles.size === 0) return;
+  const oldList = state._prevFileList || [];
+  const selectedPaths = new Set();
+  for (const idx of state.selectedFiles) {
+    if (idx < oldList.length) {
+      const item = oldList[idx];
+      selectedPaths.add(item.type + ':' + item.file);
+    }
+  }
+  state.selectedFiles.clear();
+  if (selectedPaths.size > 0) {
+    const newList = buildFileList();
+    for (let i = 0; i < newList.length; i++) {
+      if (selectedPaths.has(newList[i].type + ':' + newList[i].file)) {
+        state.selectedFiles.add(i);
+      }
+    }
+  }
+}
+
 function refresh() {
   if (!state.cwd) return;
   state.isGitRepo = gitIsRepo(state.cwd);
@@ -74,12 +95,13 @@ function refresh() {
   const ab = gitAheadBehind(state.cwd);
   state.ahead = ab.ahead;
   state.behind = ab.behind;
+  state._prevFileList = buildFileList();
   const status = gitStatus(state.cwd);
   state.staged = status.staged;
   state.unstaged = status.unstaged;
   state.untracked = status.untracked;
   state.ignored = status.ignored;
-  state.selectedFiles.clear();
+  remapSelectedFiles();
   clampCursor();
   updateDiff();
 }
@@ -136,6 +158,7 @@ async function refreshAsync() {
       if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
     }
   }
+  state._prevFileList = buildFileList();
   state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
 
   // stashes
@@ -187,7 +210,7 @@ async function refreshAsync() {
   state.behind = parseInt(abParts[0]) || 0;
   state.ahead = parseInt(abParts[1]) || 0;
 
-  state.selectedFiles.clear();
+  remapSelectedFiles();
   clampCursor();
   updateDiff();
 
