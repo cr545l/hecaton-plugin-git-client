@@ -54,6 +54,10 @@ async function main() {
           // RPC response
           if (json.id != null && (json.result || json.error)) {
             handleRpcResponse(json);
+            // Dialog results may arrive as RPC responses to show_dialog
+            if (json.result && json.result.buttonId != null) {
+              handleDialogResult(json.result);
+            }
             continue;
           }
 
