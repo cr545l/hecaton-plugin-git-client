@@ -94,9 +94,11 @@ function render() {
 
       const localIdx = zoneIdx++;
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
+      const localHighlight = totalChanges > 0;
+      const localColor = localHighlight ? colors.orange + ansi.bold : colors.cyan;
       const localStyle = localIdx === ui.hoveredTitleZoneIndex
         ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-        : isLocal ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
+        : isLocal ? colors.cursorBg + localColor : localColor;
       row1 += localStyle + localLabel + ansi.reset;
       col1 += visLen(localLabel);
 
@@ -139,7 +141,7 @@ function render() {
           || (btn.action === 'git-push' && state.ahead > 0);
         const style = si === ui.hoveredTitleZoneIndex
           ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-          : hasCount ? colors.cyan + ansi.bold : colors.dim;
+          : hasCount ? colors.orange + ansi.bold : colors.dim;
         row1 += style + label + ansi.reset;
         col1 += visLen(label);
       }
