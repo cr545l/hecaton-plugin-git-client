@@ -853,6 +853,30 @@ function buildFileListPanel(w, h) {
     listIdx++;
   }
 
+  // Ignored
+  if (state.ignored.length > 0) {
+    const ignoredCollapsed = ui.collapsedSections.ignored !== false; // default collapsed
+    const arrow = ignoredCollapsed ? '+' : '-';
+    const headerLabel = ' ' + arrow + '  Ignored (' + state.ignored.length + ')';
+    const zoneIdx = ui.fileHeaderZones.length;
+    const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
+    const headerStyle = isHovered ? colors.dim + ansi.bold + CSI + '4m' : colors.dim;
+    const headerLine = headerStyle + headerLabel + ansi.reset;
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: 0, btnColEnd: visLen(headerLabel), action: 'toggleIgnored' });
+    pushFileLine(headerLine, -1);
+    if (!ignoredCollapsed) {
+      for (let i = 0; i < state.ignored.length; i++) {
+        const item = state.ignored[i];
+        const isCursor = state.cursor === listIdx;
+        if (isCursor) cursorLineIdx = lines.length;
+        const bgColor = isCursor && focused ? colors.cursorBg : '';
+        const line = '   ' + colors.dim + '!' + ansi.reset + (bgColor || '') + ' ' + colors.dim + truncate(item.file, innerW - 6) + ansi.reset;
+        pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
+        listIdx++;
+      }
+    }
+  }
+
   if (buildFileList().length === 0) {
     pushFileLine(colors.dim + ' Working tree clean' + ansi.reset, -1);
   }

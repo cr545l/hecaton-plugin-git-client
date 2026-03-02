@@ -1369,6 +1369,12 @@ function handleMouseData(data) {
               const btnScreenColStart = midStart + zone.btnColStart;
               const btnScreenColEnd = midStart + zone.btnColEnd;
               if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {
+                if (zone.action === 'toggleIgnored') {
+                  ui.collapsedSections.ignored = ui.collapsedSections.ignored === false ? true : false;
+                  render();
+                  headerHandled = true;
+                  break;
+                }
                 const fileList = buildFileList();
                 const targets = state.selectedFiles.size > 0
                   ? Array.from(state.selectedFiles).sort((a, b) => a - b)

@@ -24,6 +24,24 @@ function git(args, cwd) {
   }
 }
 
+function unquoteGitPath(p) {
+  if (p.length >= 2 && p[0] === '"' && p[p.length - 1] === '"') {
+    return p.slice(1, -1).replace(/\\([ntab\\""])|\\([0-7]{1,3})/g, (_, esc, oct) => {
+      if (oct) return String.fromCharCode(parseInt(oct, 8));
+      switch (esc) {
+        case 'n': return '\n';
+        case 't': return '\t';
+        case 'a': return '\x07';
+        case 'b': return '\b';
+        case '\\': return '\\';
+        case '"': return '"';
+        default: return esc;
+      }
+    });
+  }
+  return p;
+}
+
 function gitIsRepo(cwd) {
   try {
     git(['rev-parse', '--is-inside-work-tree'], cwd);
@@ -45,14 +63,17 @@ function gitStatus(cwd) {
   const staged = [];
   const unstaged = [];
   const untracked = [];
+  const ignored = [];
   try {
-    const output = git(['status', '--porcelain=v1', '-uall'], cwd);
+    const output = git(['status', '--porcelain=v1', '-uall', '--ignored'], cwd);
     for (const line of output.split('\n')) {
       if (!line) continue;
       const x = line[0]; // index status
       const y = line[1]; // worktree status
-      const file = line.substring(3);
-      if (x === '?') {
+      const file = unquoteGitPath(line.substring(3));
+      if (x === '!' && y === '!') {
+        ignored.push({ file });
+      } else if (x === '?') {
         untracked.push({ file });
       } else {
         if (x !== ' ' && x !== '?') {
@@ -64,7 +85,7 @@ function gitStatus(cwd) {
       }
     }
   } catch { /* empty */ }
-  return { staged, unstaged, untracked };
+  return { staged, unstaged, untracked, ignored };
 }
 
 function gitDiff(cwd, file, isStaged) {
@@ -88,7 +109,7 @@ function gitDiffUntracked(cwd, file) {
 
 function gitStage(cwd, file) {
   try {
-    git(['add', '--', file], cwd);
+    git(['add', '-f', '--', file], cwd);
     return true;
   } catch {
     return false;
@@ -106,7 +127,7 @@ function gitUnstage(cwd, file) {
 
 function gitStageAll(cwd) {
   try {
-    git(['add', '-A'], cwd);
+    git(['add', '-f', '-A'], cwd);
     return true;
   } catch {
     return false;
@@ -444,7 +465,7 @@ function gitStashSaveAsync(cwd) { return gitAsync(['stash', 'push'], cwd, { time
 function gitStashPopAsync(cwd) { return gitAsync(['stash', 'pop'], cwd, { timeout: 10000 }); }
 function gitStageAsync(cwd, file) {
   return new Promise((resolve) => {
-    execFile('git', ['add', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
+    execFile('git', ['add', '-f', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
   });
 }
 function gitUnstageAsync(cwd, file) {
@@ -727,6 +748,7 @@ function gitFilePatch(cwd, item) {
 module.exports = {
   git,
   gitExec,
+  unquoteGitPath,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,

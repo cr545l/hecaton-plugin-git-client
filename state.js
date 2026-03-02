@@ -5,6 +5,7 @@ const state = {
   staged: [],
   unstaged: [],
   untracked: [],
+  ignored: [],
   cursor: 0,
   scrollOffset: 0,
   focusPanel: 'status',  // 'status' | 'diff'

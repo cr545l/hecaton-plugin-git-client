@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
+const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -26,6 +26,11 @@ function buildFileList() {
   for (let i = 0; i < state.staged.length; i++) {
     list.push({ type: 'staged', index: i, status: state.staged[i].status, file: state.staged[i].file });
   }
+  if (ui.collapsedSections.ignored === false) {
+    for (let i = 0; i < state.ignored.length; i++) {
+      list.push({ type: 'ignored', index: i, status: '!', file: state.ignored[i].file });
+    }
+  }
   return list;
 }
 
@@ -50,6 +55,7 @@ function refresh() {
     state.staged = [];
     state.unstaged = [];
     state.untracked = [];
+    state.ignored = [];
     state.diffLines = [];
     state.currentDiffFile = null;
     return;
@@ -72,6 +78,7 @@ function refresh() {
   state.staged = status.staged;
   state.unstaged = status.unstaged;
   state.untracked = status.untracked;
+  state.ignored = status.ignored;
   state.selectedFiles.clear();
   clampCursor();
   updateDiff();
@@ -91,7 +98,7 @@ async function refreshAsync() {
     await Promise.all([
       gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
       gitExec(['branch', '--show-current'], state.cwd),
-      gitExec(['status', '--porcelain=v1', '-uall'], state.cwd),
+      gitExec(['status', '--porcelain=v1', '-uall', '--ignored'], state.cwd),
       gitExec(['stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
       gitExec(['branch', '--format=%(refname:short)\t%(HEAD)'], state.cwd),
       gitExec(['branch', '-r', '--format=%(refname:short)'], state.cwd),
@@ -107,7 +114,7 @@ async function refreshAsync() {
   if (isRepoRaw.trim() !== 'true') {
     state.isGitRepo = false;
     state.error = 'Not a git repository: ' + state.cwd;
-    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.diffLines = []; state.currentDiffFile = null;
+    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
     return;
   }
   state.isGitRepo = true;
@@ -118,17 +125,18 @@ async function refreshAsync() {
   sendRpcNotify('set_title', { title: state.branch });
 
   // status — gitStatus()와 동일한 파싱 로직
-  const staged = [], unstaged = [], untracked = [];
+  const staged = [], unstaged = [], untracked = [], ignored = [];
   for (const line of statusRaw.split('\n')) {
     if (!line) continue;
-    const x = line[0], y = line[1], file = line.substring(3);
-    if (x === '?') { untracked.push({ file }); }
+    const x = line[0], y = line[1], file = unquoteGitPath(line.substring(3));
+    if (x === '!' && y === '!') { ignored.push({ file }); }
+    else if (x === '?') { untracked.push({ file }); }
     else {
       if (x !== ' ' && x !== '?') staged.push({ status: x, file });
       if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
     }
   }
-  state.staged = staged; state.unstaged = unstaged; state.untracked = untracked;
+  state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
 
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
