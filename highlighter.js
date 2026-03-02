@@ -144,6 +144,18 @@ function getAnsiForClass(className) {
 }
 
 /**
+ * Decode HTML entities that highlight.js encodes
+ */
+function decodeHtmlEntities(str) {
+  return str
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
  * Custom formatter that outputs ANSI instead of HTML
  * IMPORTANT: Does NOT reset colors to preserve background colors set by caller
  * Only changes foreground color, never resets to default
@@ -162,7 +174,7 @@ function formatToAnsi(result) {
   while ((match = spanRegex.exec(value)) !== null) {
     if (match[3] !== undefined) {
       // Plain text - don't reset, just output as-is
-      output += match[3];
+      output += decodeHtmlEntities(match[3]);
     } else {
       // Styled span
       const className = match[1];
@@ -175,7 +187,7 @@ function formatToAnsi(result) {
         }
         currentColor = color;
       }
-      output += text;
+      output += decodeHtmlEntities(text);
     }
   }
 
