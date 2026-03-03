@@ -1208,10 +1208,36 @@ function buildLogPanel(w, h) {
       for (let i = 1; i < detailH; i++) lines.push('');
     } else {
       const refsRaw = selItem && selItem.decoration ? selItem.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
-      if (refsRaw) {
-        lines.push(colors.cyan + ' \u2387 ' + truncate(refsRaw, innerW - 4) + ansi.reset);
+      // Collapse/Expand All button
+      const allDetailFiles = [];
+      for (const entry of filteredDetail) {
+        if (entry.isFileHeader) allDetailFiles.push(entry.file);
+      }
+      const hasFiles = allDetailFiles.length > 0;
+      const allCollapsed = hasFiles && allDetailFiles.every(f => ui.collapsedDetailFiles.has(f));
+      const collapseLabel = hasFiles ? (allCollapsed ? ' Expand All ' : ' Collapse All ') : '';
+      const collapseLabelLen = visLen(collapseLabel);
+      if (hasFiles) {
+        const refsMaxW = innerW - collapseLabelLen - 1;
+        let refsLine;
+        if (refsRaw) {
+          refsLine = colors.cyan + ' \u2387 ' + truncate(refsRaw, refsMaxW - 4) + ansi.reset;
+        } else {
+          refsLine = colors.dim + ' (no refs)' + ansi.reset;
+        }
+        const refsVisW = visLen(refsLine);
+        const gap = Math.max(1, innerW - refsVisW - collapseLabelLen);
+        const btnColStart = refsVisW + gap;
+        ui.detailCollapseAllZone = { colStart: btnColStart, colEnd: btnColStart + collapseLabelLen - 1 };
+        const btnStyle = allCollapsed ? colors.cyan : colors.dim;
+        lines.push(refsLine + ' '.repeat(gap) + btnStyle + collapseLabel + ansi.reset);
       } else {
-        lines.push(colors.dim + ' (no refs)' + ansi.reset);
+        ui.detailCollapseAllZone = null;
+        if (refsRaw) {
+          lines.push(colors.cyan + ' \u2387 ' + truncate(refsRaw, innerW - 4) + ansi.reset);
+        } else {
+          lines.push(colors.dim + ' (no refs)' + ansi.reset);
+        }
       }
       let cH = detailH - 1;
       const maxDetailScroll = Math.max(0, filteredDetail.length - cH);

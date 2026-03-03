@@ -1480,7 +1480,33 @@ function handleMouseData(data) {
             }
             state.focusPanel = 'status';
           } else {
-            // Detail area: check for file header toggle click
+            // Detail area: check for Collapse/Expand All button on refs line
+            const refsRowIdx = ui.lastLogListH + 1; // separator + refs line
+            if (bodyRowIdx === refsRowIdx && ui.detailCollapseAllZone) {
+              const relCol = cx - rightStart;
+              if (relCol >= ui.detailCollapseAllZone.colStart && relCol <= ui.detailCollapseAllZone.colEnd) {
+                // Toggle all detail files
+                const allFiles = [];
+                for (const entry of (state.logDetailLines || [])) {
+                  const m = entry.match && entry.match(/^diff --git a\/.+ b\/(.+)/);
+                  if (m) allFiles.push(m[1]);
+                }
+                // Also check from detailFileHeaderMap
+                for (const f of ui.detailFileHeaderMap) {
+                  if (f && !allFiles.includes(f)) allFiles.push(f);
+                }
+                const allCollapsed = allFiles.length > 0 && allFiles.every(f => ui.collapsedDetailFiles.has(f));
+                if (allCollapsed) {
+                  ui.collapsedDetailFiles.clear();
+                } else {
+                  for (const f of allFiles) ui.collapsedDetailFiles.add(f);
+                }
+                state.focusPanel = 'diff';
+                render();
+                continue;
+              }
+            }
+            // Check for file header toggle click
             const detailRowIdx = bodyRowIdx - ui.lastLogListH - 1 - 1; // -separator -refs line
             if (detailRowIdx >= 0 && detailRowIdx < ui.detailFileHeaderMap.length) {
               const file = ui.detailFileHeaderMap[detailRowIdx];

@@ -112,6 +112,7 @@ const ui = {
   collapsedDetailFiles: new Set(),
   detailFileHeaderMap: [], // maps visible detail row → file path (or null)
   filteredDetailCount: 0, // filtered logDetailLines count (respecting collapse)
+  detailCollapseAllZone: null, // { colStart, colEnd } for Collapse/Expand All button on refs line
   scrollbarOverlays: [],
   scrollbarDragInfo: null,    // { target, trackTop, trackH, maxScroll }
   hoveredScrollbarTarget: null, // 'left' | 'files' | 'diff' | 'logList' | 'logDetail' | 'freshList' | 'freshDetail'
