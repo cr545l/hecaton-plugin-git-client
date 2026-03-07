@@ -62,6 +62,24 @@ function handleKey(key) {
     return;
   }
 
+  // Ctrl+Shift+P: push
+  if (key === CSI + '112;6u') {
+    startSpinner('Pushing...');
+    gitPushAsync(state.cwd).then(async err => {
+      stopSpinner();
+      if (err) {
+        showErrorDialog(err);
+        render();
+      } else {
+        await refreshAsync();
+        if (state.rightView === 'log') refreshLog();
+        if (state.rightView === 'fresh') refreshFresh();
+        render();
+      }
+    });
+    return;
+  }
+
   // Arrow keys (VT sequences)
   if (key === CSI + 'A' || key === 'k') { // Up
     if (state.focusPanel === 'status') {
