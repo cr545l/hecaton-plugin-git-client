@@ -976,16 +976,18 @@ function handleMouseData(data) {
       continue;
     }
 
-    // Scroll wheel (Shift+wheel = horizontal scroll)
+    // Scroll wheel (native horizontal wheel or Shift+wheel = horizontal scroll)
     const isWheel = !isRelease && (cb & 64) !== 0;
     if (isWheel) {
       const wheelStep = (cb & 1) !== 0 ? 3 : -3;
+      const wheelBtn = cb & 3; // 0/1: vertical up/down, 2/3: horizontal left/right
+      const isHorizontalWheel = wheelBtn === 2 || wheelBtn === 3;
       const isShiftWheel = (cb & 4) !== 0;
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
       const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
       const inRight = cx >= rightStart && cx < L.startCol + L.width;
       const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
-      if (isShiftWheel) {
+      if (isHorizontalWheel || isShiftWheel) {
         let changed = false;
         if (inBody && inMiddle) {
           const prev = state.filesScrollX;
