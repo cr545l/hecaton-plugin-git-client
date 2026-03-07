@@ -319,8 +319,9 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_show_in_explorer': {
-        const err = showInExplorer(fullPath);
-        if (err) showError('Show in Explorer failed:\n' + err);
+        showInExplorer(fullPath).then(err => {
+          if (err) showError('Show in Explorer failed:\n' + err);
+        });
         break;
       }
       case 'file_blame': {
@@ -908,19 +909,12 @@ function openExternal(fullPath) {
   }
 }
 
-function showInExplorer(fullPath) {
-  try {
-    if (process.platform === 'win32') {
-      execFileSync('explorer', ['/select,' + fullPath], { windowsHide: true });
-    } else if (process.platform === 'darwin') {
-      execFileSync('open', ['-R', fullPath]);
-    } else {
-      execFileSync('xdg-open', [path.dirname(fullPath)]);
-    }
-    return null;
-  } catch (e) {
-    return e.message || 'Failed to show file';
+async function showInExplorer(fullPath) {
+  const result = await sendRpc('show_in_explorer', { path: fullPath });
+  if (!result || !result.success) {
+    return 'Failed to show file';
   }
+  return null;
 }
 
 module.exports = {
