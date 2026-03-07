@@ -2,10 +2,10 @@ const { execFileSync, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-function gitExec(args, cwd) {
+function gitExec(args, cwd, timeout) {
   return new Promise((resolve) => {
     execFile('git', args, {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: timeout || 5000,
     }, (err, stdout) => {
       if (err && !stdout) resolve(err.stdout ? err.stdout.replace(/\r\n/g, '\n') : '');
       else resolve((stdout || '').replace(/\r\n/g, '\n'));
@@ -462,6 +462,7 @@ function gitCheckoutRefAsync(cwd, ref) { return gitAsync(['checkout', ref], cwd,
 function gitCherryPickAsync(cwd, ref) { return gitAsync(['cherry-pick', ref], cwd); }
 function gitRevertAsync(cwd, ref) { return gitAsync(['revert', '--no-edit', ref], cwd); }
 function gitStashSaveAsync(cwd) { return gitAsync(['stash', 'push'], cwd, { timeout: 10000 }); }
+function gitCommitAsync(cwd, message) { return gitAsync(['commit', '-m', message], cwd, { timeout: 30000 }); }
 function gitStashPopAsync(cwd) { return gitAsync(['stash', 'pop'], cwd, { timeout: 10000 }); }
 function gitStageAsync(cwd, file) {
   return new Promise((resolve) => {
@@ -765,6 +766,6 @@ module.exports = {
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitRevertAsync,
-  gitStashSaveAsync, gitStashPopAsync,
+  gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync,
 };

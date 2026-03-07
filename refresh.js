@@ -14,6 +14,11 @@ const { sendRpcNotify } = require('./rpc');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
 
 let refreshCount = 0;
+let _diffSeq = 0;
+let _logDetailSeq = 0;
+let _freshDetailSeq = 0;
+let _logSeq = 0;
+let _freshSeq = 0;
 
 function buildFileList() {
   const list = [];
@@ -230,9 +235,6 @@ function refreshLog() {
     return;
   }
 
-  state.logItems = [];
-  state.logSelectables = [];
-
   // Build stash map and collect stash hashes for graph inclusion
   const stashRefList = state.stashes;
   ui.stashMap = new Map();
@@ -244,68 +246,109 @@ function refreshLog() {
     stashFullHashes.add(s.hash);
   }
 
-  const rawCommits = gitLogCommits(state.cwd, stashHashes, 2000);
+  const seq = ++_logSeq;
+  const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%aI%x00%cn%x00%cI%x00%B'];
+  if (stashHashes.length > 0) args.push(...stashHashes);
+  args.push('-2000');
 
-  // Filter stash sub-commits (index, untracked) to keep graph clean.
-  const stashSubHashes = new Set();
-  for (const c of rawCommits) {
-    if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
-      for (let i = 1; i < c.parents.length; i++) {
-        stashSubHashes.add(c.parents[i]);
-      }
-    }
-  }
-  let commits = stashSubHashes.size > 0
-    ? rawCommits
-        .filter(c => !stashSubHashes.has(c.hash))
-        .map(c => {
-          const fp = c.parents.filter(p => !stashSubHashes.has(p));
-          return fp.length === c.parents.length ? c : { ...c, parents: fp };
-        })
-    : rawCommits;
+  gitExec(args, state.cwd, 30000).then(raw => {
+    if (_logSeq !== seq) return;
 
-  // Reorder stash commits: place them right BEFORE their parent commit
-  if (stashFullHashes.size > 0) {
-    const hashIdx = new Map();
-    for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
-
-    const stashByParent = new Map();
-    const stashSet = new Set();
-    for (const c of commits) {
-      if (!stashFullHashes.has(c.hash)) continue;
-      const parentHash = c.parents[0];
-      if (!parentHash || !hashIdx.has(parentHash)) continue;
-      if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
-      stashByParent.get(parentHash).push(c);
-      stashSet.add(c.hash);
-    }
-
-    if (stashByParent.size > 0) {
-      const reordered = [];
-      for (const c of commits) {
-        if (stashSet.has(c.hash)) continue;
-        const stashes = stashByParent.get(c.hash);
-        if (stashes) {
-          for (const s of stashes) reordered.push(s);
+    raw = raw.replace(/\r/g, '').trim();
+    let rawCommits = [];
+    if (raw) {
+      rawCommits = raw.split('\x01').filter(r => r.trim()).map(record => {
+        const trimmed = record.trim();
+        const parts = [];
+        let pos = 0;
+        for (let i = 0; i < 7; i++) {
+          const next = trimmed.indexOf('\x00', pos);
+          if (next === -1) break;
+          parts.push(trimmed.substring(pos, next));
+          pos = next + 1;
         }
-        reordered.push(c);
+        parts.push(trimmed.substring(pos));
+        const fullBody = (parts[7] || '').trim();
+        const firstLine = fullBody.split('\n')[0];
+        return {
+          hash: parts[0] || '',
+          parents: parts[1] ? parts[1].split(' ') : [],
+          refs: parts[2] || '',
+          authorName: parts[3] || '',
+          authorDate: parts[4] || '',
+          committerName: parts[5] || '',
+          committerDate: parts[6] || '',
+          subject: firstLine.replace(/[\r\n]/g, ''),
+          body: fullBody,
+        };
+      });
+    }
+
+    // Filter stash sub-commits (index, untracked) to keep graph clean.
+    const stashSubHashes = new Set();
+    for (const c of rawCommits) {
+      if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
+        for (let i = 1; i < c.parents.length; i++) {
+          stashSubHashes.add(c.parents[i]);
+        }
       }
-      commits = reordered;
     }
-  }
+    let commits = stashSubHashes.size > 0
+      ? rawCommits
+          .filter(c => !stashSubHashes.has(c.hash))
+          .map(c => {
+            const fp = c.parents.filter(p => !stashSubHashes.has(p));
+            return fp.length === c.parents.length ? c : { ...c, parents: fp };
+          })
+      : rawCommits;
 
-  const graphRows = calcGraphRows(commits, stashFullHashes, ui.stashMap);
+    // Reorder stash commits: place them right BEFORE their parent commit
+    if (stashFullHashes.size > 0) {
+      const hashIdx = new Map();
+      for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
 
-  for (const row of graphRows) {
-    if (row.type === 'commit') {
-      state.logSelectables.push(state.logItems.length);
+      const stashByParent = new Map();
+      const stashSet = new Set();
+      for (const c of commits) {
+        if (!stashFullHashes.has(c.hash)) continue;
+        const parentHash = c.parents[0];
+        if (!parentHash || !hashIdx.has(parentHash)) continue;
+        if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
+        stashByParent.get(parentHash).push(c);
+        stashSet.add(c.hash);
+      }
+
+      if (stashByParent.size > 0) {
+        const reordered = [];
+        for (const c of commits) {
+          if (stashSet.has(c.hash)) continue;
+          const stashes = stashByParent.get(c.hash);
+          if (stashes) {
+            for (const s of stashes) reordered.push(s);
+          }
+          reordered.push(c);
+        }
+        commits = reordered;
+      }
     }
-    state.logItems.push(row);
-  }
 
-  if (state.logCursor >= state.logSelectables.length) {
-    state.logCursor = Math.max(0, state.logSelectables.length - 1);
-  }
+    const graphRows = calcGraphRows(commits, stashFullHashes, ui.stashMap);
+
+    state.logItems = [];
+    state.logSelectables = [];
+    for (const row of graphRows) {
+      if (row.type === 'commit') {
+        state.logSelectables.push(state.logItems.length);
+      }
+      state.logItems.push(row);
+    }
+
+    if (state.logCursor >= state.logSelectables.length) {
+      state.logCursor = Math.max(0, state.logSelectables.length - 1);
+    }
+
+    require('./render').render();
+  });
 }
 
 function selectedLogRef() {
@@ -323,7 +366,6 @@ function updateLogDetail() {
   }
   const lines = [];
 
-  // Commit info header
   lines.push('commit ' + item.hash);
   if (item.authorName || item.authorDate) {
     const dateStr = item.authorDate ? formatDateTime(item.authorDate) : '';
@@ -334,36 +376,31 @@ function updateLogDetail() {
     lines.push('Commit: ' + (item.committerName || '') + (dateStr ? '  ' + dateStr : ''));
   }
 
-  // Separator before message
   lines.push('\u2500'.repeat(40));
 
-  // Commit message body (full multi-line message)
   if (item.body) {
     for (const l of item.body.split('\n')) {
       lines.push(l.replace(/[\r\n]/g, ''));
     }
   }
 
-  // Separator after message
   lines.push('\u2500'.repeat(40));
 
-  // Diff only (suppress commit header/message with --pretty=format:)
-  let raw = '';
+  // Show header immediately, load diff async
+  state.logDetailLines = [...lines];
+  const seq = ++_logDetailSeq;
   const stashRef = ui.stashMap.get(item.ref);
-  if (stashRef) {
-    raw = gitStashDiff(state.cwd, stashRef);
-  } else {
-    try {
-      raw = git(['show', '--pretty=format:', item.ref], state.cwd);
-    } catch {
-      raw = '';
+  const promise = stashRef
+    ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)
+    : gitExec(['show', '--pretty=format:', item.ref], state.cwd, 30000);
+  promise.then(raw => {
+    if (_logDetailSeq !== seq) return;
+    for (const l of raw.split('\n')) {
+      lines.push(l.replace(/\r/g, ''));
     }
-  }
-  for (const l of raw.split('\n')) {
-    lines.push(l.replace(/\r/g, ''));
-  }
-
-  state.logDetailLines = lines;
+    state.logDetailLines = lines;
+    require('./render').render();
+  });
 }
 
 function formatDateTime(isoStr) {
@@ -389,19 +426,23 @@ function updateDiff() {
     state.currentDiffFile = null;
     return;
   }
-  
-  // Track current diff file for syntax highlighting
   state.currentDiffFile = item.file;
-  
-  let raw = '';
+  state.diffLines = [];
+
+  const seq = ++_diffSeq;
+  let args;
   if (item.type === 'staged') {
-    raw = gitDiff(state.cwd, item.file, true);
+    args = ['diff', '--cached', '--', item.file];
   } else if (item.type === 'unstaged') {
-    raw = gitDiff(state.cwd, item.file, false);
+    args = ['diff', '--', item.file];
   } else {
-    raw = gitDiffUntracked(state.cwd, item.file);
+    args = ['diff', '--no-index', '--', '/dev/null', item.file];
   }
-  state.diffLines = raw.split('\n');
+  gitExec(args, state.cwd).then(raw => {
+    if (_diffSeq !== seq) return;
+    state.diffLines = raw.split('\n');
+    require('./render').render();
+  });
 }
 
 function refreshFresh() {
@@ -414,71 +455,70 @@ function refreshFresh() {
   const seen = new Set();
   const now = new Date();
 
-  // Always collect pending changes (staged + unstaged + untracked)
-  const status = gitStatus(state.cwd);
-  for (const f of status.unstaged) {
+  // Use already-loaded state data instead of calling gitStatus() again
+  for (const f of state.unstaged) {
     if (seen.has(f.file)) continue;
     seen.add(f.file);
     items.push({
-      file: f.file,
-      status: f.status,
-      author: '',
-      date: now.toISOString(),
-      commitHash: '',
-      commitMsg: '',
-      isPending: true,
-      isDeleted: f.status === 'D',
+      file: f.file, status: f.status, author: '', date: now.toISOString(),
+      commitHash: '', commitMsg: '', isPending: true, isDeleted: f.status === 'D',
     });
   }
-  for (const f of status.untracked) {
+  for (const f of state.untracked) {
     if (seen.has(f.file)) continue;
     seen.add(f.file);
     items.push({
-      file: f.file,
-      status: '?',
-      author: '',
-      date: now.toISOString(),
-      commitHash: '',
-      commitMsg: '',
-      isPending: true,
-      isDeleted: false,
+      file: f.file, status: '?', author: '', date: now.toISOString(),
+      commitHash: '', commitMsg: '', isPending: true, isDeleted: false,
     });
   }
-  for (const f of status.staged) {
+  for (const f of state.staged) {
     if (seen.has(f.file)) continue;
     seen.add(f.file);
     items.push({
-      file: f.file,
-      status: f.status,
-      author: '',
-      date: now.toISOString(),
-      commitHash: '',
-      commitMsg: '',
-      isPending: true,
-      isDeleted: f.status === 'D',
+      file: f.file, status: f.status, author: '', date: now.toISOString(),
+      commitHash: '', commitMsg: '', isPending: true, isDeleted: f.status === 'D',
     });
   }
 
-  // Collect historical changes if days > 0
+  // Show pending items immediately
+  state.freshItems = [...items];
+  if (state.freshItems.length === 0) state.freshCursor = 0;
+  else state.freshCursor = Math.min(state.freshCursor, state.freshItems.length - 1);
+
+  // Collect historical changes async if days > 0
   const tw = FRESH_TIME_WINDOWS[state.freshTimeWindow] || FRESH_TIME_WINDOWS[1];
   if (tw.days > 0) {
-    const logItems = gitFreshLog(state.cwd, tw.days);
-    for (const item of logItems) {
-      if (seen.has(item.file)) continue;
-      seen.add(item.file);
-      items.push(item);
-    }
-  }
-
-  // Sort by date descending
-  items.sort((a, b) => new Date(b.date) - new Date(a.date));
-  state.freshItems = items;
-
-  // Clamp cursor
-  if (state.freshItems.length === 0) {
-    state.freshCursor = 0;
-  } else {
-    state.freshCursor = Math.min(state.freshCursor, state.freshItems.length - 1);
+    const seq = ++_freshSeq;
+    gitExec(['log', '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {
+      if (_freshSeq !== seq) return;
+      let currentCommit = null;
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('__COMMIT__')) {
+          const parts = line.substring(10).split('|');
+          currentCommit = { hash: parts[0] || '', author: parts[1] || '', date: parts[2] || '', msg: parts.slice(3).join('|') };
+          continue;
+        }
+        if (!currentCommit || !line.trim()) continue;
+        const tabs = line.split('\t');
+        if (tabs.length < 2) continue;
+        const logStatus = tabs[0].charAt(0);
+        let file;
+        if (logStatus === 'R' && tabs.length >= 3) file = tabs[2];
+        else file = tabs[1];
+        if (seen.has(file)) continue;
+        seen.add(file);
+        items.push({
+          file, status: logStatus, author: currentCommit.author, date: currentCommit.date,
+          commitHash: currentCommit.hash, commitMsg: currentCommit.msg, isPending: false, isDeleted: logStatus === 'D',
+        });
+      }
+      items.sort((a, b) => new Date(b.date) - new Date(a.date));
+      state.freshItems = items;
+      if (state.freshItems.length === 0) state.freshCursor = 0;
+      else state.freshCursor = Math.min(state.freshCursor, state.freshItems.length - 1);
+      require('./render').render();
+    });
   }
 }
 
@@ -489,16 +529,23 @@ function updateFreshDetail() {
     return;
   }
 
-  let raw = '';
+  state.freshDetailLines = [];
+  const seq = ++_freshDetailSeq;
+  let promise;
   if (item.isPending) {
-    raw = gitFilePatch(state.cwd, {
-      file: item.file,
-      type: item.status === '?' ? 'untracked' : 'unstaged',
-    });
+    if (item.status === '?') {
+      promise = gitExec(['diff', '--no-index', '--', '/dev/null', item.file], state.cwd);
+    } else {
+      promise = gitExec(['diff', '--', item.file], state.cwd);
+    }
   } else {
-    raw = gitShowCommitFile(state.cwd, item.commitHash, item.file);
+    promise = gitExec(['show', item.commitHash, '--', item.file], state.cwd, 30000);
   }
-  state.freshDetailLines = raw.split('\n');
+  promise.then(raw => {
+    if (_freshDetailSeq !== seq) return;
+    state.freshDetailLines = raw.split('\n');
+    require('./render').render();
+  });
 }
 
 module.exports = {

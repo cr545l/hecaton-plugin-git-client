@@ -1,7 +1,7 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
-const { gitStage, gitUnstage, gitCommit, gitStashSave, gitUnsetConfigLocal,
-  gitFetchAsync, gitPullAsync, gitPushAsync,
+const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
+  gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitStageAsync, gitUnstageAsync,
 } = require('./git');
@@ -356,16 +356,19 @@ function handleCommitInput(key) {
       render();
       return;
     }
-    const err = gitCommit(state.cwd, state.commitMsg);
     state.mode = 'normal';
-    if (err) {
-      showErrorDialog(err);
-      render();
-    } else {
-      state.commitMsg = '';
-      state.commitCursor = 0;
-      refreshAsync().then(() => render());
-    }
+    render();
+    gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
+      if (err) {
+        showErrorDialog(err);
+        render();
+      } else {
+        state.commitMsg = '';
+        state.commitCursor = 0;
+        await refreshAsync();
+        render();
+      }
+    });
     return;
   }
   // Ctrl+C → clear commit message
