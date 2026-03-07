@@ -1025,7 +1025,7 @@ function buildDiffCommitPanel(w, h) {
   let preMaxScrollX = 0;
   let annotated = null;
   let numW = 0, gutterW = 0, contentW = 0;
-  if (state.diffLines.length > 0 && diffH > 1) {
+  if (state.diffLines.length > 0 && diffH > 0) {
     annotated = annotateDiffLineNumbers(state.diffLines);
     numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
     gutterW = numW > 0 ? numW * 2 + 2 : 0;

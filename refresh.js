@@ -431,15 +431,20 @@ function formatDateTime(isoStr) {
 
 function updateDiff() {
   const item = selectedItem();
-  state.diffScrollOffset = 0;
-  state.diffScrollX = 0;
   if (!item) {
     state.diffLines = [];
     state.currentDiffFile = null;
+    state.diffScrollOffset = 0;
+    state.diffScrollX = 0;
     return;
   }
+  const fileChanged = state.currentDiffFile !== item.file;
   state.currentDiffFile = item.file;
-  state.diffLines = [];
+  if (fileChanged) {
+    state.diffScrollOffset = 0;
+    state.diffScrollX = 0;
+    state.diffLines = [];
+  }
 
   const seq = ++_diffSeq;
   let args;
@@ -535,14 +540,19 @@ function refreshFresh() {
 }
 
 function updateFreshDetail() {
-  state.diffScrollX = 0;
   const item = state.freshItems[state.freshCursor];
   if (!item) {
     state.freshDetailLines = [];
+    state.diffScrollX = 0;
     return;
   }
 
-  state.freshDetailLines = [];
+  const fileChanged = state._freshDetailFile !== item.file;
+  state._freshDetailFile = item.file;
+  if (fileChanged) {
+    state.diffScrollX = 0;
+    state.freshDetailLines = [];
+  }
   const seq = ++_freshDetailSeq;
   let promise;
   if (item.isPending) {
