@@ -260,7 +260,7 @@ function handleContextMenuAction(actionId) {
           title: 'Add Remote',
           message: 'Enter remote name and URL (e.g. origin https://...):',
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'new-remote';
         break;
@@ -513,7 +513,7 @@ function handleContextMenuAction(actionId) {
           title: 'New Branch',
           message: 'Enter branch name:',
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'new-branch';
         state.pendingDialogTarget = branchName;
@@ -524,7 +524,7 @@ function handleContextMenuAction(actionId) {
           title: 'New Tag',
           message: 'Enter tag name:',
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'new-tag';
         state.pendingDialogTarget = branchName;
@@ -535,7 +535,7 @@ function handleContextMenuAction(actionId) {
           title: 'Rename Branch',
           message: 'Enter new name:',
           defaultValue: branchName,
-          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'rename-branch';
         state.pendingDialogTarget = branchName;
@@ -545,7 +545,7 @@ function handleContextMenuAction(actionId) {
           type: 'message',
           title: 'Delete Branch',
           message: "Delete branch '" + branchName + "'?",
-          buttons: [{ id: 'delete', label: 'Delete' }, { id: 'force', label: 'Force Delete' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'delete', label: 'Delete', default: true }, { id: 'force', label: 'Force Delete' }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'delete-branch';
         state.pendingDialogTarget = branchName;
@@ -583,7 +583,7 @@ function handleContextMenuAction(actionId) {
           title: 'Rename Stash',
           message: 'Enter new name for stash:',
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'rename-stash';
         state.pendingDialogTarget = ref;
@@ -613,7 +613,7 @@ function handleContextMenuAction(actionId) {
         title: 'New Branch',
         message: 'Enter branch name:',
         defaultValue: '',
-        buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
       });
       state.pendingDialogAction = 'new-branch';
       state.pendingDialogTarget = hash;
@@ -624,7 +624,7 @@ function handleContextMenuAction(actionId) {
         title: 'New Tag',
         message: 'Enter tag name:',
         defaultValue: '',
-        buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
       });
       state.pendingDialogAction = 'new-tag';
       state.pendingDialogTarget = hash;
@@ -642,7 +642,7 @@ function handleContextMenuAction(actionId) {
           title: 'Rebase',
           message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
           buttons: [
-            { id: 'stash_rebase', label: 'Stash & Rebase' },
+            { id: 'stash_rebase', label: 'Stash & Rebase', default: true },
             { id: 'cancel', label: 'Cancel' },
           ],
         });
@@ -884,7 +884,7 @@ function showError(msg) {
     type: 'message',
     title: 'Error',
     message: msg,
-    buttons: [{ id: 'ok', label: 'OK' }],
+    buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
   render();
 }

@@ -32,7 +32,7 @@ function showErrorDialog(msg) {
     type: 'message',
     title: 'Error',
     message: msg,
-    buttons: [{ id: 'ok', label: 'OK' }],
+    buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
 }
 
@@ -280,7 +280,7 @@ function handleKey(key) {
           title: 'Rebase',
           message: 'Choose rebase action:',
           buttons: [
-            { id: 'continue', label: 'Continue' },
+            { id: 'continue', label: 'Continue', default: true },
             { id: 'abort', label: 'Abort' },
             { id: 'skip', label: 'Skip' },
             { id: 'cancel', label: 'Cancel' },
@@ -301,7 +301,7 @@ function handleKey(key) {
             title: 'Rebase',
             message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
             buttons: [
-              { id: 'stash_rebase', label: 'Stash & Rebase' },
+              { id: 'stash_rebase', label: 'Stash & Rebase', default: true },
               { id: 'cancel', label: 'Cancel' },
             ],
           });
@@ -1170,7 +1170,7 @@ function handleMouseData(data) {
                 title: 'Stash',
                 message: 'Stash changes?',
                 buttons: [
-                  { id: 'stash_confirm', label: 'Stash' },
+                  { id: 'stash_confirm', label: 'Stash', default: true },
                   { id: 'cancel', label: 'Cancel' },
                 ],
               });
@@ -1201,7 +1201,7 @@ function handleMouseData(data) {
                 message: 'Enter name for local git commits:',
                 defaultValue: state.committerName || '',
                 buttons: [
-                  { id: 'ok', label: 'OK' },
+                  { id: 'ok', label: 'OK', default: true },
                   { id: 'cancel', label: 'Cancel' },
                 ],
               });
@@ -1214,7 +1214,7 @@ function handleMouseData(data) {
                 message: 'Enter email for local git commits:',
                 defaultValue: state.committerEmail || '',
                 buttons: [
-                  { id: 'ok', label: 'OK' },
+                  { id: 'ok', label: 'OK', default: true },
                   { id: 'cancel', label: 'Cancel' },
                 ],
               });
