@@ -210,8 +210,33 @@ function renderScrollbarPixels(cellW, cellH, viewportRows, scrollOffset, maxScro
   return buf;
 }
 
+function renderHScrollbarPixels(cW, cH, trackCols, viewportCols, offset, maxScrollX) {
+  if (maxScrollX <= 0) return null;
+  const w = trackCols * cW;
+  const h = cH;
+  if (w <= 0 || h <= 0) return null;
+  const totalContent = viewportCols + maxScrollX;
+  const handleW = Math.max(cW, Math.floor(w * viewportCols / totalContent));
+  const handleX = Math.floor((w - handleW) * offset / maxScrollX);
+  const buf = new Uint8Array(w * h);
+  const barThickness = Math.max(1, cW - 4);
+  const padY = Math.max(0, Math.floor((h - barThickness) / 2));
+  const roundX = 1;
+  for (let x = handleX; x < handleX + handleW && x < w; x++) {
+    const dx = x - handleX;
+    const dxEnd = handleX + handleW - 1 - x;
+    for (let y = padY; y < h - padY; y++) {
+      if (dx < roundX && (y === padY || y === h - padY - 1)) continue;
+      if (dxEnd < roundX && (y === padY || y === h - padY - 1)) continue;
+      buf[y * w + x] = 1;
+    }
+  }
+  return buf;
+}
+
 module.exports = {
   SIXEL_ENABLED, SIXEL_PALETTE,
-  SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels,
+  SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE,
+  renderScrollbarPixels, renderHScrollbarPixels,
   renderCombinedGraphPixels, encodeSixel,
 };

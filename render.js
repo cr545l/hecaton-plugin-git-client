@@ -1,6 +1,6 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
-const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
-const { visLen, padRight, truncate, viewport } = require('./text');
+const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
+const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
@@ -453,7 +453,8 @@ function render() {
 
     // Middle panel (files) - diff mode only
     if (state.rightView === 'diff' && middleW > 0) {
-      addScrollbar(state.scrollOffset, ui.filesMaxScroll, contentH, sbBodyTop, midStart + middleW - 1, 'files');
+      const filesVSbH = ui.filesMaxScrollX > 0 ? contentH - 1 : contentH;
+      addScrollbar(state.scrollOffset, ui.filesMaxScroll, filesVSbH, sbBodyTop, midStart + middleW - 1, 'files');
     }
 
     // Right panels
@@ -481,15 +482,65 @@ function render() {
       // Fresh detail
       if (rightW > 0 && ui.lastFreshListH > 0) {
         const freshDetailH = contentH - ui.lastFreshListH - 1; // -1 separator
+        const freshHsbH = ui.freshDetailMaxScrollX > 0 ? 1 : 0;
         if (freshDetailH > 1) {
           const detailTop = sbBodyTop + ui.lastFreshListH + 1 + 1; // +1 separator +1 header
-          addScrollbar(state.diffScrollOffset, ui.freshDetailMaxScroll, freshDetailH - 1, detailTop, startCol + width - 1, 'freshDetail');
+          addScrollbar(state.diffScrollOffset, ui.freshDetailMaxScroll, freshDetailH - 1 - freshHsbH, detailTop, startCol + width - 1, 'freshDetail');
         }
       }
     }
 
     for (const sb of ui.scrollbarOverlays) {
       buf.push(ansi.moveTo(sb.screenRow, sb.screenCol) + sb.sixelStr);
+    }
+
+    // Horizontal scrollbars (sixel)
+    ui.hScrollbarZones = [];
+    const hasSixel = ui.cellW > 0 && ui.cellH > 0;
+    if (hasSixel) {
+      function addHScrollbar(target, hScreenRow, hColStart, hCols, viewportCols, scrollX, maxScrollX) {
+        const hPixBuf = renderHScrollbarPixels(ui.cellW, ui.cellH, hCols, viewportCols, scrollX, maxScrollX);
+        if (hPixBuf) {
+          const isActive = ui.dragging === 'hscrollbar' && ui.hScrollbarDragInfo && ui.hScrollbarDragInfo.target === target;
+          const isHovered = ui.hoveredHScrollbarTarget === target;
+          const palette = isActive ? SCROLLBAR_ACTIVE_PALETTE : isHovered ? SCROLLBAR_HOVER_PALETTE : SCROLLBAR_PALETTE;
+          const hSixelStr = encodeSixel(hPixBuf, hCols * ui.cellW, ui.cellH, palette);
+          buf.push(ansi.moveTo(hScreenRow, hColStart) + hSixelStr);
+          ui.hScrollbarZones.push({
+            target,
+            screenRow: hScreenRow,
+            colStart: hColStart,
+            colEnd: hColStart + hCols - 1,
+            trackCols: hCols,
+            maxScrollX,
+          });
+        }
+      }
+
+      const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
+
+      // Diff panel horizontal scrollbar (diff mode)
+      if (state.rightView === 'diff' && ui.diffMaxScrollX > 0 && rightW > 0) {
+        const hCols = rightW - 1;
+        addHScrollbar('diff', sbBodyTop + ui.rightDiffH, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.diffMaxScrollX);
+      }
+      // Files panel horizontal scrollbar (diff mode)
+      if (state.rightView === 'diff' && ui.filesMaxScrollX > 0 && middleW > 0) {
+        const hCols = middleW - 1;
+        addHScrollbar('files', sbBodyTop + contentH - 1, midStart, hCols, middleW - 1, state.filesScrollX, ui.filesMaxScrollX);
+      }
+      // Log detail horizontal scrollbar
+      if (state.rightView === 'log' && ui.logDetailMaxScrollX > 0 && rightW > 0 && ui.lastLogListH > 0) {
+        const hCols = rightW - 1;
+        const detailBottom = sbBodyTop + contentH - 1;
+        addHScrollbar('logDetail', detailBottom, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.logDetailMaxScrollX);
+      }
+      // Fresh detail horizontal scrollbar
+      if (state.rightView === 'fresh' && ui.freshDetailMaxScrollX > 0 && rightW > 0 && ui.lastFreshListH > 0) {
+        const hCols = rightW - 1;
+        const detailBottom = sbBodyTop + contentH - 1;
+        addHScrollbar('freshDetail', detailBottom, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.freshDetailMaxScrollX);
+      }
     }
   }
 
@@ -502,9 +553,10 @@ function render() {
   if (state.rightView !== 'log' && state.rightView !== 'fresh' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const visLines = ui.commitMsgVisibleLines || 1;
-    ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + 1;
+    const hsbOffset = ui.diffMaxScrollX > 0 ? 1 : 0;
+    ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1;
     ui.commitButtonZone = {
-      row: startRow + titleRows + 1 + ui.rightDiffH + visLines + 1,
+      row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1,
       colStart: rpStartCol + 1,
       colEnd: rpStartCol + 9,
     };
@@ -536,7 +588,8 @@ function render() {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const topLine = ui.commitTopLine || 0;
     const cursorLineIdx = ui.commitCursorLineIdx || 0;
-    const cursorRow = startRow + titleRows + 1 + ui.rightDiffH + 1 + (cursorLineIdx - topLine);
+    const hsbOff = ui.diffMaxScrollX > 0 ? 1 : 0;
+    const cursorRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOff + 1 + (cursorLineIdx - topLine);
     const maxW = rightW - 2;
     const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
     const cursorLineEnd = state.commitMsg.indexOf('\n', state.commitCursor);
@@ -770,6 +823,32 @@ function buildFileListPanel(w, h) {
   const focused = state.focusPanel === 'status';
   ui.fileHeaderZones = [];
 
+  // Pre-compute horizontal scroll to reserve row for scrollbar
+  // Only count files in non-collapsed sections
+  let preMaxFileW = 0;
+  for (const f of state.unstaged) {
+    const fw = f.file ? f.file.length : 0;
+    if (fw > preMaxFileW) preMaxFileW = fw;
+  }
+  for (const f of state.untracked) {
+    const fw = f.file ? f.file.length : 0;
+    if (fw > preMaxFileW) preMaxFileW = fw;
+  }
+  for (const f of state.staged) {
+    const fw = f.file ? f.file.length : 0;
+    if (fw > preMaxFileW) preMaxFileW = fw;
+  }
+  if (state.ignored.length > 0 && ui.collapsedSections.ignored === false) {
+    for (const f of state.ignored) {
+      const fw = f.file ? f.file.length : 0;
+      if (fw > preMaxFileW) preMaxFileW = fw;
+    }
+  }
+  const filesContentWPre = Math.max(1, innerW - 6);
+  const preFilesMaxScrollX = Math.max(0, preMaxFileW - filesContentWPre);
+  const hasFilesHScrollbar = preFilesMaxScrollX > 0;
+  if (hasFilesHScrollbar && h > 1) h--;
+
   function pushFileLine(content, fileIdx) {
     lineToFileIdx.push(fileIdx);
     if (visLen(content) > innerW) content = truncate(content, innerW);
@@ -808,7 +887,7 @@ function buildFileListPanel(w, h) {
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + sliceByWidth(item.file, state.filesScrollX, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -821,7 +900,7 @@ function buildFileListPanel(w, h) {
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + colors.dim + '?' + resetTo + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + colors.dim + '?' + resetTo + ' ' + sliceByWidth(item.file, state.filesScrollX, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -850,7 +929,7 @@ function buildFileListPanel(w, h) {
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + truncate(item.file, innerW - 6);
+    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + sliceByWidth(item.file, state.filesScrollX, innerW - 6);
     pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
     listIdx++;
   }
@@ -872,12 +951,15 @@ function buildFileListPanel(w, h) {
         const isCursor = state.cursor === listIdx;
         if (isCursor) cursorLineIdx = lines.length;
         const bgColor = isCursor && focused ? colors.cursorBg : '';
-        const line = '   ' + colors.dim + '!' + ansi.reset + (bgColor || '') + ' ' + colors.dim + truncate(item.file, innerW - 6) + ansi.reset;
+        const line = '   ' + colors.dim + '!' + ansi.reset + (bgColor || '') + ' ' + colors.dim + sliceByWidth(item.file, state.filesScrollX, innerW - 6) + ansi.reset;
         pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
         listIdx++;
       }
     }
   }
+
+  ui.filesMaxScrollX = preFilesMaxScrollX;
+  if (state.filesScrollX > preFilesMaxScrollX) state.filesScrollX = preFilesMaxScrollX;
 
   if (buildFileList().length === 0) {
     pushFileLine(colors.dim + ' Working tree clean' + ansi.reset, -1);
@@ -918,6 +1000,9 @@ function buildFileListPanel(w, h) {
     visibleLines[hoverRow] = colors.hoverBg + padRight(deBg.replace(/\x1b\[0m/g, ansi.reset + colors.hoverBg), innerW) + ansi.reset;
   }
 
+  // Append empty row for horizontal scrollbar
+  if (hasFilesHScrollbar) visibleLines.push('');
+
   return visibleLines;
 }
 
@@ -934,7 +1019,29 @@ function buildDiffCommitPanel(w, h) {
   }
   const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
   const commitAreaH = h >= 5 ? (2 + maxMsgLines) : 0;
-  const diffH = h - commitAreaH;
+  let diffH = h - commitAreaH;
+
+  // Pre-compute horizontal scroll to reserve row for scrollbar
+  let preMaxScrollX = 0;
+  let annotated = null;
+  let numW = 0, gutterW = 0, contentW = 0;
+  if (state.diffLines.length > 0 && diffH > 1) {
+    annotated = annotateDiffLineNumbers(state.diffLines);
+    numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
+    gutterW = numW > 0 ? numW * 2 + 2 : 0;
+    contentW = innerW - (gutterW > 0 ? gutterW : 1);
+    let maxLineW = 0;
+    for (const line of state.diffLines) {
+      const plain = line.replace(/[\r\n]/g, '');
+      if (isDiffMetaLine(plain)) continue;
+      const lw = stripAnsi(plain).length;
+      if (lw > maxLineW) maxLineW = lw;
+    }
+    preMaxScrollX = Math.max(0, maxLineW - contentW);
+  }
+  const hasHScrollbar = preMaxScrollX > 0;
+  if (hasHScrollbar) diffH--;
+
   ui.rightDiffH = diffH;
   ui.commitMsgVisibleLines = maxMsgLines;
 
@@ -944,13 +1051,14 @@ function buildDiffCommitPanel(w, h) {
       lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < diffH; i++) lines.push('');
       ui.diffMaxScroll = 0;
+      ui.diffMaxScrollX = 0;
     } else {
-      const annotated = annotateDiffLineNumbers(state.diffLines);
-      const numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
-      const gutterW = numW > 0 ? numW * 2 + 2 : 0;
       const maxScroll = Math.max(0, state.diffLines.length - diffH);
       ui.diffMaxScroll = maxScroll;
       if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
+      ui.diffMaxScrollX = preMaxScrollX;
+      if (state.diffScrollX > preMaxScrollX) state.diffScrollX = preMaxScrollX;
+      const scrollX = state.diffScrollX;
       const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
       for (const entry of visible) {
         if (entry.inDiff && gutterW > 0) {
@@ -962,9 +1070,9 @@ function buildDiffCommitPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, state.currentDiffFile));
+          lines.push(gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX));
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile));
+          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX));
         }
       }
       if (state.diffLines.length > diffH) {
@@ -974,6 +1082,8 @@ function buildDiffCommitPanel(w, h) {
       }
       for (let i = visible.length; i < diffH; i++) lines.push('');
     }
+    // Reserve row for horizontal scrollbar
+    if (hasHScrollbar) lines.push('');
   }
 
   // Commit area
@@ -1206,6 +1316,7 @@ function buildLogPanel(w, h) {
     if (state.logDetailLines.length === 0) {
       lines.push(colors.dim + ' Select an item to view details' + ansi.reset);
       for (let i = 1; i < detailH; i++) lines.push('');
+      ui.logDetailMaxScrollX = 0;
     } else {
       const refsRaw = selItem && selItem.decoration ? selItem.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
       // Collapse/Expand All button
@@ -1240,7 +1351,25 @@ function buildLogPanel(w, h) {
         }
       }
       let cH = detailH - 1;
+
+      // Compute horizontal scroll for log detail
+      const logDetailGutterW = filteredDetail.maxLine > 0 ? String(filteredDetail.maxLine).length * 2 + 2 : 0;
+      const logDetailContentW = innerW - (logDetailGutterW > 0 ? logDetailGutterW : 1);
+      let logDetailMaxLineW = 0;
+      for (const entry of filteredDetail) {
+        if (entry.text && !entry.isFileHeader && !isDiffMetaLine(entry.text.replace(/[\r\n]/g, ''))) {
+          const lw = stripAnsi(entry.text.replace(/[\r\n]/g, '')).length;
+          if (lw > logDetailMaxLineW) logDetailMaxLineW = lw;
+        }
+      }
+      const logDetailMaxScrollX = Math.max(0, logDetailMaxLineW - logDetailContentW);
+      ui.logDetailMaxScrollX = logDetailMaxScrollX;
+      if (state.diffScrollX > logDetailMaxScrollX) state.diffScrollX = logDetailMaxScrollX;
+      if (logDetailMaxScrollX > 0 && cH > 1) cH--;
+      ui.lastDetailContentH = cH;
+
       const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
+      ui.logDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
 
       // Sticky file header: pin file name when scrolled past it
@@ -1283,13 +1412,15 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file));
+          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file, state.diffScrollX));
           ui.detailFileHeaderMap.push(null);
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file));
+          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file, state.diffScrollX));
           ui.detailFileHeaderMap.push(null);
         }
       }
+      // Reserve row for horizontal scrollbar
+      if (logDetailMaxScrollX > 0) lines.push('');
     }
   }
 
@@ -1472,6 +1603,7 @@ function buildFreshPanel(w, h) {
     if (state.freshDetailLines.length === 0) {
       lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < detailH; i++) lines.push('');
+      ui.freshDetailMaxScrollX = 0;
     } else {
       // Header: file info
       if (selItem) {
@@ -1482,13 +1614,30 @@ function buildFreshPanel(w, h) {
       } else {
         lines.push('');
       }
-      const cH = detailH - 1;
+      let cH = detailH - 1;
+
+      // Compute horizontal scroll for fresh detail
+      let freshDetailMaxLineW = 0;
+      for (const line of state.freshDetailLines) {
+        const plain = line.replace(/[\r\n]/g, '');
+        if (isDiffMetaLine(plain)) continue;
+        const lw = stripAnsi(plain).length;
+        if (lw > freshDetailMaxLineW) freshDetailMaxLineW = lw;
+      }
+      const freshDetailMaxScrollX = Math.max(0, freshDetailMaxLineW - (innerW - 1));
+      ui.freshDetailMaxScrollX = freshDetailMaxScrollX;
+      if (state.diffScrollX > freshDetailMaxScrollX) state.diffScrollX = freshDetailMaxScrollX;
+      if (freshDetailMaxScrollX > 0 && cH > 1) cH--;
+
       const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
+      ui.freshDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, innerW - 1, selItem ? selItem.file : null));
+        lines.push(' ' + colorizeDiffLine(rawLine, innerW - 1, selItem ? selItem.file : null, state.diffScrollX));
       }
+      // Reserve row for horizontal scrollbar
+      if (freshDetailMaxScrollX > 0) lines.push('');
     }
   }
 
@@ -1598,53 +1747,58 @@ function filterLogDetailLines(lines, collapsedFiles) {
  * @param {string} filePath - File path for language detection
  * @returns {string} Colorized line with background
  */
-function colorizeDiffLine(rawLine, w, filePath) {
+function isDiffMetaLine(rawLine) {
+  return rawLine.startsWith('+++') || rawLine.startsWith('---') ||
+    rawLine.startsWith('@@') ||
+    rawLine.startsWith('diff ') || rawLine.startsWith('index ') || rawLine.startsWith('commit ') ||
+    rawLine.startsWith('Author: ') || rawLine.startsWith('Commit: ') ||
+    /^\u2500{3,}$/.test(rawLine);
+}
+
+function colorizeDiffLine(rawLine, w, filePath, scrollX) {
   rawLine = rawLine.replace(/[\r\n]/g, '');
-  
+  // Don't apply horizontal scroll to metadata/header lines
+  const sx = isDiffMetaLine(rawLine) ? 0 : (scrollX || 0);
+
   // Diff metadata lines (no background, just foreground color)
   if (rawLine.startsWith('+++') || rawLine.startsWith('---')) {
-    return colors.diffHeader + truncate(rawLine, w) + ansi.reset;
+    return colors.diffHeader + sliceByWidth(rawLine, sx, w) + ansi.reset;
   } else if (rawLine.startsWith('@@')) {
-    return colors.diffHunk + truncate(rawLine, w) + ansi.reset;
+    return colors.diffHunk + sliceByWidth(rawLine, sx, w) + ansi.reset;
   } else if (rawLine.startsWith('diff ') || rawLine.startsWith('index ') || rawLine.startsWith('commit ')) {
-    return colors.dim + truncate(rawLine, w) + ansi.reset;
+    return colors.dim + sliceByWidth(rawLine, sx, w) + ansi.reset;
   } else if (rawLine.startsWith('Author: ') || rawLine.startsWith('Commit: ')) {
-    return colors.cyan + truncate(rawLine, w) + ansi.reset;
+    return colors.cyan + sliceByWidth(rawLine, sx, w) + ansi.reset;
   } else if (/^\u2500{3,}$/.test(rawLine)) {
     return colors.border + '\u2500'.repeat(w) + ansi.reset;
   }
-  
+
   // Code lines with diff markers
   const isAdd = rawLine.startsWith('+');
   const isDel = rawLine.startsWith('-');
-  
+
   // Determine background and foreground colors
   const bgColor = isAdd ? colors.diffAddBg : isDel ? colors.diffDelBg : '';
   const fgColor = isAdd ? colors.diffAdd : isDel ? colors.diffDel : colors.label;
-  
-  // Extract code content (remove diff marker)
-  const codeContent = rawLine.substring(1);
-  
-  // Try to apply syntax highlighting if we have a file path
-  if (filePath && codeContent.trim()) {
+
+  // Get visible portion with horizontal scroll
+  const visibleText = sliceByWidth(rawLine, sx, w);
+
+  // Try to apply syntax highlighting on visible portion
+  if (filePath && visibleText.trim()) {
     const lang = getLanguage(filePath);
     if (lang) {
       try {
-        // Highlight the code content
-        const highlighted = highlightCode(codeContent, filePath);
-        // Reconstruct with diff marker, background, and highlighted code
-        const prefix = isAdd ? '+' : isDel ? '-' : ' ';
-        // Apply background to entire line, then add highlighted content
-        // The highlighted content already has foreground colors embedded
-        return bgColor + fgColor + prefix + highlighted + ansi.reset;
+        const highlighted = highlightCode(visibleText, filePath);
+        return bgColor + fgColor + highlighted + ansi.reset;
       } catch (e) {
         // Fall back to basic coloring
       }
     }
   }
-  
+
   // Fallback: basic diff coloring with background (no syntax highlighting)
-  return bgColor + fgColor + truncate(rawLine, w) + ansi.reset;
+  return bgColor + fgColor + visibleText + ansi.reset;
 }
 
 const hintButtons = [];

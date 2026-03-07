@@ -118,6 +118,29 @@ function handleKey(key) {
     return;
   }
 
+  // Left/Right: horizontal scroll
+  if (key === CSI + 'C') { // Right
+    if (state.focusPanel === 'diff') {
+      const maxX = state.rightView === 'log' ? (ui.logDetailMaxScrollX || 0)
+        : state.rightView === 'fresh' ? (ui.freshDetailMaxScrollX || 0)
+        : (ui.diffMaxScrollX || 0);
+      state.diffScrollX = Math.min(maxX, state.diffScrollX + 2);
+    } else {
+      state.filesScrollX = Math.min((ui.filesMaxScrollX || 0), state.filesScrollX + 2);
+    }
+    render();
+    return;
+  }
+  if (key === CSI + 'D') { // Left
+    if (state.focusPanel === 'diff') {
+      state.diffScrollX = Math.max(0, state.diffScrollX - 2);
+    } else {
+      state.filesScrollX = Math.max(0, state.filesScrollX - 2);
+    }
+    render();
+    return;
+  }
+
   // Ctrl+A: select all / deselect all in cursor's group (diff view only)
   if (key === '\x01' && state.rightView !== 'log' && state.rightView !== 'fresh') {
     const list = buildFileList();
@@ -662,6 +685,22 @@ function handleMouseData(data) {
         render();
         continue;
       }
+      if (ui.dragging === 'hscrollbar') {
+        const info = ui.hScrollbarDragInfo;
+        const relX = cx - info.colStart;
+        const ratio = Math.max(0, Math.min(1, relX / Math.max(1, info.trackCols - 1)));
+        const newScrollX = Math.round(ratio * info.maxScrollX);
+        if (info.target === 'diff') {
+          state.diffScrollX = newScrollX;
+        } else if (info.target === 'files') {
+          state.filesScrollX = newScrollX;
+        } else {
+          // logDetail, freshDetail share diffScrollX
+          state.diffScrollX = newScrollX;
+        }
+        render();
+        continue;
+      }
 
       let newHover = -1;
       for (let i = 0; i < ui.clickableAreas.length; i++) {
@@ -832,6 +871,15 @@ function handleMouseData(data) {
         }
       }
 
+      // Hover: horizontal scrollbar
+      let newHScrollbarHover = null;
+      for (const hsb of ui.hScrollbarZones) {
+        if (cy === hsb.screenRow && cx >= hsb.colStart && cx <= hsb.colEnd) {
+          newHScrollbarHover = hsb.target;
+          break;
+        }
+      }
+
       // Hover: commit button
       let newCommitButtonHover = false;
       if (ui.commitButtonZone && state.rightView !== 'log' && state.rightView !== 'fresh') {
@@ -840,7 +888,7 @@ function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton) {
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
@@ -852,6 +900,7 @@ function handleMouseData(data) {
         ui.hoveredFreshWindow = newFreshWindowHover;
         ui.hoveredScrollbarTarget = newScrollbarHover;
         ui.hoveredCommitButton = newCommitButtonHover;
+        ui.hoveredHScrollbarTarget = newHScrollbarHover;
         render();
       }
       continue;
@@ -1204,6 +1253,36 @@ function handleMouseData(data) {
           }
         }
         if (sbHandled) continue;
+      }
+
+      // Horizontal scrollbar drag start
+      {
+        let hsbHandled = false;
+        for (const hsb of ui.hScrollbarZones) {
+          if (cy === hsb.screenRow && cx >= hsb.colStart && cx <= hsb.colEnd) {
+            ui.dragging = 'hscrollbar';
+            ui.hScrollbarDragInfo = {
+              target: hsb.target,
+              colStart: hsb.colStart,
+              trackCols: hsb.trackCols,
+              maxScrollX: hsb.maxScrollX,
+            };
+            const relX = cx - hsb.colStart;
+            const ratio = Math.max(0, Math.min(1, relX / Math.max(1, hsb.trackCols - 1)));
+            const newScrollX = Math.round(ratio * hsb.maxScrollX);
+            if (hsb.target === 'diff') {
+              state.diffScrollX = newScrollX;
+            } else if (hsb.target === 'files') {
+              state.filesScrollX = newScrollX;
+            } else {
+              state.diffScrollX = newScrollX;
+            }
+            render();
+            hsbHandled = true;
+            break;
+          }
+        }
+        if (hsbHandled) continue;
       }
 
       // Click on hint bar buttons

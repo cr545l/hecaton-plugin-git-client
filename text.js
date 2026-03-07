@@ -105,4 +105,28 @@ function viewport(text, cursorPos, maxWidth) {
   return (showLeftEllipsis ? '\u2026' : '') + combined.substring(startI, i) + (showRightEllipsis ? '\u2026' : '');
 }
 
-module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport };
+function sliceByWidth(text, startCol, maxWidth) {
+  const plain = stripAnsi(text);
+  let vis = 0, i = 0;
+  // Skip startCol visual columns
+  while (i < plain.length && vis < startCol) {
+    const cp = plain.codePointAt(i);
+    const cw = isWide(cp) ? 2 : 1;
+    if (vis + cw > startCol) break;
+    vis += cw;
+    i += cp > 0xFFFF ? 2 : 1;
+  }
+  // Collect up to maxWidth visual columns
+  const begin = i;
+  let w = 0;
+  while (i < plain.length && w < maxWidth) {
+    const cp = plain.codePointAt(i);
+    const cw = isWide(cp) ? 2 : 1;
+    if (w + cw > maxWidth) break;
+    w += cw;
+    i += cp > 0xFFFF ? 2 : 1;
+  }
+  return plain.substring(begin, i);
+}
+
+module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport, sliceByWidth };

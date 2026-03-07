@@ -359,6 +359,7 @@ function selectedLogRef() {
 
 function updateLogDetail() {
   ui.collapsedDetailFiles.clear();
+  state.diffScrollX = 0;
   const item = selectedLogRef();
   if (!item) {
     state.logDetailLines = [];
@@ -421,6 +422,7 @@ function formatDateTime(isoStr) {
 function updateDiff() {
   const item = selectedItem();
   state.diffScrollOffset = 0;
+  state.diffScrollX = 0;
   if (!item) {
     state.diffLines = [];
     state.currentDiffFile = null;
@@ -523,6 +525,7 @@ function refreshFresh() {
 }
 
 function updateFreshDetail() {
+  state.diffScrollX = 0;
   const item = state.freshItems[state.freshCursor];
   if (!item) {
     state.freshDetailLines = [];

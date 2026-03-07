@@ -11,6 +11,8 @@ const state = {
   focusPanel: 'status',  // 'status' | 'diff'
   diffLines: [],
   diffScrollOffset: 0,
+  diffScrollX: 0,
+  filesScrollX: 0,
   currentDiffFile: null, // Current file being viewed in diff panel
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
@@ -121,10 +123,17 @@ const ui = {
   freshScrollPin: undefined,     // pinned freshCursor value when scrollbar used
   filesMaxScroll: 0,
   diffMaxScroll: 0,
+  diffMaxScrollX: 0,
+  filesMaxScrollX: 0,
   logListMaxScroll: 0,
   logDetailMaxScroll: 0,
   freshListMaxScroll: 0,
   freshDetailMaxScroll: 0,
+  hScrollbarZones: [],
+  hScrollbarDragInfo: null,
+  hoveredHScrollbarTarget: null,
+  logDetailMaxScrollX: 0,
+  freshDetailMaxScrollX: 0,
 };
 
 module.exports = { state, ui };
