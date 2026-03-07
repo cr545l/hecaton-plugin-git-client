@@ -10,9 +10,11 @@ const {
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
   gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
+  gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
   gitCherryPickAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
@@ -135,6 +137,74 @@ function registerTabContextMenu() {
   ui.contextMenuFilePath = '';
 }
 
+function registerBranchContextMenu(branchName) {
+  const branch = state.branches.find(b => b.name === branchName);
+  if (!branch) return;
+
+  const upstream = branch.upstream;
+  const remote = upstream ? upstream.split('/')[0] : (state.remotes[0] || 'origin');
+  const items = [];
+
+  if (!branch.isCurrent) {
+    items.push({ id: 'branch_checkout', label: "Checkout '" + branchName + "'" });
+  }
+
+  if (upstream) {
+    items.push(
+      { id: 'branch_ff', label: "Fast-Forward to '" + upstream + "'" },
+      { id: 'branch_pull', label: "Pull '" + upstream + "'..." },
+    );
+  }
+
+  if (remote) {
+    items.push(
+      { id: 'branch_push', label: "Push '" + branchName + "' to '" + remote + "'..." },
+      { id: 'branch_push_pr', label: "Push and Create Pull Request on '" + remote + "'..." },
+    );
+  }
+
+  items.push({ type: 'separator' });
+  items.push(
+    { id: 'branch_new_branch', label: 'New Branch...', shortcut: 'Ctrl+Shift+B' },
+    { id: 'branch_new_tag', label: 'New Tag...', shortcut: 'Ctrl+Shift+T' },
+  );
+
+  const trackingChildren = state.remoteBranches.map(rb => ({
+    id: 'branch_track:' + rb,
+    label: rb + (rb === upstream ? ' (current)' : ''),
+  }));
+  if (upstream) {
+    trackingChildren.push({ type: 'separator' });
+    trackingChildren.push({ id: 'branch_untrack', label: 'Unset Upstream' });
+  }
+  if (trackingChildren.length > 0) {
+    items.push({ id: 'branch_tracking', label: 'Tracking', children: trackingChildren });
+  }
+
+  items.push({ type: 'separator' });
+  items.push(
+    { id: 'branch_rename', label: "Rename '" + branchName + "'...", shortcut: 'F2' },
+    { id: 'branch_delete', label: "Delete '" + branchName + "'...", shortcut: 'Delete' },
+  );
+  items.push({ type: 'separator' });
+  items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
+
+  sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
+  ui.contextMenuBranch = branchName;
+}
+
+function buildPullRequestUrl(remoteUrl, branch) {
+  if (!remoteUrl) return null;
+  let match = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
+  if (match) return 'https://github.com/' + match[1] + '/pull/new/' + encodeURIComponent(branch);
+  match = remoteUrl.match(/gitlab\.com[:/](.+?)(?:\.git)?$/);
+  if (match) return 'https://gitlab.com/' + match[1] + '/-/merge_requests/new?merge_request[source_branch]=' + encodeURIComponent(branch);
+  match = remoteUrl.match(/bitbucket\.org[:/](.+?)(?:\.git)?$/);
+  if (match) return 'https://bitbucket.org/' + match[1] + '/pull-requests/new?source=' + encodeURIComponent(branch);
+  return null;
+}
+
 function registerRemotesContextMenu() {
   const mode = ui.remoteSortMode || 'alpha';
   const items = [
@@ -158,6 +228,7 @@ function unregisterContextMenu() {
   ui.contextMenuActive = false;
   ui.contextMenuTab = false;
   ui.contextMenuStashRef = null;
+  ui.contextMenuBranch = null;
   ui.contextMenuFileItem = null;
   ui.contextMenuFileItems = [];
   ui.contextMenuFilePath = '';
@@ -393,6 +464,104 @@ function handleContextMenuAction(actionId) {
     return;
   }
 
+  // Branch context menu actions
+  if (actionId.startsWith('branch_')) {
+    const branchName = ui.contextMenuBranch;
+    if (!branchName) return;
+    const branch = state.branches.find(b => b.name === branchName);
+    const upstream = branch ? branch.upstream : '';
+    const remote = upstream ? upstream.split('/')[0] : (state.remotes[0] || 'origin');
+
+    if (actionId.startsWith('branch_track:')) {
+      const remoteBranch = actionId.substring('branch_track:'.length);
+      const err = gitSetUpstream(state.cwd, branchName, remoteBranch);
+      afterGitOp(err, 'Set upstream');
+      return;
+    }
+
+    switch (actionId) {
+      case 'branch_checkout':
+        startSpinner('Checking out...');
+        gitCheckoutRefAsync(state.cwd, branchName).then(err => { stopSpinner(); afterGitOp(err, 'Checkout'); });
+        break;
+      case 'branch_ff':
+        startSpinner('Fast-forwarding...');
+        gitMergeFastForwardAsync(state.cwd, upstream).then(err => { stopSpinner(); afterGitOp(err, 'Fast-forward'); });
+        break;
+      case 'branch_pull':
+        startSpinner('Pulling...');
+        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(err => { stopSpinner(); afterGitOp(err, 'Pull'); });
+        break;
+      case 'branch_push':
+        startSpinner('Pushing...');
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(err => { stopSpinner(); afterGitOp(err, 'Push'); });
+        break;
+      case 'branch_push_pr':
+        startSpinner('Pushing...');
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(err => {
+          stopSpinner();
+          if (err) { afterGitOp(err, 'Push'); return; }
+          const remoteUrl = gitGetRemoteUrl(state.cwd, remote);
+          const prUrl = buildPullRequestUrl(remoteUrl, branchName);
+          if (prUrl) openExternal(prUrl);
+          afterGitOp(null, 'Push');
+        });
+        break;
+      case 'branch_new_branch':
+        sendRpc('show_dialog', {
+          type: 'input',
+          title: 'New Branch',
+          message: 'Enter branch name:',
+          defaultValue: '',
+          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-branch';
+        state.pendingDialogTarget = branchName;
+        break;
+      case 'branch_new_tag':
+        sendRpc('show_dialog', {
+          type: 'input',
+          title: 'New Tag',
+          message: 'Enter tag name:',
+          defaultValue: '',
+          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-tag';
+        state.pendingDialogTarget = branchName;
+        break;
+      case 'branch_rename':
+        sendRpc('show_dialog', {
+          type: 'input',
+          title: 'Rename Branch',
+          message: 'Enter new name:',
+          defaultValue: branchName,
+          buttons: [{ id: 'ok', label: 'OK' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'rename-branch';
+        state.pendingDialogTarget = branchName;
+        break;
+      case 'branch_delete':
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Delete Branch',
+          message: "Delete branch '" + branchName + "'?",
+          buttons: [{ id: 'delete', label: 'Delete' }, { id: 'force', label: 'Force Delete' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'delete-branch';
+        state.pendingDialogTarget = branchName;
+        break;
+      case 'branch_untrack': {
+        const err = gitUnsetUpstream(state.cwd, branchName);
+        afterGitOp(err, 'Unset upstream');
+        break;
+      }
+      case 'branch_copy_name':
+        copyToClipboard(branchName);
+        break;
+    }
+    return;
+  }
+
   // Stash context menu actions
   if (actionId.startsWith('stash_')) {
     const ref = ui.contextMenuStashRef;
@@ -544,12 +713,25 @@ function handleContextMenuAction(actionId) {
 function handleDialogResult(params) {
   const buttonId = params && params.buttonId;
 
-  // Name input dialog results (new-branch, new-tag, rename-stash, new-remote)
+  // Name input dialog results (new-branch, new-tag, rename-stash, rename-branch, new-remote, delete-branch)
   if (state.pendingDialogAction) {
     const action = state.pendingDialogAction;
     const target = state.pendingDialogTarget || '';
     state.pendingDialogAction = null;
     state.pendingDialogTarget = null;
+
+    // delete-branch is a message dialog with delete/force/cancel buttons
+    if (action === 'delete-branch') {
+      if (buttonId === 'delete') {
+        const err = gitDeleteBranch(state.cwd, target, false);
+        afterGitOp(err, 'Delete branch');
+      } else if (buttonId === 'force') {
+        const err = gitDeleteBranch(state.cwd, target, true);
+        afterGitOp(err, 'Delete branch');
+      }
+      return;
+    }
+
     if (buttonId === 'ok' && params.value != null) {
       const name = params.value.trim();
       if (!name) {
@@ -557,7 +739,9 @@ function handleDialogResult(params) {
         return;
       }
       let err;
-      if (action === 'rename-stash') {
+      if (action === 'rename-branch') {
+        err = gitRenameBranch(state.cwd, target, name);
+      } else if (action === 'rename-stash') {
         err = gitStashRename(state.cwd, target, name);
       } else if (action === 'new-remote') {
         const parts = name.split(/\s+/).filter(Boolean);
@@ -573,7 +757,8 @@ function handleDialogResult(params) {
       } else if (action === 'new-tag') {
         err = gitCreateTag(state.cwd, name, target);
       }
-      const opName = action === 'rename-stash' ? 'Rename stash'
+      const opName = action === 'rename-branch' ? 'Rename branch'
+        : action === 'rename-stash' ? 'Rename stash'
         : action === 'new-remote' ? 'Remote'
         : action === 'new-branch' ? 'Branch'
         : 'Tag';
@@ -743,6 +928,7 @@ module.exports = {
   registerStashContextMenu,
   registerFileContextMenu,
   registerRemotesContextMenu,
+  registerBranchContextMenu,
   registerTabContextMenu,
   unregisterContextMenu,
   handleContextMenuAction,

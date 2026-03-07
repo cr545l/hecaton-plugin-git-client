@@ -22,6 +22,7 @@ const state = {
   logDetailLines: [],
   branches: [],           // [{ name, isCurrent }]
   remoteBranches: [],     // ['origin/main', ...]
+  remotes: [],            // ['origin', 'upstream', ...]
   stashes: [],            // [{ hash, shortHash, ref }]
   rebaseState: null,     // null | { type, step, total }
   selectedFiles: new Set(),
@@ -99,6 +100,7 @@ const ui = {
   contextMenuFileItems: [],
   contextMenuFilePath: '',
   contextMenuTab: false,
+  contextMenuBranch: null,
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },

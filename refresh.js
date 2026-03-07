@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
+const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitRemotes, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -92,6 +92,7 @@ function refresh() {
   state.rebaseState = gitRebaseState(state.cwd);
   state.branches = gitBranches(state.cwd);
   state.remoteBranches = gitRemoteBranches(state.cwd);
+  state.remotes = gitRemotes(state.cwd);
   state.stashes = gitStashRefs(state.cwd);
   state.committerName = gitGetConfig(state.cwd, 'user.name');
   state.committerEmail = gitGetConfig(state.cwd, 'user.email');
@@ -121,14 +122,15 @@ async function refreshAsync() {
 
   try {
 
-  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
+  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
       gitExec(['branch', '--show-current'], state.cwd),
       gitExec(['status', '--porcelain=v1', '-uall', '--ignored'], state.cwd),
       gitExec(['stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
-      gitExec(['branch', '--format=%(refname:short)\t%(HEAD)'], state.cwd),
+      gitExec(['branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
       gitExec(['branch', '-r', '--format=%(refname:short)'], state.cwd),
+      gitExec(['remote'], state.cwd),
       gitExec(['rev-parse', '--git-dir'], state.cwd),
       gitExec(['config', 'user.name'], state.cwd),
       gitExec(['config', 'user.email'], state.cwd),
@@ -175,8 +177,11 @@ async function refreshAsync() {
   // branches
   state.branches = branchesRaw.trim() ? branchesRaw.trim().split('\n').map(line => {
     const parts = line.split('\t');
-    return { name: parts[0], isCurrent: parts[1] === '*' };
+    return { name: parts[0], isCurrent: parts[1] === '*', upstream: parts[2] || '' };
   }) : [];
+
+  // remotes
+  state.remotes = remoteNamesRaw.trim() ? remoteNamesRaw.trim().split('\n').filter(Boolean) : [];
 
   // remoteBranches
   state.remoteBranches = remotesRaw.trim()

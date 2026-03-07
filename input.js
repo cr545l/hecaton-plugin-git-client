@@ -9,7 +9,7 @@ const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, registerTabContextMenu, unregisterContextMenu } = require('./context-menu');
+const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, registerBranchContextMenu, registerTabContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -1644,6 +1644,12 @@ function handleMouseData(data) {
             registerStashContextMenu(entry.ref);
             // Also select the stash
             ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
+            render();
+            continue;
+          }
+          if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
+            registerBranchContextMenu(entry.branch);
+            ui.leftPanelActiveBranch = entry.branch;
             render();
             continue;
           }

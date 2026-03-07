@@ -293,12 +293,22 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
 
 function gitBranches(cwd) {
   try {
-    const raw = git(['branch', '--format=%(refname:short)\t%(HEAD)'], cwd).trim();
+    const raw = git(['branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], cwd).trim();
     if (!raw) return [];
     return raw.split('\n').map(line => {
       const parts = line.split('\t');
-      return { name: parts[0], isCurrent: parts[1] === '*' };
+      return { name: parts[0], isCurrent: parts[1] === '*', upstream: parts[2] || '' };
     });
+  } catch {
+    return [];
+  }
+}
+
+function gitRemotes(cwd) {
+  try {
+    const raw = git(['remote'], cwd).trim();
+    if (!raw) return [];
+    return raw.split('\n').filter(Boolean);
   } catch {
     return [];
   }
@@ -474,6 +484,62 @@ function gitUnstageAsync(cwd, file) {
     execFile('git', ['restore', '--staged', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
   });
 }
+
+function gitRenameBranch(cwd, oldName, newName) {
+  try {
+    execFileSync('git', ['branch', '-m', oldName, newName], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Rename branch failed';
+  }
+}
+
+function gitDeleteBranch(cwd, name, force) {
+  try {
+    execFileSync('git', ['branch', force ? '-D' : '-d', name], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Delete branch failed';
+  }
+}
+
+function gitSetUpstream(cwd, branch, upstream) {
+  try {
+    execFileSync('git', ['branch', '--set-upstream-to=' + upstream, branch], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Set upstream failed';
+  }
+}
+
+function gitUnsetUpstream(cwd, branch) {
+  try {
+    execFileSync('git', ['branch', '--unset-upstream', branch], {
+      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return null;
+  } catch (e) {
+    return e.stderr || e.message || 'Unset upstream failed';
+  }
+}
+
+function gitGetRemoteUrl(cwd, remote) {
+  try {
+    return git(['remote', 'get-url', remote], cwd).trim();
+  } catch {
+    return '';
+  }
+}
+
+function gitMergeFastForwardAsync(cwd, ref) { return gitAsync(['merge', '--ff-only', ref], cwd); }
+function gitPushToRemoteAsync(cwd, remote, branch) { return gitAsync(['push', '-u', remote, branch], cwd); }
+function gitPullFromRemoteAsync(cwd, remote, branch) { return gitAsync(['pull', remote, branch], cwd); }
 
 function gitStashSave(cwd) {
   try {
@@ -754,7 +820,8 @@ module.exports = {
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
-  gitBranches, gitRemoteBranches, gitRemoteAdd,
+  gitBranches, gitRemoteBranches, gitRemotes, gitRemoteAdd,
+  gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitAheadBehind, gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
@@ -768,4 +835,5 @@ module.exports = {
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
 };
