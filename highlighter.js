@@ -3,7 +3,8 @@
  * Similar to Crush's chroma-based approach but for JavaScript.
  */
 
-const path = require('path');
+function baseName(p) { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return s.substring(s.lastIndexOf('/') + 1); }
+function extName(p) { const b = baseName(p); const i = b.lastIndexOf('.'); return i <= 0 ? '' : b.substring(i); }
 
 // Load highlight.js from local directory
 const hljs = require('./highlight/highlight.min.js');
@@ -47,7 +48,7 @@ function getLanguage(filePath) {
     return langCache.get(filePath);
   }
 
-  const ext = path.extname(filePath).toLowerCase().slice(1);
+  const ext = extName(filePath).toLowerCase().slice(1);
   const langMap = {
     'js': 'javascript',
     'ts': 'typescript',

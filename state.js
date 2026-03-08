@@ -55,8 +55,8 @@ const state = {
 };
 
 const ui = {
-  termCols: parseInt(process.env.HECA_COLS || '80', 10),
-  termRows: parseInt(process.env.HECA_ROWS || '24', 10),
+  termCols: parseInt((hecaton.get_env({ name: 'HECA_COLS' }) || {}).value || '80', 10),
+  termRows: parseInt((hecaton.get_env({ name: 'HECA_ROWS' }) || {}).value || '24', 10),
   logSixelOverlay: null,
   clickableAreas: [],
   hoveredAreaIndex: -1,

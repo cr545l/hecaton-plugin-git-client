@@ -1,6 +1,8 @@
 const { state, ui } = require('./state');
 const { sendRpc, sendRpcNotify } = require('./rpc');
-const path = require('path');
+function baseName(p) { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return s.substring(s.lastIndexOf('/') + 1); }
+function extName(p) { const b = baseName(p); const i = b.lastIndexOf('.'); return i <= 0 ? '' : b.substring(i); }
+function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
@@ -120,7 +122,7 @@ function registerFileContextMenu(fileItem, fileItems) {
   ui.contextMenuStashRef = null;
   ui.contextMenuFileItem = fileItem;
   ui.contextMenuFileItems = targets;
-  ui.contextMenuFilePath = path.join(state.cwd, fileItem.file);
+  ui.contextMenuFilePath = joinPath(state.cwd, fileItem.file);
 }
 
 function registerTabContextMenu() {
@@ -385,7 +387,7 @@ function handleContextMenuAction(actionId) {
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
-          const pattern = path.basename(item.file);
+          const pattern = baseName(item.file);
           const oneErr = gitIgnorePattern(state.cwd, pattern);
           if (!err && oneErr) err = oneErr;
         }
@@ -396,7 +398,7 @@ function handleContextMenuAction(actionId) {
         const exts = new Set();
         for (const item of fileItems) {
           if (!item) continue;
-          const ext = path.extname(item.file);
+          const ext = extName(item.file);
           if (ext) exts.add(ext);
         }
         if (exts.size === 0) {
@@ -456,7 +458,7 @@ function handleContextMenuAction(actionId) {
       case 'file_copy_full_path': {
         const paths = fileItems
           .filter(Boolean)
-          .map((item) => path.join(state.cwd, item.file));
+          .map((item) => joinPath(state.cwd, item.file));
         copyToClipboard(paths.join('\n'));
         break;
       }
