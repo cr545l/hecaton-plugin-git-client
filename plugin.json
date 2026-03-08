@@ -3,7 +3,7 @@
   "name": "Git Client",
   "version": "0.1.1",
   "entry": "main.js",
-  "runtime": "node",
+  "runtime": "deno",
   "apiVersion": { "major": 1, "minor": 0 },
   "shortcut": { "key": "G", "mod": "ctrl+shift" },
   "overlay": {

@@ -188,23 +188,28 @@ async function refreshAsync() {
     ? remotesRaw.trim().split('\n').filter(b => !b.includes('/HEAD'))
     : [];
 
-  // rebaseState — gitDirRaw를 이용해 파일시스템 확인 (동기, 빠름)
+  // rebaseState — gitDirRaw를 이용해 파일시스템 확인 (호스트 API 사용)
   state.rebaseState = null;
   const gitDir = gitDirRaw.trim();
   if (gitDir) {
-    const fs = require('fs');
-    const path = require('path');
-    const base = path.resolve(state.cwd, gitDir);
-    const rebaseMerge = path.join(base, 'rebase-merge');
-    if (fs.existsSync(rebaseMerge)) {
-      const step = fs.readFileSync(path.join(rebaseMerge, 'msgnum'), 'utf-8').trim();
-      const total = fs.readFileSync(path.join(rebaseMerge, 'end'), 'utf-8').trim();
+    const sep = (process.platform === 'win32') ? '\\' : '/';
+    const base = state.cwd + sep + gitDir;
+    const rebaseMerge = base + sep + 'rebase-merge';
+    const rmStat = hecaton.fs_stat({ path: rebaseMerge });
+    if (rmStat && rmStat.exists && rmStat.isDir) {
+      const stepRes = hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' });
+      const totalRes = hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
+      const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
+      const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
       state.rebaseState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
     } else {
-      const rebaseApply = path.join(base, 'rebase-apply');
-      if (fs.existsSync(rebaseApply)) {
-        const step = fs.readFileSync(path.join(rebaseApply, 'next'), 'utf-8').trim();
-        const total = fs.readFileSync(path.join(rebaseApply, 'last'), 'utf-8').trim();
+      const rebaseApply = base + sep + 'rebase-apply';
+      const raStat = hecaton.fs_stat({ path: rebaseApply });
+      if (raStat && raStat.exists && raStat.isDir) {
+        const stepRes = hecaton.fs_read_file({ path: rebaseApply + sep + 'next' });
+        const totalRes = hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
+        const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
+        const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
         state.rebaseState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
       }
     }

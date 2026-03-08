@@ -1,6 +1,5 @@
 const { state, ui } = require('./state');
 const { sendRpc, sendRpcNotify } = require('./rpc');
-const { execFileSync } = require('child_process');
 const path = require('path');
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
@@ -896,14 +895,17 @@ function copyToClipboard(text) {
 
 function openExternal(fullPath) {
   try {
+    let program, args;
     if (process.platform === 'win32') {
-      execFileSync('cmd', ['/c', 'start', '', fullPath], { windowsHide: true });
+      program = 'cmd'; args = ['/c', 'start', '', fullPath];
     } else if (process.platform === 'darwin') {
-      execFileSync('open', [fullPath]);
+      program = 'open'; args = [fullPath];
     } else {
-      execFileSync('xdg-open', [fullPath]);
+      program = 'xdg-open'; args = [fullPath];
     }
-    return null;
+    const r = hecaton.exec_process({ program, args, timeout: 5000 });
+    if (r && r.ok) return null;
+    return (r && r.error) || 'Failed to open file';
   } catch (e) {
     return e.message || 'Failed to open file';
   }

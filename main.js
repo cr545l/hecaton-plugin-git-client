@@ -26,8 +26,6 @@ const { refreshAsync, refreshLog, refreshFresh } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
-const fs = require('fs');
-const path = require('path');
 
 async function main() {
   render();
@@ -141,7 +139,7 @@ function setupGitWatcher() {
   if (!state.cwd || !state.isGitRepo) return;
 
   let debounceTimer = null;
-  const watchers = [];
+  const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
 
   function triggerRefresh() {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -155,42 +153,27 @@ function setupGitWatcher() {
     }, 300);
   }
 
-  // .git 디렉토리 감시 (stage, commit, checkout 등 git 명령 감지)
-  const gitDir = path.join(state.cwd, '.git');
-  try {
-    watchers.push(fs.watch(gitDir, { recursive: true }, triggerRefresh));
-  } catch { /* ignore */ }
-
-  // 워킹 트리 감시 (파일 편집, 생성, 삭제 감지)
-  const ignorePatterns = ['.git', 'node_modules', '.hg', '.svn'];
-  try {
-    watchers.push(fs.watch(state.cwd, { recursive: true }, (_event, filename) => {
-      if (!filename) return;
-      const normalized = filename.replace(/\\/g, '/');
-      for (const pattern of ignorePatterns) {
-        if (normalized === pattern || normalized.startsWith(pattern + '/')) return;
-      }
-      triggerRefresh();
-    }));
-  } catch { /* ignore */ }
-
-  // 폴링 fallback: .git/index, .git/HEAD mtime 변경 감지
-  // fs.watch가 누락할 수 있는 외부 git 클라이언트 변경을 보완
+  // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
+  const gitDir = state.cwd + sep + '.git';
   const pollTargets = [
-    path.join(gitDir, 'index'),
-    path.join(gitDir, 'HEAD'),
-    path.join(gitDir, 'refs'),
-    path.join(gitDir, 'refs', 'heads'),
-    path.join(gitDir, 'logs', 'HEAD'),
-    path.join(gitDir, 'FETCH_HEAD'),
+    gitDir + sep + 'index',
+    gitDir + sep + 'HEAD',
+    gitDir + sep + 'refs',
+    gitDir + sep + 'refs' + sep + 'heads',
+    gitDir + sep + 'logs' + sep + 'HEAD',
+    gitDir + sep + 'FETCH_HEAD',
   ];
-  let lastMtimes = pollTargets.map(f => {
-    try { return fs.statSync(f).mtimeMs; } catch { return 0; }
-  });
+
+  function statMtime(filePath) {
+    try {
+      const r = hecaton.fs_stat({ path: filePath });
+      return (r && r.exists && r.modifiedTime) ? r.modifiedTime : 0;
+    } catch { return 0; }
+  }
+
+  let lastMtimes = pollTargets.map(statMtime);
   const pollInterval = setInterval(() => {
-    const current = pollTargets.map(f => {
-      try { return fs.statSync(f).mtimeMs; } catch { return 0; }
-    });
+    const current = pollTargets.map(statMtime);
     let changed = false;
     for (let i = 0; i < current.length; i++) {
       if (current[i] !== lastMtimes[i]) { changed = true; break; }
@@ -201,16 +184,13 @@ function setupGitWatcher() {
     }
   }, 1000);
 
-  // 종료 시 watcher 정리
-  function closeWatchers() {
+  // 종료 시 정리
+  function cleanup() {
     if (debounceTimer) clearTimeout(debounceTimer);
     clearInterval(pollInterval);
-    for (const w of watchers) {
-      try { w.close(); } catch { /* ignore */ }
-    }
   }
-  process.on('SIGTERM', closeWatchers);
-  process.on('SIGINT', closeWatchers);
+  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', cleanup);
 }
 
 main().catch((e) => {

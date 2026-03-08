@@ -1,27 +1,31 @@
-const { execFileSync, execFile } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+// Git operations via hecaton host API (exec_process, fs_*)
+// No direct child_process or fs usage — all operations go through host permission system.
 
 function gitExec(args, cwd, timeout) {
   return new Promise((resolve) => {
-    execFile('git', args, {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: timeout || 5000,
-    }, (err, stdout) => {
-      if (err && !stdout) resolve(err.stdout ? err.stdout.replace(/\r\n/g, '\n') : '');
-      else resolve((stdout || '').replace(/\r\n/g, '\n'));
-    });
+    const result = hecaton.exec_process({ program: 'git', args, cwd, timeout: timeout || 5000 });
+    if (result && result.ok) {
+      resolve((result.stdout || '').replace(/\r\n/g, '\n'));
+    } else {
+      resolve('');
+    }
   });
 }
 
-function git(args, cwd) {
-  try {
-    return execFileSync('git', args, {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
-    }).replace(/\r\n/g, '\n');
-  } catch (e) {
-    if (e.stdout) return e.stdout.replace(/\r\n/g, '\n');
-    throw e;
+function git(args, cwd, timeout) {
+  const result = hecaton.exec_process({ program: 'git', args, cwd, timeout: timeout || 5000 });
+  if (!result || !result.ok) {
+    const err = new Error(result ? result.error || 'git failed' : 'exec_process failed');
+    err.stderr = result ? (result.stderr || '') : '';
+    err.stdout = result ? (result.stdout || '') : '';
+    if (result && result.stdout) return result.stdout.replace(/\r\n/g, '\n');
+    throw err;
   }
+  return (result.stdout || '').replace(/\r\n/g, '\n');
+}
+
+function gitResult(args, cwd, timeout) {
+  return hecaton.exec_process({ program: 'git', args, cwd, timeout: timeout || 5000 });
 }
 
 function unquoteGitPath(p) {
@@ -68,8 +72,8 @@ function gitStatus(cwd) {
     const output = git(['status', '--porcelain=v1', '-uall', '--ignored'], cwd);
     for (const line of output.split('\n')) {
       if (!line) continue;
-      const x = line[0]; // index status
-      const y = line[1]; // worktree status
+      const x = line[0];
+      const y = line[1];
       const file = unquoteGitPath(line.substring(3));
       if (x === '!' && y === '!') {
         ignored.push({ file });
@@ -182,87 +186,55 @@ function gitStashDiff(cwd, ref) {
 }
 
 function gitRebaseState(cwd) {
-  const fs = require('fs');
-  const path = require('path');
   try {
     const gitDir = git(['rev-parse', '--git-dir'], cwd).trim();
-    const base = path.resolve(cwd, gitDir);
-    // interactive rebase (rebase-merge)
-    const rebaseMerge = path.join(base, 'rebase-merge');
-    if (fs.existsSync(rebaseMerge)) {
-      const step = fs.readFileSync(path.join(rebaseMerge, 'msgnum'), 'utf-8').trim();
-      const total = fs.readFileSync(path.join(rebaseMerge, 'end'), 'utf-8').trim();
+    // Use path separators that work cross-platform
+    const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+    const base = cwd + sep + gitDir;
+    // Check rebase-merge via fs_stat
+    const rebaseMerge = base + sep + 'rebase-merge';
+    const rmStat = hecaton.fs_stat({ path: rebaseMerge });
+    if (rmStat && rmStat.exists && rmStat.isDir) {
+      const stepRes = hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' });
+      const totalRes = hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
+      const step = stepRes && stepRes.content ? stepRes.content.trim() : '0';
+      const total = totalRes && totalRes.content ? totalRes.content.trim() : '0';
       return { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
     }
-    // am-style rebase (rebase-apply)
-    const rebaseApply = path.join(base, 'rebase-apply');
-    if (fs.existsSync(rebaseApply)) {
-      const step = fs.readFileSync(path.join(rebaseApply, 'next'), 'utf-8').trim();
-      const total = fs.readFileSync(path.join(rebaseApply, 'last'), 'utf-8').trim();
+    // Check rebase-apply
+    const rebaseApply = base + sep + 'rebase-apply';
+    const raStat = hecaton.fs_stat({ path: rebaseApply });
+    if (raStat && raStat.exists && raStat.isDir) {
+      const stepRes = hecaton.fs_read_file({ path: rebaseApply + sep + 'next' });
+      const totalRes = hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
+      const step = stepRes && stepRes.content ? stepRes.content.trim() : '0';
+      const total = totalRes && totalRes.content ? totalRes.content.trim() : '0';
       return { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
     }
   } catch { /* not in rebase */ }
   return null;
 }
 
-function gitRebase(cwd, ref) {
-  try {
-    execFileSync('git', ['rebase', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Rebase failed';
-  }
+function gitRunOrError(args, cwd, timeout, errorMsg) {
+  const r = gitResult(args, cwd, timeout || 30000);
+  if (r && r.ok && r.exitCode === 0) return null;
+  return (r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '') || errorMsg;
 }
 
-function gitRebaseContinue(cwd) {
-  try {
-    execFileSync('git', ['rebase', '--continue'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-      env: { ...process.env, GIT_EDITOR: 'true' },
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Rebase continue failed';
-  }
-}
-
-function gitRebaseAbort(cwd) {
-  try {
-    execFileSync('git', ['rebase', '--abort'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Rebase abort failed';
-  }
-}
-
-function gitRebaseSkip(cwd) {
-  try {
-    execFileSync('git', ['rebase', '--skip'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Rebase skip failed';
-  }
-}
+function gitRebase(cwd, ref) { return gitRunOrError(['rebase', ref], cwd, 30000, 'Rebase failed'); }
+function gitRebaseContinue(cwd) { return gitRunOrError(['rebase', '--continue'], cwd, 30000, 'Rebase continue failed'); }
+function gitRebaseAbort(cwd) { return gitRunOrError(['rebase', '--abort'], cwd, 30000, 'Rebase abort failed'); }
+function gitRebaseSkip(cwd) { return gitRunOrError(['rebase', '--skip'], cwd, 30000, 'Rebase skip failed'); }
 
 function gitLogCommits(cwd, extraRefs, maxCount) {
   try {
-    // %x01 as record separator to handle multi-line %B
     const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%aI%x00%cn%x00%cI%x00%B'];
     if (extraRefs && extraRefs.length > 0) args.push(...extraRefs);
     if (maxCount) args.push('-' + maxCount);
-    const raw = execFileSync('git', args, {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    }).replace(/\r\n/g, '\n').replace(/\r/g, '').trim();
+    const raw = git(args, cwd, 30000).replace(/\r/g, '').trim();
     if (!raw) return [];
     return raw.split('\x01').filter(r => r.trim()).map(record => {
       const trimmed = record.trim();
-      // Split only first 7 null bytes; the rest (after 7th) is full body with newlines
       const parts = [];
       let pos = 0;
       for (let i = 0; i < 7; i++) {
@@ -271,7 +243,7 @@ function gitLogCommits(cwd, extraRefs, maxCount) {
         parts.push(trimmed.substring(pos, next));
         pos = next + 1;
       }
-      parts.push(trimmed.substring(pos)); // rest is full body
+      parts.push(trimmed.substring(pos));
       const fullBody = (parts[7] || '').trim();
       const firstLine = fullBody.split('\n')[0];
       return {
@@ -324,50 +296,14 @@ function gitRemoteBranches(cwd) {
   }
 }
 
-function gitCherryPick(cwd, ref) {
-  try {
-    execFileSync('git', ['cherry-pick', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Cherry-pick failed';
-  }
-}
-
-function gitRevert(cwd, ref) {
-  try {
-    execFileSync('git', ['revert', '--no-edit', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Revert failed';
-  }
-}
-
-function gitCheckoutRef(cwd, ref) {
-  try {
-    execFileSync('git', ['checkout', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Checkout failed';
-  }
-}
+function gitCherryPick(cwd, ref) { return gitRunOrError(['cherry-pick', ref], cwd, 30000, 'Cherry-pick failed'); }
+function gitRevert(cwd, ref) { return gitRunOrError(['revert', '--no-edit', ref], cwd, 30000, 'Revert failed'); }
+function gitCheckoutRef(cwd, ref) { return gitRunOrError(['checkout', ref], cwd, 10000, 'Checkout failed'); }
 
 function gitCreateBranch(cwd, name, startPoint) {
-  try {
-    const args = ['checkout', '-b', name];
-    if (startPoint) args.push(startPoint);
-    execFileSync('git', args, {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Create branch failed';
-  }
+  const args = ['checkout', '-b', name];
+  if (startPoint) args.push(startPoint);
+  return gitRunOrError(args, cwd, 10000, 'Create branch failed');
 }
 
 function gitCreateTag(cwd, name, ref) {
@@ -381,27 +317,8 @@ function gitCreateTag(cwd, name, ref) {
   }
 }
 
-function gitReset(cwd, ref) {
-  try {
-    execFileSync('git', ['reset', '--hard', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Reset failed';
-  }
-}
-
-function gitMerge(cwd, ref) {
-  try {
-    execFileSync('git', ['merge', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Merge failed';
-  }
-}
+function gitReset(cwd, ref) { return gitRunOrError(['reset', '--hard', ref], cwd, 30000, 'Reset failed'); }
+function gitMerge(cwd, ref) { return gitRunOrError(['merge', ref], cwd, 30000, 'Merge failed'); }
 
 function gitAheadBehind(cwd) {
   try {
@@ -413,121 +330,52 @@ function gitAheadBehind(cwd) {
   }
 }
 
-function gitFetch(cwd) {
-  try {
-    execFileSync('git', ['fetch', '--all', '--prune'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Fetch failed';
-  }
-}
+function gitFetch(cwd) { return gitRunOrError(['fetch', '--all', '--prune'], cwd, 30000, 'Fetch failed'); }
+function gitPull(cwd) { return gitRunOrError(['pull'], cwd, 30000, 'Pull failed'); }
+function gitPush(cwd) { return gitRunOrError(['push'], cwd, 30000, 'Push failed'); }
 
-function gitPull(cwd) {
-  try {
-    execFileSync('git', ['pull'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Pull failed';
-  }
-}
-
-function gitPush(cwd) {
-  try {
-    execFileSync('git', ['push'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Push failed';
-  }
-}
-
-// Async helpers for long-running operations (spinner-compatible)
-function gitAsync(args, cwd, opts) {
+// Async helpers — in Deno runner, exec_process is synchronous RPC,
+// but we wrap in Promise to keep the same API for spinner-compatible callers.
+function gitAsyncWrap(args, cwd, timeout) {
   return new Promise((resolve) => {
-    execFile('git', args, {
-      cwd, encoding: 'utf-8', timeout: (opts && opts.timeout) || 30000,
-      env: (opts && opts.env) || process.env,
-    }, (err, _stdout, stderr) => {
-      if (err) resolve(stderr || err.message || 'Operation failed');
-      else resolve(null);
-    });
+    const r = gitResult(args, cwd, timeout || 30000);
+    if (r && r.ok && r.exitCode === 0) resolve(null);
+    else resolve((r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '') || 'Operation failed');
   });
 }
 
-function gitFetchAsync(cwd) { return gitAsync(['fetch', '--all', '--prune'], cwd); }
-function gitPullAsync(cwd) { return gitAsync(['pull'], cwd); }
-function gitPushAsync(cwd) { return gitAsync(['push'], cwd); }
-function gitRebaseAsync(cwd, ref) { return gitAsync(['rebase', ref], cwd); }
-function gitRebaseContinueAsync(cwd) { return gitAsync(['rebase', '--continue'], cwd, { env: { ...process.env, GIT_EDITOR: 'true' } }); }
-function gitRebaseAbortAsync(cwd) { return gitAsync(['rebase', '--abort'], cwd); }
-function gitRebaseSkipAsync(cwd) { return gitAsync(['rebase', '--skip'], cwd); }
-function gitMergeAsync(cwd, ref) { return gitAsync(['merge', ref], cwd); }
-function gitResetAsync(cwd, ref) { return gitAsync(['reset', '--hard', ref], cwd); }
-function gitCheckoutRefAsync(cwd, ref) { return gitAsync(['checkout', ref], cwd, { timeout: 10000 }); }
-function gitCherryPickAsync(cwd, ref) { return gitAsync(['cherry-pick', ref], cwd); }
-function gitRevertAsync(cwd, ref) { return gitAsync(['revert', '--no-edit', ref], cwd); }
-function gitStashSaveAsync(cwd) { return gitAsync(['stash', 'push'], cwd, { timeout: 10000 }); }
-function gitCommitAsync(cwd, message) { return gitAsync(['commit', '-m', message], cwd, { timeout: 30000 }); }
-function gitStashPopAsync(cwd) { return gitAsync(['stash', 'pop'], cwd, { timeout: 10000 }); }
+function gitFetchAsync(cwd) { return gitAsyncWrap(['fetch', '--all', '--prune'], cwd); }
+function gitPullAsync(cwd) { return gitAsyncWrap(['pull'], cwd); }
+function gitPushAsync(cwd) { return gitAsyncWrap(['push'], cwd); }
+function gitRebaseAsync(cwd, ref) { return gitAsyncWrap(['rebase', ref], cwd); }
+function gitRebaseContinueAsync(cwd) { return gitAsyncWrap(['rebase', '--continue'], cwd); }
+function gitRebaseAbortAsync(cwd) { return gitAsyncWrap(['rebase', '--abort'], cwd); }
+function gitRebaseSkipAsync(cwd) { return gitAsyncWrap(['rebase', '--skip'], cwd); }
+function gitMergeAsync(cwd, ref) { return gitAsyncWrap(['merge', ref], cwd); }
+function gitResetAsync(cwd, ref) { return gitAsyncWrap(['reset', '--hard', ref], cwd); }
+function gitCheckoutRefAsync(cwd, ref) { return gitAsyncWrap(['checkout', ref], cwd, 10000); }
+function gitCherryPickAsync(cwd, ref) { return gitAsyncWrap(['cherry-pick', ref], cwd); }
+function gitRevertAsync(cwd, ref) { return gitAsyncWrap(['revert', '--no-edit', ref], cwd); }
+function gitStashSaveAsync(cwd) { return gitAsyncWrap(['stash', 'push'], cwd, 10000); }
+function gitCommitAsync(cwd, message) { return gitAsyncWrap(['commit', '-m', message], cwd, 30000); }
+function gitStashPopAsync(cwd) { return gitAsyncWrap(['stash', 'pop'], cwd, 10000); }
 function gitStageAsync(cwd, file) {
   return new Promise((resolve) => {
-    execFile('git', ['add', '-f', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
+    const r = gitResult(['add', '-f', '--', file], cwd, 5000);
+    resolve(r && r.ok && r.exitCode === 0);
   });
 }
 function gitUnstageAsync(cwd, file) {
   return new Promise((resolve) => {
-    execFile('git', ['restore', '--staged', '--', file], { cwd, encoding: 'utf-8', timeout: 5000 }, (err) => resolve(!err));
+    const r = gitResult(['restore', '--staged', '--', file], cwd, 5000);
+    resolve(r && r.ok && r.exitCode === 0);
   });
 }
 
-function gitRenameBranch(cwd, oldName, newName) {
-  try {
-    execFileSync('git', ['branch', '-m', oldName, newName], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Rename branch failed';
-  }
-}
-
-function gitDeleteBranch(cwd, name, force) {
-  try {
-    execFileSync('git', ['branch', force ? '-D' : '-d', name], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Delete branch failed';
-  }
-}
-
-function gitSetUpstream(cwd, branch, upstream) {
-  try {
-    execFileSync('git', ['branch', '--set-upstream-to=' + upstream, branch], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Set upstream failed';
-  }
-}
-
-function gitUnsetUpstream(cwd, branch) {
-  try {
-    execFileSync('git', ['branch', '--unset-upstream', branch], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Unset upstream failed';
-  }
-}
+function gitRenameBranch(cwd, oldName, newName) { return gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, 'Rename branch failed'); }
+function gitDeleteBranch(cwd, name, force) { return gitRunOrError(['branch', force ? '-D' : '-d', name], cwd, 10000, 'Delete branch failed'); }
+function gitSetUpstream(cwd, branch, upstream) { return gitRunOrError(['branch', '--set-upstream-to=' + upstream, branch], cwd, 10000, 'Set upstream failed'); }
+function gitUnsetUpstream(cwd, branch) { return gitRunOrError(['branch', '--unset-upstream', branch], cwd, 10000, 'Unset upstream failed'); }
 
 function gitGetRemoteUrl(cwd, remote) {
   try {
@@ -537,63 +385,22 @@ function gitGetRemoteUrl(cwd, remote) {
   }
 }
 
-function gitMergeFastForwardAsync(cwd, ref) { return gitAsync(['merge', '--ff-only', ref], cwd); }
-function gitPushToRemoteAsync(cwd, remote, branch) { return gitAsync(['push', '-u', remote, branch], cwd); }
-function gitPullFromRemoteAsync(cwd, remote, branch) { return gitAsync(['pull', remote, branch], cwd); }
+function gitMergeFastForwardAsync(cwd, ref) { return gitAsyncWrap(['merge', '--ff-only', ref], cwd); }
+function gitPushToRemoteAsync(cwd, remote, branch) { return gitAsyncWrap(['push', '-u', remote, branch], cwd); }
+function gitPullFromRemoteAsync(cwd, remote, branch) { return gitAsyncWrap(['pull', remote, branch], cwd); }
 
-function gitStashSave(cwd) {
-  try {
-    execFileSync('git', ['stash', 'push'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Stash failed';
-  }
-}
-
-function gitStashPop(cwd) {
-  try {
-    execFileSync('git', ['stash', 'pop'], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Stash pop failed';
-  }
-}
-
-function gitStashApply(cwd, ref) {
-  try {
-    execFileSync('git', ['stash', 'apply', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Stash apply failed';
-  }
-}
-
-function gitStashDrop(cwd, ref) {
-  try {
-    execFileSync('git', ['stash', 'drop', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Stash drop failed';
-  }
-}
+function gitStashSave(cwd) { return gitRunOrError(['stash', 'push'], cwd, 10000, 'Stash failed'); }
+function gitStashPop(cwd) { return gitRunOrError(['stash', 'pop'], cwd, 10000, 'Stash pop failed'); }
+function gitStashApply(cwd, ref) { return gitRunOrError(['stash', 'apply', ref], cwd, 10000, 'Stash apply failed'); }
+function gitStashDrop(cwd, ref) { return gitRunOrError(['stash', 'drop', ref], cwd, 10000, 'Stash drop failed'); }
 
 function gitStashRename(cwd, ref, newMessage) {
   try {
     const hash = git(['rev-parse', ref], cwd).trim();
-    execFileSync('git', ['stash', 'drop', ref], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    execFileSync('git', ['stash', 'store', '-m', newMessage, hash], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
+    const r1 = gitResult(['stash', 'drop', ref], cwd, 10000);
+    if (!r1 || !r1.ok) return 'Stash drop failed';
+    const r2 = gitResult(['stash', 'store', '-m', newMessage, hash], cwd, 10000);
+    if (!r2 || !r2.ok) return 'Stash store failed';
     return null;
   } catch (e) {
     return e.stderr || e.message || 'Stash rename failed';
@@ -616,65 +423,35 @@ function gitCommitInfo(cwd, ref) {
   }
 }
 
-function gitRemoteAdd(cwd, name, url) {
-  try {
-    execFileSync('git', ['remote', 'add', name, url], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Remote add failed';
-  }
-}
+function gitRemoteAdd(cwd, name, url) { return gitRunOrError(['remote', 'add', name, url], cwd, 10000, 'Remote add failed'); }
 
 function gitDiscardFile(cwd, item) {
   if (!item || !item.file) return 'No file selected';
-  try {
-    if (item.type === 'untracked') {
-      execFileSync('git', ['clean', '-f', '--', item.file], {
-        cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-      });
-      return null;
-    }
-    if (item.type === 'staged') {
-      execFileSync('git', ['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], {
-        cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-      });
-      return null;
-    }
-    execFileSync('git', ['restore', '--', item.file], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Discard failed';
-  }
+  if (item.type === 'untracked') return gitRunOrError(['clean', '-f', '--', item.file], cwd, 10000, 'Discard failed');
+  if (item.type === 'staged') return gitRunOrError(['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], cwd, 10000, 'Discard failed');
+  return gitRunOrError(['restore', '--', item.file], cwd, 10000, 'Discard failed');
 }
 
 function gitStashFile(cwd, file) {
   if (!file) return 'No file selected';
-  try {
-    execFileSync('git', ['stash', 'push', '-u', '--', file], {
-      cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000,
-    });
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Stash file failed';
-  }
+  return gitRunOrError(['stash', 'push', '-u', '--', file], cwd, 10000, 'Stash file failed');
 }
 
 function gitIgnorePattern(cwd, pattern) {
   if (!pattern) return 'No ignore pattern';
   try {
-    const ignorePath = path.join(cwd, '.gitignore');
+    const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+    const ignorePath = cwd + sep + '.gitignore';
     const normalized = pattern.replace(/\\/g, '/');
     let lines = [];
-    if (fs.existsSync(ignorePath)) {
-      lines = fs.readFileSync(ignorePath, 'utf-8').replace(/\r\n/g, '\n').split('\n');
+    const readRes = hecaton.fs_read_file({ path: ignorePath });
+    if (readRes && readRes.content) {
+      lines = readRes.content.replace(/\r\n/g, '\n').split('\n');
     }
     if (lines.some(line => line.trim() === normalized)) return null;
     const content = (lines.length > 0 ? lines.join('\n').replace(/\n*$/, '\n') : '') + normalized + '\n';
-    fs.writeFileSync(ignorePath, content, 'utf-8');
+    const writeRes = hecaton.fs_write_file({ path: ignorePath, content });
+    if (!writeRes || !writeRes.ok) return 'Failed to write .gitignore';
     return null;
   } catch (e) {
     return e.message || 'Ignore update failed';
@@ -697,47 +474,11 @@ function gitBlameFile(cwd, file) {
   }
 }
 
-function gitGetConfig(cwd, key) {
-  try {
-    return git(['config', key], cwd).trim();
-  } catch {
-    return '';
-  }
-}
-
-function gitGetConfigLocal(cwd, key) {
-  try {
-    return git(['config', '--local', key], cwd).trim();
-  } catch {
-    return '';
-  }
-}
-
-function gitGetConfigGlobal(cwd, key) {
-  try {
-    return git(['config', '--global', key], cwd).trim();
-  } catch {
-    return '';
-  }
-}
-
-function gitSetConfig(cwd, key, value) {
-  try {
-    git(['config', key, value], cwd);
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Config set failed';
-  }
-}
-
-function gitUnsetConfigLocal(cwd, key) {
-  try {
-    git(['config', '--local', '--unset', key], cwd);
-    return null;
-  } catch (e) {
-    return e.stderr || e.message || 'Config unset failed';
-  }
-}
+function gitGetConfig(cwd, key) { try { return git(['config', key], cwd).trim(); } catch { return ''; } }
+function gitGetConfigLocal(cwd, key) { try { return git(['config', '--local', key], cwd).trim(); } catch { return ''; } }
+function gitGetConfigGlobal(cwd, key) { try { return git(['config', '--global', key], cwd).trim(); } catch { return ''; } }
+function gitSetConfig(cwd, key, value) { try { git(['config', key, value], cwd); return null; } catch (e) { return e.stderr || e.message || 'Config set failed'; } }
+function gitUnsetConfigLocal(cwd, key) { try { git(['config', '--local', '--unset', key], cwd); return null; } catch (e) { return e.stderr || e.message || 'Config unset failed'; } }
 
 function gitFreshLog(cwd, days) {
   try {
@@ -766,7 +507,7 @@ function gitFreshLog(cwd, days) {
       const status = tabs[0].charAt(0);
       let file;
       if (status === 'R' && tabs.length >= 3) {
-        file = tabs[2]; // renamed: use new name
+        file = tabs[2];
       } else {
         file = tabs[1];
       }
