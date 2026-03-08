@@ -1,6 +1,7 @@
 {
   "id": "git-client",
   "name": "Git Client",
+  "icon": "terminal-git-bash",
   "version": "0.1.1",
   "entry": "main.js",
   "runtime": "deno",
