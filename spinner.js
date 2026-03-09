@@ -46,6 +46,9 @@ function startSpinner(msg) {
   state.spinnerActive = true;
   state.error = msg;
   acquireSpinner();
+  // 동기 블로킹 작업 전에 스피너를 즉시 화면에 표시
+  const { render } = require('./render');
+  render();
 }
 
 function stopSpinner() {
