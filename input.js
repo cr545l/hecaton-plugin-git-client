@@ -988,15 +988,14 @@ function handleMouseData(data) {
         else ui.leftPanelScrollOffset = Math.min(ui.leftMaxScroll || 0, ui.leftPanelScrollOffset + 3);
         if (ui.leftPanelScrollOffset !== prev) render();
       } else if (inBody && inMiddle) {
-        // Middle panel (diff mode only): file list scroll
-        const list = buildFileList();
-        if (list.length > 0) {
-          const prev = state.cursor;
-          if (cb === 64) state.cursor = Math.max(0, state.cursor - 3);
-          else state.cursor = Math.min(list.length - 1, state.cursor + 3);
-          if (state.cursor !== prev) {
-            updateDiff();
-            state.focusPanel = 'status';
+        // Middle panel (diff mode only): file list viewport scroll
+        const maxScroll = ui.filesMaxScroll || 0;
+        if (maxScroll > 0) {
+          const prev = state.scrollOffset;
+          if (cb === 64) state.scrollOffset = Math.max(0, state.scrollOffset - 3);
+          else state.scrollOffset = Math.min(maxScroll, state.scrollOffset + 3);
+          if (state.scrollOffset !== prev) {
+            ui.filesScrollPin = state.cursor;
             render();
           }
         }
@@ -1006,13 +1005,13 @@ function handleMouseData(data) {
           // Fresh mode: top = file list scroll, bottom = detail scroll
           const bodyRowIdx = cy - (bodyTop);
           if (bodyRowIdx < ui.lastFreshListH) {
-            if (state.freshItems.length > 0) {
-              const prev = state.freshCursor;
-              if (cb === 64) state.freshCursor = Math.max(0, state.freshCursor - 3);
-              else state.freshCursor = Math.min(state.freshItems.length - 1, state.freshCursor + 3);
-              if (state.freshCursor !== prev) {
-                state.diffScrollOffset = 0;
-                updateFreshDetail();
+            const maxScroll = ui.freshListMaxScroll || 0;
+            if (maxScroll > 0) {
+              const prev = state.freshScrollOffset;
+              if (cb === 64) state.freshScrollOffset = Math.max(0, state.freshScrollOffset - 3);
+              else state.freshScrollOffset = Math.min(maxScroll, state.freshScrollOffset + 3);
+              if (state.freshScrollOffset !== prev) {
+                ui.freshScrollPin = state.freshCursor;
                 changed = true;
               }
             }
@@ -1029,13 +1028,13 @@ function handleMouseData(data) {
           // Log mode: top = log scroll, bottom = detail scroll
           const bodyRowIdx = cy - (bodyTop);
           if (bodyRowIdx < ui.lastLogListH) {
-            if (state.logSelectables.length > 0) {
-              const prev = state.logCursor;
-              if (cb === 64) state.logCursor = Math.max(0, state.logCursor - 3);
-              else state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 3);
-              if (state.logCursor !== prev) {
-                state.diffScrollOffset = 0;
-                updateLogDetail();
+            const maxScroll = ui.logListMaxScroll || 0;
+            if (maxScroll > 0) {
+              const prev = state.logScrollOffset;
+              if (cb === 64) state.logScrollOffset = Math.max(0, state.logScrollOffset - 3);
+              else state.logScrollOffset = Math.min(maxScroll, state.logScrollOffset + 3);
+              if (state.logScrollOffset !== prev) {
+                ui.logScrollPin = state.logCursor;
                 changed = true;
               }
             }
@@ -1366,13 +1365,18 @@ function handleMouseData(data) {
               }
               const targetBranch = entry.branch;
               let foundIdx = -1;
+              // Check if target is the current branch (may be detached HEAD)
+              const isCurrentBranch = state.branches.some(b => b.isCurrent && b.name === targetBranch);
               for (let si = 0; si < state.logItems.length; si++) {
                 const item = state.logItems[si];
                 if (item.type !== 'commit' || !item.decoration) continue;
                 const refs = item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '').split(', ');
                 for (const ref of refs) {
-                  const cleaned = ref.startsWith('HEAD -> ') ? ref.substring(8) : ref;
+                  const trimmed = ref.trim();
+                  const cleaned = trimmed.startsWith('HEAD -> ') ? trimmed.substring(8) : trimmed;
                   if (cleaned === targetBranch) { foundIdx = si; break; }
+                  // Detached HEAD: decoration is bare "HEAD", match if clicking current branch
+                  if (isCurrentBranch && trimmed === 'HEAD') { foundIdx = si; break; }
                 }
                 if (foundIdx >= 0) break;
               }
