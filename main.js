@@ -184,10 +184,32 @@ function setupGitWatcher() {
     }
   }, 1000);
 
+  // 워킹 디렉토리 변경 감지 (git status 결과 비교)
+  let lastStatusSnapshot = '';
+  let statusPolling = false;
+  const statusPollInterval = setInterval(async () => {
+    if (statusPolling) return;
+    if (state.loading || state.minimized) return;
+    if (state.mode !== 'normal') return;
+    statusPolling = true;
+    try {
+      const result = hecaton.exec_process({
+        program: 'git', args: ['status', '--porcelain=v1', '-uall'], cwd: state.cwd, timeout: 5000
+      });
+      const snapshot = (result && result.ok) ? (result.stdout || '') : '';
+      if (snapshot !== lastStatusSnapshot) {
+        lastStatusSnapshot = snapshot;
+        triggerRefresh();
+      }
+    } catch { /* ignore */ }
+    statusPolling = false;
+  }, 2000);
+
   // 종료 시 정리
   function cleanup() {
     if (debounceTimer) clearTimeout(debounceTimer);
     clearInterval(pollInterval);
+    clearInterval(statusPollInterval);
   }
   process.on('SIGTERM', cleanup);
   process.on('SIGINT', cleanup);
