@@ -235,7 +235,7 @@ function unregisterContextMenu() {
   ui.contextMenuFilePath = '';
 }
 
-function handleContextMenuAction(actionId) {
+async function handleContextMenuAction(actionId) {
   // Tab context menu actions
   if (actionId === 'tab_refresh') {
     refreshAsync().then(() => {
@@ -295,12 +295,12 @@ function handleContextMenuAction(actionId) {
 
     switch (actionId) {
       case 'file_open': {
-        const err = openExternal(fullPath);
+        const err = await openExternal(fullPath);
         if (err) showError('Open failed:\n' + err);
         break;
       }
       case 'file_external_diff_head': {
-        const raw = gitFilePatch(state.cwd, { ...fileItem, type: 'unstaged' });
+        const raw = await gitFilePatch(state.cwd, { ...fileItem, type: 'unstaged' });
         if (raw) {
           copyToClipboard(raw);
           showError('Patch copied to clipboard');
@@ -310,7 +310,7 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_external_diff_index': {
-        const raw = gitFilePatch(state.cwd, { ...fileItem, type: 'staged' });
+        const raw = await gitFilePatch(state.cwd, { ...fileItem, type: 'staged' });
         if (raw) {
           copyToClipboard(raw);
           showError('Index diff copied to clipboard');
@@ -326,7 +326,7 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_blame': {
-        const raw = gitBlameFile(state.cwd, fileItem.file);
+        const raw = await gitBlameFile(state.cwd, fileItem.file);
         if (raw) {
           copyToClipboard(raw);
           showError('Blame copied to clipboard');
@@ -336,7 +336,7 @@ function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_history': {
-        const raw = gitFileHistory(state.cwd, fileItem.file);
+        const raw = await gitFileHistory(state.cwd, fileItem.file);
         if (raw) {
           copyToClipboard(raw);
           showError('History copied to clipboard');
@@ -373,25 +373,25 @@ function handleContextMenuAction(actionId) {
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
-          const oneErr = gitDiscardFile(state.cwd, item);
+          const oneErr = await gitDiscardFile(state.cwd, item);
           if (!err && oneErr) err = oneErr;
         }
-        afterGitOp(err, 'Discard');
+        await afterGitOp(err, 'Discard');
         break;
       }
       case 'file_stage_all':
-        gitStageAll(state.cwd);
-        afterGitOp(null);
+        await gitStageAll(state.cwd);
+        await afterGitOp(null);
         break;
       case 'file_ignore_name': {
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
           const pattern = baseName(item.file);
-          const oneErr = gitIgnorePattern(state.cwd, pattern);
+          const oneErr = await gitIgnorePattern(state.cwd, pattern);
           if (!err && oneErr) err = oneErr;
         }
-        afterGitOp(err, 'Ignore');
+        await afterGitOp(err, 'Ignore');
         break;
       }
       case 'file_ignore_ext': {
@@ -407,37 +407,37 @@ function handleContextMenuAction(actionId) {
         }
         let err = null;
         for (const ext of exts) {
-          const oneErr = gitIgnorePattern(state.cwd, '*' + ext);
+          const oneErr = await gitIgnorePattern(state.cwd, '*' + ext);
           if (!err && oneErr) err = oneErr;
         }
-        afterGitOp(err, 'Ignore');
+        await afterGitOp(err, 'Ignore');
         break;
       }
       case 'file_ignore_path': {
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
-          const oneErr = gitIgnorePattern(state.cwd, item.file.replace(/\\/g, '/'));
+          const oneErr = await gitIgnorePattern(state.cwd, item.file.replace(/\\/g, '/'));
           if (!err && oneErr) err = oneErr;
         }
-        afterGitOp(err, 'Ignore');
+        await afterGitOp(err, 'Ignore');
         break;
       }
       case 'file_stash_one': {
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
-          const oneErr = gitStashFile(state.cwd, item.file);
+          const oneErr = await gitStashFile(state.cwd, item.file);
           if (!err && oneErr) err = oneErr;
         }
-        afterGitOp(err, 'Stash file');
+        await afterGitOp(err, 'Stash file');
         break;
       }
       case 'file_save_patch': {
         const patches = [];
         for (const item of fileItems) {
           if (!item) continue;
-          const patch = gitFilePatch(state.cwd, item);
+          const patch = await gitFilePatch(state.cwd, item);
           if (patch) patches.push(patch);
         }
         if (patches.length > 0) {
@@ -476,8 +476,8 @@ function handleContextMenuAction(actionId) {
 
     if (actionId.startsWith('branch_track:')) {
       const remoteBranch = actionId.substring('branch_track:'.length);
-      const err = gitSetUpstream(state.cwd, branchName, remoteBranch);
-      afterGitOp(err, 'Set upstream');
+      const err = await gitSetUpstream(state.cwd, branchName, remoteBranch);
+      await afterGitOp(err, 'Set upstream');
       return;
     }
 
@@ -500,13 +500,13 @@ function handleContextMenuAction(actionId) {
         break;
       case 'branch_push_pr':
         startSpinner('Pushing...');
-        gitPushToRemoteAsync(state.cwd, remote, branchName).then(err => {
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
           stopSpinner();
-          if (err) { afterGitOp(err, 'Push'); return; }
-          const remoteUrl = gitGetRemoteUrl(state.cwd, remote);
+          if (err) { await afterGitOp(err, 'Push'); return; }
+          const remoteUrl = await gitGetRemoteUrl(state.cwd, remote);
           const prUrl = buildPullRequestUrl(remoteUrl, branchName);
-          if (prUrl) openExternal(prUrl);
-          afterGitOp(null, 'Push');
+          if (prUrl) await openExternal(prUrl);
+          await afterGitOp(null, 'Push');
         });
         break;
       case 'branch_new_branch':
@@ -553,8 +553,8 @@ function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_untrack': {
-        const err = gitUnsetUpstream(state.cwd, branchName);
-        afterGitOp(err, 'Unset upstream');
+        const err = await gitUnsetUpstream(state.cwd, branchName);
+        await afterGitOp(err, 'Unset upstream');
         break;
       }
       case 'branch_copy_name':
@@ -570,13 +570,13 @@ function handleContextMenuAction(actionId) {
     if (!ref) return;
     switch (actionId) {
       case 'stash_apply': {
-        const err = gitStashApply(state.cwd, ref);
-        afterGitOp(err, 'Stash apply');
+        const err = await gitStashApply(state.cwd, ref);
+        await afterGitOp(err, 'Stash apply');
         break;
       }
       case 'stash_drop': {
-        const err = gitStashDrop(state.cwd, ref);
-        afterGitOp(err, 'Stash drop');
+        const err = await gitStashDrop(state.cwd, ref);
+        await afterGitOp(err, 'Stash drop');
         break;
       }
       case 'stash_rename':
@@ -602,8 +602,8 @@ function handleContextMenuAction(actionId) {
   // Branch checkout from submenu
   if (actionId.startsWith('checkout_branch:')) {
     const branchName = actionId.substring('checkout_branch:'.length);
-    const err = gitCheckoutRef(state.cwd, branchName);
-    afterGitOp(err, 'Checkout');
+    const err = await gitCheckoutRef(state.cwd, branchName);
+    await afterGitOp(err, 'Checkout');
     if (!err) registerHistoryContextMenu();
     return;
   }
@@ -688,7 +688,7 @@ function handleContextMenuAction(actionId) {
       break;
     }
     case 'save_patch': {
-      const patch = gitFormatPatch(state.cwd, hash);
+      const patch = await gitFormatPatch(state.cwd, hash);
       if (patch) {
         copyToClipboard(patch);
         showError('Patch copied to clipboard');
@@ -701,7 +701,7 @@ function handleContextMenuAction(actionId) {
       copyToClipboard(hash);
       break;
     case 'copy_info': {
-      const raw = gitCommitInfo(state.cwd, hash);
+      const raw = await gitCommitInfo(state.cwd, hash);
       if (raw) {
         copyToClipboard(raw);
       } else {
@@ -712,7 +712,7 @@ function handleContextMenuAction(actionId) {
   }
 }
 
-function handleDialogResult(params) {
+async function handleDialogResult(params) {
   const buttonId = params && params.buttonId;
 
   // Name input dialog results (new-branch, new-tag, rename-stash, rename-branch, new-remote, delete-branch)
@@ -725,11 +725,11 @@ function handleDialogResult(params) {
     // delete-branch is a message dialog with delete/force/cancel buttons
     if (action === 'delete-branch') {
       if (buttonId === 'delete') {
-        const err = gitDeleteBranch(state.cwd, target, false);
-        afterGitOp(err, 'Delete branch');
+        const err = await gitDeleteBranch(state.cwd, target, false);
+        await afterGitOp(err, 'Delete branch');
       } else if (buttonId === 'force') {
-        const err = gitDeleteBranch(state.cwd, target, true);
-        afterGitOp(err, 'Delete branch');
+        const err = await gitDeleteBranch(state.cwd, target, true);
+        await afterGitOp(err, 'Delete branch');
       }
       return;
     }
@@ -742,9 +742,9 @@ function handleDialogResult(params) {
       }
       let err;
       if (action === 'rename-branch') {
-        err = gitRenameBranch(state.cwd, target, name);
+        err = await gitRenameBranch(state.cwd, target, name);
       } else if (action === 'rename-stash') {
-        err = gitStashRename(state.cwd, target, name);
+        err = await gitStashRename(state.cwd, target, name);
       } else if (action === 'new-remote') {
         const parts = name.split(/\s+/).filter(Boolean);
         if (parts.length < 2) {
@@ -753,18 +753,18 @@ function handleDialogResult(params) {
         }
         const remoteName = parts.shift();
         const remoteUrl = parts.join(' ');
-        err = gitRemoteAdd(state.cwd, remoteName, remoteUrl);
+        err = await gitRemoteAdd(state.cwd, remoteName, remoteUrl);
       } else if (action === 'new-branch') {
-        err = gitCreateBranch(state.cwd, name, target);
+        err = await gitCreateBranch(state.cwd, name, target);
       } else if (action === 'new-tag') {
-        err = gitCreateTag(state.cwd, name, target);
+        err = await gitCreateTag(state.cwd, name, target);
       }
       const opName = action === 'rename-branch' ? 'Rename branch'
         : action === 'rename-stash' ? 'Rename stash'
         : action === 'new-remote' ? 'Remote'
         : action === 'new-branch' ? 'Branch'
         : 'Tag';
-      afterGitOp(err, opName);
+      await afterGitOp(err, opName);
     }
     return;
   }
@@ -774,11 +774,11 @@ function handleDialogResult(params) {
     state.pendingRebaseMenu = false;
     let err;
     if (buttonId === 'continue') {
-      err = gitRebaseContinue(state.cwd);
+      err = await gitRebaseContinue(state.cwd);
     } else if (buttonId === 'abort') {
-      err = gitRebaseAbort(state.cwd);
+      err = await gitRebaseAbort(state.cwd);
     } else if (buttonId === 'skip') {
-      err = gitRebaseSkip(state.cwd);
+      err = await gitRebaseSkip(state.cwd);
     } else {
       return;
     }
@@ -800,7 +800,7 @@ function handleDialogResult(params) {
     const configKey = field === 'name' ? 'user.name' : 'user.email';
     const val = params.value.trim();
     if (val) {
-      const err = gitSetConfig(state.cwd, configKey, val);
+      const err = await gitSetConfig(state.cwd, configKey, val);
       if (err) {
         showError('Set ' + field + ' failed:\n' + err);
       } else {
@@ -895,7 +895,7 @@ function copyToClipboard(text) {
   sendRpcNotify('set_clipboard', { text });
 }
 
-function openExternal(fullPath) {
+async function openExternal(fullPath) {
   try {
     let program, args;
     if (process.platform === 'win32') {
@@ -905,7 +905,7 @@ function openExternal(fullPath) {
     } else {
       program = 'xdg-open'; args = [fullPath];
     }
-    const r = hecaton.exec_process({ program, args, timeout: 5000 });
+    const r = await hecaton.exec_process({ program, args, timeout: 5000 });
     if (r && r.ok) return null;
     return (r && r.error) || 'Failed to open file';
   } catch (e) {

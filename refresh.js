@@ -73,9 +73,9 @@ function remapSelectedFiles() {
   }
 }
 
-function refresh() {
+async function refresh() {
   if (!state.cwd) return;
-  state.isGitRepo = gitIsRepo(state.cwd);
+  state.isGitRepo = await gitIsRepo(state.cwd);
   if (!state.isGitRepo) {
     state.error = 'Not a git repository: ' + state.cwd;
     state.branch = '';
@@ -88,21 +88,21 @@ function refresh() {
     return;
   }
   if (!state.spinnerActive) state.error = null;
-  state.branch = gitBranch(state.cwd);
-  state.rebaseState = gitRebaseState(state.cwd);
-  state.branches = gitBranches(state.cwd);
-  state.remoteBranches = gitRemoteBranches(state.cwd);
-  state.remotes = gitRemotes(state.cwd);
-  state.stashes = gitStashRefs(state.cwd);
-  state.committerName = gitGetConfig(state.cwd, 'user.name');
-  state.committerEmail = gitGetConfig(state.cwd, 'user.email');
-  state.committerNameIsLocal = !!gitGetConfigLocal(state.cwd, 'user.name');
-  state.committerEmailIsLocal = !!gitGetConfigLocal(state.cwd, 'user.email');
-  const ab = gitAheadBehind(state.cwd);
+  state.branch = await gitBranch(state.cwd);
+  state.rebaseState = await gitRebaseState(state.cwd);
+  state.branches = await gitBranches(state.cwd);
+  state.remoteBranches = await gitRemoteBranches(state.cwd);
+  state.remotes = await gitRemotes(state.cwd);
+  state.stashes = await gitStashRefs(state.cwd);
+  state.committerName = await gitGetConfig(state.cwd, 'user.name');
+  state.committerEmail = await gitGetConfig(state.cwd, 'user.email');
+  state.committerNameIsLocal = !!(await gitGetConfigLocal(state.cwd, 'user.name'));
+  state.committerEmailIsLocal = !!(await gitGetConfigLocal(state.cwd, 'user.email'));
+  const ab = await gitAheadBehind(state.cwd);
   state.ahead = ab.ahead;
   state.behind = ab.behind;
   state._prevFileList = buildFileList();
-  const status = gitStatus(state.cwd);
+  const status = await gitStatus(state.cwd);
   state.staged = status.staged;
   state.unstaged = status.unstaged;
   state.untracked = status.untracked;
@@ -196,19 +196,19 @@ async function refreshAsync() {
     const sep = (process.platform === 'win32') ? '\\' : '/';
     const base = state.cwd + sep + gitDir;
     const rebaseMerge = base + sep + 'rebase-merge';
-    const rmStat = hecaton.fs_stat({ path: rebaseMerge });
+    const rmStat = await hecaton.fs_stat({ path: rebaseMerge });
     if (rmStat && rmStat.exists && rmStat.isDir) {
-      const stepRes = hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' });
-      const totalRes = hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
+      const stepRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' });
+      const totalRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
       const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
       const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
       state.rebaseState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
     } else {
       const rebaseApply = base + sep + 'rebase-apply';
-      const raStat = hecaton.fs_stat({ path: rebaseApply });
+      const raStat = await hecaton.fs_stat({ path: rebaseApply });
       if (raStat && raStat.exists && raStat.isDir) {
-        const stepRes = hecaton.fs_read_file({ path: rebaseApply + sep + 'next' });
-        const totalRes = hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
+        const stepRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'next' });
+        const totalRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
         const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
         const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
         state.rebaseState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };

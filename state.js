@@ -55,8 +55,8 @@ const state = {
 };
 
 const ui = {
-  termCols: parseInt((hecaton.get_env({ name: 'HECA_COLS' }) || {}).value || '80', 10),
-  termRows: parseInt((hecaton.get_env({ name: 'HECA_ROWS' }) || {}).value || '24', 10),
+  termCols: 80,
+  termRows: 24,
   logSixelOverlay: null,
   clickableAreas: [],
   hoveredAreaIndex: -1,
@@ -138,4 +138,9 @@ const ui = {
   freshDetailMaxScrollX: 0,
 };
 
-module.exports = { state, ui };
+async function init() {
+  ui.termCols = parseInt((await hecaton.get_env({ name: 'HECA_COLS' })).value || '80', 10);
+  ui.termRows = parseInt((await hecaton.get_env({ name: 'HECA_ROWS' })).value || '24', 10);
+}
+
+module.exports = { state, ui, init };

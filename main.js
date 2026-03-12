@@ -19,7 +19,7 @@
  *   q       - Quit
  */
 
-const { state, ui } = require('./state');
+const { state, ui, init: initState } = require('./state');
 const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
 const { refreshAsync, refreshLog, refreshFresh } = require('./refresh');
@@ -28,6 +28,7 @@ const { handleKey, handleMouseData, cleanup } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 
 async function main() {
+  await initState();
   render();
 
   // Set up stdin FIRST so RPC responses can be received
@@ -39,7 +40,7 @@ async function main() {
   process.stdin.resume();
   process.stdin.setEncoding('utf-8');
 
-  process.stdin.on('data', (data) => {
+  process.stdin.on('data', async (data) => {
     // Host RPC messages
     if (data.indexOf('__HECA_RPC__') !== -1) {
       const segments = data.split('__HECA_RPC__');
@@ -98,11 +99,11 @@ async function main() {
     if (state.loading || state.spinnerActive) return;
 
     // Handle SGR mouse sequences
-    const hadMouse = handleMouseData(data);
+    const hadMouse = await handleMouseData(data);
     if (hadMouse) return;
 
     // Keyboard input
-    handleKey(data);
+    await handleKey(data);
   });
 
   // Get CWD from host (stdin handler is ready, so RPC response will be received)
@@ -127,7 +128,7 @@ async function main() {
   render();
 
   // Auto-refresh: watch .git directory for changes
-  setupGitWatcher();
+  await setupGitWatcher();
 
   // Graceful shutdown
   process.on('SIGTERM', () => { cleanup(); process.exit(0); });
@@ -135,7 +136,7 @@ async function main() {
   process.stdin.on('end', () => { cleanup(); process.exit(0); });
 }
 
-function setupGitWatcher() {
+async function setupGitWatcher() {
   if (!state.cwd || !state.isGitRepo) return;
 
   let debounceTimer = null;
@@ -164,16 +165,16 @@ function setupGitWatcher() {
     gitDir + sep + 'FETCH_HEAD',
   ];
 
-  function statMtime(filePath) {
+  async function statMtime(filePath) {
     try {
-      const r = hecaton.fs_stat({ path: filePath });
+      const r = await hecaton.fs_stat({ path: filePath });
       return (r && r.exists && r.modifiedTime) ? r.modifiedTime : 0;
     } catch { return 0; }
   }
 
-  let lastMtimes = pollTargets.map(statMtime);
-  const pollInterval = setInterval(() => {
-    const current = pollTargets.map(statMtime);
+  let lastMtimes = await Promise.all(pollTargets.map(statMtime));
+  const pollInterval = setInterval(async () => {
+    const current = await Promise.all(pollTargets.map(statMtime));
     let changed = false;
     for (let i = 0; i < current.length; i++) {
       if (current[i] !== lastMtimes[i]) { changed = true; break; }
@@ -193,7 +194,7 @@ function setupGitWatcher() {
     if (state.mode !== 'normal') return;
     statusPolling = true;
     try {
-      const result = hecaton.exec_process({
+      const result = await hecaton.exec_process({
         program: 'git', args: ['status', '--porcelain=v1', '-uall'], cwd: state.cwd, timeout: 5000
       });
       const snapshot = (result && result.ok) ? (result.stdout || '') : '';

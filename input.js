@@ -36,7 +36,7 @@ function showErrorDialog(msg) {
   });
 }
 
-function handleKey(key) {
+async function handleKey(key) {
   // Fresh time window mode intercept
   if (state.freshTimeWindowMode) {
     if (key === CSI + 'D' || key === 'h') { // Left
@@ -563,7 +563,7 @@ function handleRebaseMenuInput(key) {
   }
 }
 
-function handleNameInput(key) {
+async function handleNameInput(key) {
   // IME 입력과 이스케이프 시퀀스가 하나의 청크로 합쳐진 경우 분리 처리
   const escIdx = key.indexOf('\x1b');
   if (escIdx > 0) {
@@ -589,7 +589,7 @@ function handleNameInput(key) {
     }
     let err;
     if (state.mode === 'rename-stash') {
-      err = gitStashRename(state.cwd, state.inputTarget, name);
+      err = await gitStashRename(state.cwd, state.inputTarget, name);
     } else if (state.mode === 'new-remote') {
       const parts = name.split(/\s+/).filter(Boolean);
       if (parts.length < 2) {
@@ -599,11 +599,11 @@ function handleNameInput(key) {
       }
       const remoteName = parts.shift();
       const remoteUrl = parts.join(' ');
-      err = gitRemoteAdd(state.cwd, remoteName, remoteUrl);
+      err = await gitRemoteAdd(state.cwd, remoteName, remoteUrl);
     } else if (state.mode === 'new-branch') {
-      err = gitCreateBranch(state.cwd, name, state.inputTarget);
+      err = await gitCreateBranch(state.cwd, name, state.inputTarget);
     } else {
-      err = gitCreateTag(state.cwd, name, state.inputTarget);
+      err = await gitCreateTag(state.cwd, name, state.inputTarget);
     }
     const opName = state.mode === 'rename-stash'
       ? 'Rename stash'
@@ -655,7 +655,7 @@ function applyScrollbarOffset(target, offset) {
   }
 }
 
-function handleMouseData(data) {
+async function handleMouseData(data) {
   const mouseRegex = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
   let mouseMatch;
   let hadMouse = false;
@@ -1201,7 +1201,7 @@ function handleMouseData(data) {
               });
               handled = true;
             } else if (zone.action === 'reset-committer-name') {
-              const err = gitUnsetConfigLocal(state.cwd, 'user.name');
+              const err = await gitUnsetConfigLocal(state.cwd, 'user.name');
               if (err) {
                 showErrorDialog(err);
               } else {
@@ -1210,7 +1210,7 @@ function handleMouseData(data) {
               render();
               handled = true;
             } else if (zone.action === 'reset-committer-email') {
-              const err = gitUnsetConfigLocal(state.cwd, 'user.email');
+              const err = await gitUnsetConfigLocal(state.cwd, 'user.email');
               if (err) {
                 showErrorDialog(err);
               } else {
