@@ -88,7 +88,7 @@ function render() {
       const isLocal = state.rightView === 'diff';
       const isCommits = state.rightView === 'log';
       const isFresh = state.rightView === 'fresh';
-      const localLabel = ` Local (${totalChanges}) `;
+      const localLabel = ` Local *${totalChanges} `;
       const commitsLabel = ' Commits ';
       const freshLabel = ' Files ';
 

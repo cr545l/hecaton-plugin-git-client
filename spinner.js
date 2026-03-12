@@ -1,4 +1,5 @@
 const { state } = require('./state');
+const { formatWindowTitle } = require('./title');
 
 const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -34,8 +35,9 @@ function releaseSpinner() {
 
 function updateTitle() {
   const { sendRpcNotify } = require('./rpc');
-  if (!state.branch) return;
-  sendRpcNotify('set_title', { title: state.branch });
+  const title = formatWindowTitle();
+  if (!title) return;
+  sendRpcNotify('set_title', { title });
 }
 
 function isSpinning() {

@@ -12,6 +12,7 @@ const FRESH_TIME_WINDOWS = [
 const { calcGraphRows } = require('./graph');
 const { sendRpcNotify } = require('./rpc');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
+const { formatWindowTitle } = require('./title');
 
 let refreshCount = 0;
 let _diffSeq = 0;
@@ -88,7 +89,6 @@ function refresh() {
   }
   if (!state.spinnerActive) state.error = null;
   state.branch = gitBranch(state.cwd);
-  sendRpcNotify('set_title', { title: state.branch });
   state.rebaseState = gitRebaseState(state.cwd);
   state.branches = gitBranches(state.cwd);
   state.remoteBranches = gitRemoteBranches(state.cwd);
@@ -109,6 +109,7 @@ function refresh() {
   state.ignored = status.ignored;
   remapSelectedFiles();
   clampCursor();
+  sendRpcNotify('set_title', { title: formatWindowTitle() });
   updateDiff();
 }
 
@@ -151,7 +152,6 @@ async function refreshAsync() {
 
   // branch
   state.branch = branchRaw.trim() || 'HEAD (detached)';
-  sendRpcNotify('set_title', { title: state.branch });
 
   // status — gitStatus()와 동일한 파싱 로직
   const staged = [], unstaged = [], untracked = [], ignored = [];
@@ -167,6 +167,7 @@ async function refreshAsync() {
   }
   state._prevFileList = buildFileList();
   state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
+  sendRpcNotify('set_title', { title: formatWindowTitle() });
 
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
