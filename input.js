@@ -1,7 +1,7 @@
 const { ESC, CSI } = require('./ansi');
 const { state, ui } = require('./state');
 const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
-  gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync,
+  gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitStageAsync, gitUnstageAsync,
 } = require('./git');
@@ -1169,7 +1169,13 @@ function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'git-push') {
               startSpinner('Pushing...');
-              gitPushAsync(state.cwd).then(async err => {
+              const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
+              const pushPromise = currentBranch && !currentBranch.upstream
+                ? (state.remotes.length > 0
+                    ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
+                    : Promise.resolve('No remote configured for push'))
+                : gitPushAsync(state.cwd);
+              pushPromise.then(async err => {
                 stopSpinner();
                 if (err) {
                   showErrorDialog(err);
