@@ -224,12 +224,36 @@ function registerRemotesContextMenu() {
   ui.contextMenuFilePath = '';
 }
 
+function registerRemoteBranchContextMenu(remoteBranchName) {
+  // Extract local branch name from remote branch (e.g. "origin/feature" -> "feature")
+  const slashIdx = remoteBranchName.indexOf('/');
+  const localName = slashIdx >= 0 ? remoteBranchName.substring(slashIdx + 1) : remoteBranchName;
+  const localExists = state.branches.some(b => b.name === localName);
+
+  const items = [];
+  if (localExists) {
+    items.push({ id: 'remotebranch_checkout_local', label: "Checkout '" + localName + "'" });
+  } else {
+    items.push({ id: 'remotebranch_checkout_tracking', label: "Checkout as '" + localName + "'" });
+  }
+  items.push(
+    { id: 'remotebranch_new_branch', label: 'New Branch from Here...' },
+    { type: 'separator' },
+    { id: 'remotebranch_copy_name', label: 'Copy Branch Name', icon: 'copy' },
+  );
+
+  sendRpcNotify('register_context_menu', { items });
+  ui.contextMenuActive = true;
+  ui.contextMenuRemoteBranch = remoteBranchName;
+}
+
 function unregisterContextMenu() {
   sendRpcNotify('register_context_menu', { items: [] });
   ui.contextMenuActive = false;
   ui.contextMenuTab = false;
   ui.contextMenuStashRef = null;
   ui.contextMenuBranch = null;
+  ui.contextMenuRemoteBranch = null;
   ui.contextMenuFileItem = null;
   ui.contextMenuFileItems = [];
   ui.contextMenuFilePath = '';
@@ -462,6 +486,43 @@ async function handleContextMenuAction(actionId) {
         copyToClipboard(paths.join('\n'));
         break;
       }
+    }
+    return;
+  }
+
+  // Remote branch context menu actions
+  if (actionId.startsWith('remotebranch_')) {
+    const remoteBranchName = ui.contextMenuRemoteBranch;
+    if (!remoteBranchName) return;
+    const slashIdx = remoteBranchName.indexOf('/');
+    const localName = slashIdx >= 0 ? remoteBranchName.substring(slashIdx + 1) : remoteBranchName;
+
+    switch (actionId) {
+      case 'remotebranch_checkout_local':
+        startSpinner('Checking out...');
+        gitCheckoutRefAsync(state.cwd, localName).then(err => { stopSpinner(); afterGitOp(err, 'Checkout'); });
+        break;
+      case 'remotebranch_checkout_tracking': {
+        startSpinner('Checking out...');
+        const err = await gitCreateBranch(state.cwd, localName, remoteBranchName);
+        stopSpinner();
+        await afterGitOp(err, 'Checkout');
+        break;
+      }
+      case 'remotebranch_new_branch':
+        sendRpc('show_dialog', {
+          type: 'input',
+          title: 'New Branch',
+          message: 'Enter branch name:',
+          defaultValue: localName,
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-branch';
+        state.pendingDialogTarget = remoteBranchName;
+        break;
+      case 'remotebranch_copy_name':
+        copyToClipboard(remoteBranchName);
+        break;
     }
     return;
   }
@@ -926,6 +987,7 @@ module.exports = {
   registerStashContextMenu,
   registerFileContextMenu,
   registerRemotesContextMenu,
+  registerRemoteBranchContextMenu,
   registerBranchContextMenu,
   registerTabContextMenu,
   unregisterContextMenu,

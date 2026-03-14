@@ -9,7 +9,7 @@ const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, registerBranchContextMenu, registerTabContextMenu, unregisterContextMenu } = require('./context-menu');
+const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, registerRemoteBranchContextMenu, registerBranchContextMenu, registerTabContextMenu, unregisterContextMenu } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -1665,6 +1665,12 @@ async function handleMouseData(data) {
         const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
         if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length) {
           const entry = ui.leftPanelClickMap[bodyRowIdx];
+          if (entry && entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) {
+            registerRemoteBranchContextMenu(entry.branch);
+            ui.leftPanelActiveBranch = entry.branch;
+            render();
+            continue;
+          }
           if (isRemoteMenuTarget(entry)) {
             registerRemotesContextMenu();
             render();
