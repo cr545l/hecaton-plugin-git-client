@@ -29,6 +29,7 @@ const { handleContextMenuAction, handleDialogResult } = require('./context-menu'
 
 async function main() {
   await initState();
+  state.minimized = hecaton.initialState?.minimized ?? false;
   render();
 
   // Set up stdin FIRST so RPC responses can be received
