@@ -28,11 +28,8 @@ const { handleKey, handleMouseData, cleanup } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 
 async function main() {
-  await initState();
-  state.minimized = hecaton.initialState?.minimized ?? false;
-  render();
-
-  // Set up stdin FIRST so RPC responses can be received
+  // Register stdin handler BEFORE any await — the deno runner drops
+  // unmatched stdin lines (like resize events) if no callbacks are registered.
   try {
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
@@ -41,6 +38,63 @@ async function main() {
   process.stdin.resume();
   process.stdin.setEncoding('utf-8');
 
+  function processRpcMessage(msg) {
+    try {
+      const json = JSON.parse(msg);
+
+      // Batch RPC response (array)
+      if (Array.isArray(json)) {
+        handleRpcResponse(json);
+        for (const item of json) {
+          if (item && item.result && item.result.buttonId != null) {
+            handleDialogResult(item.result);
+          }
+        }
+        return;
+      }
+
+      // RPC response
+      if (json.id != null && (json.result || json.error)) {
+        handleRpcResponse(json);
+        if (json.result && json.result.buttonId != null) {
+          handleDialogResult(json.result);
+        }
+        return;
+      }
+
+      // Host notifications
+      if (json.method === 'resize' && json.params) {
+        ui.termCols = json.params.cols || ui.termCols;
+        ui.termRows = json.params.rows || ui.termRows;
+        const newCellW = json.params.cellWidth ? Math.round(json.params.cellWidth) : ui.cellW;
+        const newCellH = json.params.cellHeight ? Math.round(json.params.cellHeight) : ui.cellH;
+        if (newCellW !== ui.cellW || newCellH !== ui.cellH) {
+          ui.cellW = newCellW;
+          ui.cellH = newCellH;
+          ui.logSixelOverlay = null;
+        }
+        render();
+      }
+      if (json.method === 'minimize') {
+        state.minimized = true;
+        render();
+      }
+      if (json.method === 'restore') {
+        state.minimized = false;
+        refreshAsync().then(() => render());
+      }
+      if (json.method === 'maximize') {
+        // Host handles sizing; plugin just re-renders on resize
+      }
+      if (json.method === 'context_menu_action' && json.params) {
+        handleContextMenuAction(json.params.id);
+      }
+      if (json.method === 'dialog_result' && json.params) {
+        handleDialogResult(json.params);
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
   process.stdin.on('data', async (data) => {
     // Host RPC messages
     if (data.indexOf('__HECA_RPC__') !== -1) {
@@ -48,50 +102,7 @@ async function main() {
       for (const seg of segments) {
         const trimmed = seg.trim();
         if (!trimmed) continue;
-        try {
-          const json = JSON.parse(trimmed);
-
-          // RPC response
-          if (json.id != null && (json.result || json.error)) {
-            handleRpcResponse(json);
-            // Dialog results may arrive as RPC responses to show_dialog
-            if (json.result && json.result.buttonId != null) {
-              handleDialogResult(json.result);
-            }
-            continue;
-          }
-
-          // Host notifications
-          if (json.method === 'resize' && json.params) {
-            ui.termCols = json.params.cols || ui.termCols;
-            ui.termRows = json.params.rows || ui.termRows;
-            const newCellW = json.params.cellWidth ? Math.round(json.params.cellWidth) : ui.cellW;
-            const newCellH = json.params.cellHeight ? Math.round(json.params.cellHeight) : ui.cellH;
-            if (newCellW !== ui.cellW || newCellH !== ui.cellH) {
-              ui.cellW = newCellW;
-              ui.cellH = newCellH;
-              ui.logSixelOverlay = null;
-            }
-            render();
-          }
-          if (json.method === 'minimize') {
-            state.minimized = true;
-            render();
-          }
-          if (json.method === 'restore') {
-            state.minimized = false;
-            refreshAsync().then(() => render());
-          }
-          if (json.method === 'maximize') {
-            // Host handles sizing; plugin just re-renders on resize
-          }
-          if (json.method === 'context_menu_action' && json.params) {
-            handleContextMenuAction(json.params.id);
-          }
-          if (json.method === 'dialog_result' && json.params) {
-            handleDialogResult(json.params);
-          }
-        } catch { /* ignore */ }
+        processRpcMessage(trimmed);
       }
       return;
     }
@@ -106,6 +117,11 @@ async function main() {
     // Keyboard input
     await handleKey(data);
   });
+
+  // Now safe to await — stdin handler is registered, resize events won't be dropped
+  await initState();
+  state.minimized = hecaton.initialState?.minimized ?? false;
+  render();
 
   // Get CWD from host (stdin handler is ready, so RPC response will be received)
   const cwdResult = await sendRpc('get_cwd');

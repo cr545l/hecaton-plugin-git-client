@@ -14,7 +14,7 @@ const {
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
   gitCherryPickAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
-  gitStageAsync, gitUnstageAsync,
+  gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
@@ -373,9 +373,8 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           startSpinner('Staging...');
           (async () => {
-            for (const item of fileItems) {
-              if (item && item.type !== 'staged') await gitStageAsync(state.cwd, item.file);
-            }
+            const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
+            if (files.length > 0) await gitStageMultiple(state.cwd, files);
             stopSpinner();
             await afterGitOp(null);
           })();
@@ -385,9 +384,8 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           startSpinner('Unstaging...');
           (async () => {
-            for (const item of fileItems) {
-              if (item && item.type === 'staged') await gitUnstageAsync(state.cwd, item.file);
-            }
+            const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
+            if (files.length > 0) await gitUnstageMultiple(state.cwd, files);
             stopSpinner();
             await afterGitOp(null);
           })();
@@ -715,7 +713,21 @@ async function handleContextMenuAction(actionId) {
           stopSpinner();
           await refreshAsync();
           if (state.rightView === 'log') refreshLog();
-          if (err) {
+          if (err && isStaleRebaseError(err)) {
+            state.pendingRebaseRef = hash;
+            sendRpc('show_dialog', {
+              type: 'message',
+              title: 'Rebase',
+              message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+              buttons: [
+                { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
+                { id: 'cancel', label: 'Cancel' },
+              ],
+            });
+          } else if (err && isRebaseConflictError(err)) {
+            showRebaseConflictDialog(err);
+            render();
+          } else if (err) {
             showError(err);
           } else {
             render();
@@ -845,7 +857,10 @@ async function handleDialogResult(params) {
     }
     refreshAsync().then(() => {
       if (state.rightView === 'log') refreshLog();
-      if (err) {
+      if (err && isRebaseConflictError(err)) {
+        showRebaseConflictDialog(err);
+        render();
+      } else if (err) {
         showError(err);
       } else {
         render();
@@ -892,6 +907,28 @@ async function handleDialogResult(params) {
     state.pendingStash = false;
     return;
   }
+  if (state.pendingRebaseRef && buttonId === 'abort_retry_rebase') {
+    const ref = state.pendingRebaseRef;
+    state.pendingRebaseRef = null;
+    (async () => {
+      startSpinner('Aborting stale rebase...');
+      await gitRebaseAbort(state.cwd);
+      state.error = 'Retrying rebase...';
+      const retryErr = await gitRebaseAsync(state.cwd, ref);
+      stopSpinner();
+      await refreshAsync();
+      if (state.rightView === 'log') refreshLog();
+      if (retryErr && isRebaseConflictError(retryErr)) {
+        showRebaseConflictDialog(retryErr);
+        render();
+      } else if (retryErr) {
+        showError('Rebase failed:\n' + retryErr);
+      } else {
+        render();
+      }
+    })();
+    return;
+  }
   if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
@@ -904,7 +941,20 @@ async function handleDialogResult(params) {
         return;
       }
       state.error = 'Stash & Rebase... (2/3) Rebasing';
-      const rebaseErr = await gitRebaseAsync(state.cwd, ref);
+      let rebaseErr = await gitRebaseAsync(state.cwd, ref);
+      if (rebaseErr && isStaleRebaseError(rebaseErr)) {
+        state.error = 'Stash & Rebase... (2/3) Aborting stale rebase & retrying';
+        await gitRebaseAbort(state.cwd);
+        rebaseErr = await gitRebaseAsync(state.cwd, ref);
+      }
+      if (rebaseErr && isRebaseConflictError(rebaseErr)) {
+        stopSpinner();
+        await refreshAsync();
+        if (state.rightView === 'log') refreshLog();
+        showRebaseConflictDialog(rebaseErr + '\n\nNote: Your changes are stashed. Run stash pop after resolving.');
+        render();
+        return;
+      }
       if (rebaseErr) {
         state.error = 'Stash & Rebase... (3/3) Restoring stash';
         await gitStashPopAsync(state.cwd);
@@ -950,6 +1000,28 @@ function showError(msg) {
     buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
   render();
+}
+
+function isStaleRebaseError(err) {
+  return err && (err.includes('rebase-merge') || err.includes('rebase-apply'));
+}
+
+function isRebaseConflictError(err) {
+  return err && (err.includes('could not apply') || err.includes('Resolve all conflicts'));
+}
+
+function showRebaseConflictDialog(err) {
+  sendRpc('show_dialog', {
+    type: 'message',
+    title: 'Rebase Conflict',
+    message: err + '\n\nResolve conflicts and choose an action:',
+    buttons: [
+      { id: 'continue', label: 'Continue', default: true },
+      { id: 'skip', label: 'Skip Commit' },
+      { id: 'abort', label: 'Abort Rebase' },
+    ],
+  });
+  state.pendingRebaseMenu = true;
 }
 
 function copyToClipboard(text) {

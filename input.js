@@ -3,7 +3,7 @@ const { state, ui } = require('./state');
 const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
-  gitStageAsync, gitUnstageAsync,
+  gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
@@ -34,6 +34,14 @@ function showErrorDialog(msg) {
     message: msg,
     buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
+}
+
+function isStaleRebaseError(err) {
+  return err && (err.includes('rebase-merge') || err.includes('rebase-apply'));
+}
+
+function isRebaseConflictError(err) {
+  return err && (err.includes('could not apply') || err.includes('Resolve all conflicts'));
 }
 
 async function handleKey(key) {
@@ -190,22 +198,20 @@ async function handleKey(key) {
         ? Array.from(state.selectedFiles).sort((a, b) => a - b)
         : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
       if (targets.length > 0) {
-        const total = targets.length;
-        startSpinner(`Staging... (0/${total}) 0%`);
-        (async () => {
-          for (let i = 0; i < total; i++) {
-            const item = fileList[targets[i]];
-            if (item && item.type !== 'staged') {
-              await gitStageAsync(state.cwd, item.file);
-            }
-            const pct = Math.round(((i + 1) / total) * 100);
-            state.error = `Staging... (${i + 1}/${total}) ${pct}%`;
-          }
-          stopSpinner();
-          state.selectedFiles.clear();
-          await refreshAsync();
-          render();
-        })();
+        const filesToStage = targets
+          .map(i => fileList[i])
+          .filter(item => item && item.type !== 'staged')
+          .map(item => item.file);
+        if (filesToStage.length > 0) {
+          startSpinner('Staging...');
+          (async () => {
+            await gitStageMultiple(state.cwd, filesToStage);
+            stopSpinner();
+            state.selectedFiles.clear();
+            await refreshAsync();
+            render();
+          })();
+        }
       }
       break;
     }
@@ -216,22 +222,20 @@ async function handleKey(key) {
         ? Array.from(state.selectedFiles).sort((a, b) => a - b)
         : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
       if (targets.length > 0) {
-        const total = targets.length;
-        startSpinner(`Unstaging... (0/${total}) 0%`);
-        (async () => {
-          for (let i = 0; i < total; i++) {
-            const item = fileList[targets[i]];
-            if (item && item.type === 'staged') {
-              await gitUnstageAsync(state.cwd, item.file);
-            }
-            const pct = Math.round(((i + 1) / total) * 100);
-            state.error = `Unstaging... (${i + 1}/${total}) ${pct}%`;
-          }
-          stopSpinner();
-          state.selectedFiles.clear();
-          await refreshAsync();
-          render();
-        })();
+        const filesToUnstage = targets
+          .map(i => fileList[i])
+          .filter(item => item && item.type === 'staged')
+          .map(item => item.file);
+        if (filesToUnstage.length > 0) {
+          startSpinner('Unstaging...');
+          (async () => {
+            await gitUnstageMultiple(state.cwd, filesToUnstage);
+            stopSpinner();
+            state.selectedFiles.clear();
+            await refreshAsync();
+            render();
+          })();
+        }
       }
       break;
     }
@@ -311,7 +315,31 @@ async function handleKey(key) {
             stopSpinner();
             await refreshAsync();
             if (state.rightView === 'log') refreshLog();
-            if (err) {
+            if (err && isStaleRebaseError(err)) {
+              state.pendingRebaseRef = logItem.ref;
+              sendRpc('show_dialog', {
+                type: 'message',
+                title: 'Rebase',
+                message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+                buttons: [
+                  { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
+                  { id: 'cancel', label: 'Cancel' },
+                ],
+              });
+            } else if (err && isRebaseConflictError(err)) {
+              state.pendingRebaseMenu = true;
+              sendRpc('show_dialog', {
+                type: 'message',
+                title: 'Rebase Conflict',
+                message: err + '\n\nResolve conflicts and choose an action:',
+                buttons: [
+                  { id: 'continue', label: 'Continue', default: true },
+                  { id: 'skip', label: 'Skip Commit' },
+                  { id: 'abort', label: 'Abort Rebase' },
+                ],
+              });
+              render();
+            } else if (err) {
               showErrorDialog(err);
               render();
             } else {

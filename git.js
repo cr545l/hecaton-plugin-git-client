@@ -363,6 +363,16 @@ async function gitUnstageAsync(cwd, file) {
   const r = await gitResult(['restore', '--staged', '--', file], cwd, 5000);
   return r && r.ok && r.exitCode === 0;
 }
+async function gitStageMultiple(cwd, files) {
+  if (files.length === 0) return true;
+  if (files.length === 1) return gitStage(cwd, files[0]);
+  try { await git(['add', '-f', '--', ...files], cwd); return true; } catch { return false; }
+}
+async function gitUnstageMultiple(cwd, files) {
+  if (files.length === 0) return true;
+  if (files.length === 1) return gitUnstage(cwd, files[0]);
+  try { await git(['restore', '--staged', '--', ...files], cwd); return true; } catch { return false; }
+}
 
 async function gitRenameBranch(cwd, oldName, newName) { return await gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, 'Rename branch failed'); }
 async function gitDeleteBranch(cwd, name, force) { return await gitRunOrError(['branch', force ? '-D' : '-d', name], cwd, 10000, 'Delete branch failed'); }
@@ -568,5 +578,6 @@ module.exports = {
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync,
+  gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
 };
