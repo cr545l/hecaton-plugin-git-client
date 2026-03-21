@@ -24,7 +24,7 @@ const state = {
   remoteBranches: [],     // ['origin/main', ...]
   remotes: [],            // ['origin', 'upstream', ...]
   stashes: [],            // [{ hash, shortHash, ref }]
-  rebaseState: null,     // null | { type, step, total }
+  operationState: null,  // null | { type: 'rebase-merge'|'rebase-apply'|'merge'|'cherry-pick'|'revert', step?, total? }
   selectedFiles: new Set(),
   mode: 'normal',        // 'normal' | 'commit'
   commitMsg: '',
@@ -138,9 +138,9 @@ const ui = {
   freshDetailMaxScrollX: 0,
 };
 
-async function init() {
-  ui.termCols = parseInt((await hecaton.get_env({ name: 'HECA_COLS' })).value || '80', 10);
-  ui.termRows = parseInt((await hecaton.get_env({ name: 'HECA_ROWS' })).value || '24', 10);
+function init() {
+  ui.termCols = hecaton.initialState?.cols || 80;
+  ui.termRows = hecaton.initialState?.rows || 24;
 }
 
 module.exports = { state, ui, init };

@@ -24,7 +24,7 @@ const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
 const { refreshAsync, refreshLog, refreshFresh } = require('./refresh');
 const { render } = require('./render');
-const { handleKey, handleMouseData, cleanup } = require('./input');
+const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 
 async function main() {
@@ -85,6 +85,9 @@ async function main() {
       }
       if (json.method === 'maximize') {
         // Host handles sizing; plugin just re-renders on resize
+      }
+      if (json.method === 'context_menu_request' && json.params) {
+        handleContextMenuRequest(json.params.col, json.params.row);
       }
       if (json.method === 'context_menu_action' && json.params) {
         handleContextMenuAction(json.params.id);

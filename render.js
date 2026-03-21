@@ -409,6 +409,19 @@ function render() {
     }
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
+  } else if (state.operationState) {
+    const op = state.operationState;
+    const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
+    const label = isRebase ? 'Rebase' : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
+    const progress = isRebase && op.step ? ' (' + op.step + '/' + op.total + ')' : '';
+    const hasUnmerged = state.unstaged.some(f => f.status === 'U');
+    if (hasUnmerged) {
+      hintContent = colors.yellow + ' ' + label + progress + ansi.reset + '  '
+        + colors.dim + 'Resolve conflicts, stage with [s], then [b] continue' + ansi.reset;
+    } else {
+      hintContent = colors.yellow + ' ' + label + progress + ansi.reset + '  '
+        + colors.dim + '[b] continue/abort' + (op.type !== 'merge' ? '/skip' : '') + ansi.reset;
+    }
   } else {
     hintContent = ' ' + buildHintText();
   }
@@ -630,8 +643,11 @@ function buildLeftPanel(w, h) {
     let branchName = state.branch || '...';
     const slashIdx = branchName.lastIndexOf('/');
     if (slashIdx >= 0) branchName = branchName.substring(slashIdx + 1);
-    if (state.rebaseState) {
-      const suffix = ' (rebasing ' + state.rebaseState.step + '/' + state.rebaseState.total + ')';
+    if (state.operationState) {
+      const op = state.operationState;
+      const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
+      const opLabel = isRebase ? 'rebasing' : op.type === 'merge' ? 'merging' : op.type === 'cherry-pick' ? 'cherry-picking' : 'reverting';
+      const suffix = isRebase && op.step ? ' (' + opLabel + ' ' + op.step + '/' + op.total + ')' : ' (' + opLabel + ')';
       branchName = truncate(branchName, Math.max(3, availW - suffix.length));
       pushLine(' ' + colors.value + ansi.bold + branchName + colors.yellow + suffix + ansi.reset);
     } else {
@@ -857,6 +873,7 @@ function buildFileListPanel(w, h) {
 
   function statusColor(s) {
     if (s === 'D') return colors.red;
+    if (s === 'U') return colors.red;  // unmerged/conflict
     if (s === 'A') return colors.green;
     if (s === 'R' || s === 'C') return colors.cyan;
     return colors.orange;
@@ -1115,7 +1132,11 @@ function buildDiffCommitPanel(w, h) {
         }
       }
     } else if (state.staged.length > 0) {
-      lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + ansi.reset);
+      if (state.operationState) {
+        lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [b] rebase menu' + ansi.reset);
+      } else {
+        lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + ansi.reset);
+      }
     } else {
       lines.push(colors.dim + ' No files staged' + ansi.reset);
     }

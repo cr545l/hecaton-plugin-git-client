@@ -7,6 +7,8 @@ const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
+  gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
+  gitRevertContinue, gitRevertAbort, gitRevertSkip,
   gitStashApply, gitStashDrop, gitStashSave, gitStashPop, gitStashRename,
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
   gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
@@ -21,7 +23,7 @@ const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh,
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
-function registerHistoryContextMenu() {
+function buildHistoryContextMenuItems() {
   const branch = state.branch || 'HEAD';
 
   // Branch submenu
@@ -59,24 +61,21 @@ function registerHistoryContextMenu() {
     { id: 'copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   );
 
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
+  return items;
 }
 
-function registerStashContextMenu(stashRef) {
+function buildStashContextMenuItems(stashRef) {
   const items = [
     { id: 'stash_apply', label: 'Apply', icon: 'add' },
     { id: 'stash_drop', label: 'Drop', icon: 'warning' },
     { type: 'separator' },
     { id: 'stash_rename', label: 'Rename...' },
   ];
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
-  ui.contextMenuStashRef = stashRef;
+  return items;
 }
 
-function registerFileContextMenu(fileItem, fileItems) {
-  if (!fileItem || !fileItem.file) return;
+function buildFileContextMenuItems(fileItem, fileItems) {
+  if (!fileItem || !fileItem.file) return [];
 
   const targets = Array.isArray(fileItems) && fileItems.length > 0 ? fileItems : [fileItem];
   const canStage = targets.some((item) => item && item.type !== 'staged');
@@ -117,30 +116,19 @@ function registerFileContextMenu(fileItem, fileItems) {
     { id: 'file_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
   ];
 
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
-  ui.contextMenuStashRef = null;
-  ui.contextMenuFileItem = fileItem;
-  ui.contextMenuFileItems = targets;
-  ui.contextMenuFilePath = joinPath(state.cwd, fileItem.file);
+  return items;
 }
 
-function registerTabContextMenu() {
+function buildTabContextMenuItems() {
   const items = [
     { id: 'tab_refresh', label: 'Refresh' },
   ];
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
-  ui.contextMenuTab = true;
-  ui.contextMenuStashRef = null;
-  ui.contextMenuFileItem = null;
-  ui.contextMenuFileItems = [];
-  ui.contextMenuFilePath = '';
+  return items;
 }
 
-function registerBranchContextMenu(branchName) {
+function buildBranchContextMenuItems(branchName) {
   const branch = state.branches.find(b => b.name === branchName);
-  if (!branch) return;
+  if (!branch) return [];
 
   const upstream = branch.upstream;
   const remote = upstream ? upstream.split('/')[0] : (state.remotes[0] || 'origin');
@@ -148,6 +136,8 @@ function registerBranchContextMenu(branchName) {
 
   if (!branch.isCurrent) {
     items.push({ id: 'branch_checkout', label: "Checkout '" + branchName + "'" });
+    items.push({ id: 'branch_rebase_onto', label: "Rebase current onto '" + branchName + "'" });
+    items.push({ id: 'branch_merge_into', label: "Merge '" + branchName + "' into current" });
   }
 
   if (upstream) {
@@ -190,9 +180,7 @@ function registerBranchContextMenu(branchName) {
   items.push({ type: 'separator' });
   items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
 
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
-  ui.contextMenuBranch = branchName;
+  return items;
 }
 
 function buildPullRequestUrl(remoteUrl, branch) {
@@ -206,7 +194,7 @@ function buildPullRequestUrl(remoteUrl, branch) {
   return null;
 }
 
-function registerRemotesContextMenu() {
+function buildRemotesContextMenuItems() {
   const mode = ui.remoteSortMode || 'alpha';
   const items = [
     { id: 'remote_add', label: 'Add New Remote...' },
@@ -216,15 +204,10 @@ function registerRemotesContextMenu() {
     { id: 'remote_sort_alpha_desc', label: 'Alphabetically backward', checked: mode === 'alpha_desc' },
     { id: 'remote_sort_recent', label: 'Recently used', checked: mode === 'recent' },
   ];
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
-  ui.contextMenuStashRef = null;
-  ui.contextMenuFileItem = null;
-  ui.contextMenuFileItems = [];
-  ui.contextMenuFilePath = '';
+  return items;
 }
 
-function registerRemoteBranchContextMenu(remoteBranchName) {
+function buildRemoteBranchContextMenuItems(remoteBranchName) {
   // Extract local branch name from remote branch (e.g. "origin/feature" -> "feature")
   const slashIdx = remoteBranchName.indexOf('/');
   const localName = slashIdx >= 0 ? remoteBranchName.substring(slashIdx + 1) : remoteBranchName;
@@ -242,21 +225,7 @@ function registerRemoteBranchContextMenu(remoteBranchName) {
     { id: 'remotebranch_copy_name', label: 'Copy Branch Name', icon: 'copy' },
   );
 
-  sendRpcNotify('register_context_menu', { items });
-  ui.contextMenuActive = true;
-  ui.contextMenuRemoteBranch = remoteBranchName;
-}
-
-function unregisterContextMenu() {
-  sendRpcNotify('register_context_menu', { items: [] });
-  ui.contextMenuActive = false;
-  ui.contextMenuTab = false;
-  ui.contextMenuStashRef = null;
-  ui.contextMenuBranch = null;
-  ui.contextMenuRemoteBranch = null;
-  ui.contextMenuFileItem = null;
-  ui.contextMenuFileItems = [];
-  ui.contextMenuFilePath = '';
+  return items;
 }
 
 async function handleContextMenuAction(actionId) {
@@ -292,17 +261,17 @@ async function handleContextMenuAction(actionId) {
       case 'remote_sort_alpha':
         ui.remoteSortMode = 'alpha';
         render();
-        registerRemotesContextMenu();
+        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
         break;
       case 'remote_sort_alpha_desc':
         ui.remoteSortMode = 'alpha_desc';
         render();
-        registerRemotesContextMenu();
+        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
         break;
       case 'remote_sort_recent':
         ui.remoteSortMode = 'recent';
         render();
-        registerRemotesContextMenu();
+        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
         break;
     }
     return;
@@ -619,6 +588,24 @@ async function handleContextMenuAction(actionId) {
       case 'branch_copy_name':
         copyToClipboard(branchName);
         break;
+      case 'branch_rebase_onto':
+        startSpinner('Rebasing...');
+        gitRebaseAsync(state.cwd, branchName).then(async err => {
+          stopSpinner();
+          await refreshAsync();
+          if (state.rightView === 'log') refreshLog();
+          if (err) showError(err); else render();
+        });
+        break;
+      case 'branch_merge_into':
+        startSpinner('Merging...');
+        gitMergeAsync(state.cwd, branchName).then(async err => {
+          stopSpinner();
+          await refreshAsync();
+          if (state.rightView === 'log') refreshLog();
+          if (err) showError(err); else render();
+        });
+        break;
     }
     return;
   }
@@ -663,7 +650,6 @@ async function handleContextMenuAction(actionId) {
     const branchName = actionId.substring('checkout_branch:'.length);
     const err = await gitCheckoutRef(state.cwd, branchName);
     await afterGitOp(err, 'Checkout');
-    if (!err) registerHistoryContextMenu();
     return;
   }
 
@@ -746,7 +732,6 @@ async function handleContextMenuAction(actionId) {
       gitCheckoutRefAsync(state.cwd, hash).then(async err => {
         stopSpinner();
         await afterGitOp(err, 'Checkout');
-        if (!err) registerHistoryContextMenu();
       });
       break;
     }
@@ -842,16 +827,27 @@ async function handleDialogResult(params) {
     return;
   }
 
-  // Rebase menu dialog result
+  // Operation menu dialog result (rebase/merge/cherry-pick/revert)
   if (state.pendingRebaseMenu) {
     state.pendingRebaseMenu = false;
+    const op = state.operationState;
+    const opType = op ? op.type : 'rebase-merge';
+    const isRebase = opType === 'rebase-merge' || opType === 'rebase-apply';
     let err;
     if (buttonId === 'continue') {
-      err = await gitRebaseContinue(state.cwd);
+      if (isRebase) err = await gitRebaseContinue(state.cwd);
+      else if (opType === 'merge') err = await gitMergeContinue(state.cwd);
+      else if (opType === 'cherry-pick') err = await gitCherryPickContinue(state.cwd);
+      else if (opType === 'revert') err = await gitRevertContinue(state.cwd);
     } else if (buttonId === 'abort') {
-      err = await gitRebaseAbort(state.cwd);
+      if (isRebase) err = await gitRebaseAbort(state.cwd);
+      else if (opType === 'merge') err = await gitMergeAbort(state.cwd);
+      else if (opType === 'cherry-pick') err = await gitCherryPickAbort(state.cwd);
+      else if (opType === 'revert') err = await gitRevertAbort(state.cwd);
     } else if (buttonId === 'skip') {
-      err = await gitRebaseSkip(state.cwd);
+      if (isRebase) err = await gitRebaseSkip(state.cwd);
+      else if (opType === 'cherry-pick') err = await gitCherryPickSkip(state.cwd);
+      else if (opType === 'revert') err = await gitRevertSkip(state.cwd);
     } else {
       return;
     }
@@ -1055,14 +1051,13 @@ async function showInExplorer(fullPath) {
 }
 
 module.exports = {
-  registerHistoryContextMenu,
-  registerStashContextMenu,
-  registerFileContextMenu,
-  registerRemotesContextMenu,
-  registerRemoteBranchContextMenu,
-  registerBranchContextMenu,
-  registerTabContextMenu,
-  unregisterContextMenu,
+  buildHistoryContextMenuItems,
+  buildStashContextMenuItems,
+  buildFileContextMenuItems,
+  buildRemotesContextMenuItems,
+  buildRemoteBranchContextMenuItems,
+  buildBranchContextMenuItems,
+  buildTabContextMenuItems,
   handleContextMenuAction,
   handleDialogResult,
 };

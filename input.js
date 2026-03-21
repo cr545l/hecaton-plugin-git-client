@@ -9,7 +9,7 @@ const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
-const { registerHistoryContextMenu, registerStashContextMenu, registerFileContextMenu, registerRemotesContextMenu, registerRemoteBranchContextMenu, registerBranchContextMenu, registerTabContextMenu, unregisterContextMenu } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
 
 function actionToKey(action) {
   switch (action) {
@@ -267,28 +267,32 @@ async function handleKey(key) {
         state.freshScrollOffset = 0;
         state.diffScrollOffset = 0;
         updateFreshDetail();
-        unregisterContextMenu();
+
       } else {
         state.rightView = 'diff';
         updateDiff();
-        unregisterContextMenu();
+
       }
       state.focusPanel = 'status';
       render();
       break;
     }
     case 'b': {
-      if (state.rebaseState) {
+      if (state.operationState) {
+        const op = state.operationState;
+        const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
+        const typeLabel = isRebase ? 'Rebase' : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
+        const buttons = [
+          { id: 'continue', label: 'Continue', default: true },
+          { id: 'abort', label: 'Abort' },
+        ];
+        if (op.type !== 'merge') buttons.push({ id: 'skip', label: 'Skip' });
+        buttons.push({ id: 'cancel', label: 'Cancel' });
         sendRpc('show_dialog', {
           type: 'message',
-          title: 'Rebase',
-          message: 'Choose rebase action:',
-          buttons: [
-            { id: 'continue', label: 'Continue', default: true },
-            { id: 'abort', label: 'Abort' },
-            { id: 'skip', label: 'Skip' },
-            { id: 'cancel', label: 'Cancel' },
-          ],
+          title: typeLabel,
+          message: 'Choose action:',
+          buttons,
         });
         state.pendingRebaseMenu = true;
       } else {
@@ -766,22 +770,6 @@ async function handleMouseData(data) {
           }
         }
       }
-      // Context menu: tab buttons (Local, Commits, Fresh)
-      {
-        let onTab = false;
-        if (newTitleHover >= 0 && newTitleHover < ui.titleClickZones.length) {
-          const act = ui.titleClickZones[newTitleHover].action;
-          if (act === 'tab-local' || act === 'tab-commits' || act === 'tab-fresh') {
-            onTab = true;
-            if (!ui.contextMenuTab) {
-              registerTabContextMenu();
-            }
-          }
-        }
-        if (!onTab && ui.contextMenuTab) {
-          unregisterContextMenu();
-        }
-      }
       let newDivHover = null;
       const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (!ui.leftPanelCollapsed && inBody) {
@@ -868,34 +856,6 @@ async function handleMouseData(data) {
       }
 
       // Context menu: stash items in left panel
-      if (!ui.leftPanelCollapsed && inBody) {
-        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
-        if (inLeft) {
-          const bodyRowIdx2 = cy - (bodyTop);
-          const entry = bodyRowIdx2 >= 0 && bodyRowIdx2 < ui.leftPanelClickMap.length ? ui.leftPanelClickMap[bodyRowIdx2] : null;
-          if (entry && entry.action === 'goto-stash') {
-            const stashRef = entry.ref;
-            if (!ui.contextMenuActive || ui.contextMenuStashRef !== stashRef) {
-              registerStashContextMenu(stashRef);
-            }
-          } else if (ui.contextMenuStashRef && inLeft) {
-            unregisterContextMenu();
-          }
-        }
-      }
-
-      // Context menu: only active when mouse is over the history list area
-      if (state.rightView === 'log') {
-        const bodyRowIdx = cy - (bodyTop);
-        const inHistoryList = inBody && cx >= rightStart && cx < L.startCol + L.width &&
-          bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH;
-        if (inHistoryList && (!ui.contextMenuActive || ui.contextMenuStashRef || ui.contextMenuFileItem)) {
-          registerHistoryContextMenu();
-        } else if (!inHistoryList && ui.contextMenuActive && !ui.contextMenuStashRef) {
-          unregisterContextMenu();
-        }
-      }
-
       // Hover: fresh window button
       let newFreshWindowHover = false;
       if (state.rightView === 'fresh' && inBody && ui.freshWindowZone) {
@@ -1140,7 +1100,7 @@ async function handleMouseData(data) {
               ui.leftPanelActiveBranch = null;
               state.rightView = 'diff';
               updateDiff();
-              unregisterContextMenu();
+      
               state.focusPanel = 'status';
               render();
               handled = true;
@@ -1161,7 +1121,7 @@ async function handleMouseData(data) {
               state.freshScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateFreshDetail();
-              unregisterContextMenu();
+      
               state.focusPanel = 'status';
               render();
               handled = true;
@@ -1376,7 +1336,7 @@ async function handleMouseData(data) {
               ui.leftPanelActiveBranch = null;
               state.rightView = 'diff';
               updateDiff();
-              unregisterContextMenu();
+      
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'tab-commits') {
@@ -1395,7 +1355,7 @@ async function handleMouseData(data) {
               state.freshScrollOffset = 0;
               state.diffScrollOffset = 0;
               updateFreshDetail();
-              unregisterContextMenu();
+      
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'toggle-section') {
@@ -1685,89 +1645,135 @@ async function handleMouseData(data) {
       }
     }
 
-    // Right click - update selection for context menu
-    if (cb === 2) {
-      // Right-click on left panel stash item
-      if (!ui.leftPanelCollapsed) {
-        const bodyRowIdx = cy - (bodyTop);
-        const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
-        if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length) {
-          const entry = ui.leftPanelClickMap[bodyRowIdx];
-          if (entry && entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) {
-            registerRemoteBranchContextMenu(entry.branch);
-            ui.leftPanelActiveBranch = entry.branch;
-            render();
-            continue;
-          }
-          if (isRemoteMenuTarget(entry)) {
-            registerRemotesContextMenu();
-            render();
-            continue;
-          }
-          if (entry && entry.action === 'goto-stash' && entry.ref) {
-            registerStashContextMenu(entry.ref);
-            // Also select the stash
-            ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
-            render();
-            continue;
-          }
-          if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
-            registerBranchContextMenu(entry.branch);
-            ui.leftPanelActiveBranch = entry.branch;
-            render();
-            continue;
-          }
-        }
-      }
-      if (state.rightView === 'log') {
-        const bodyRowIdx = cy - (bodyTop);
-        const rightStart2 = midStart + L.middleW + L.divider2W;
-        const inRight2 = cx >= rightStart2 && cx < L.startCol + L.width;
-        if (inRight2 && bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
-          const itemIdx = state.logScrollOffset + bodyRowIdx;
-          const selectIdx = state.logSelectables.indexOf(itemIdx);
-          if (selectIdx >= 0) {
-            state.logCursor = selectIdx;
-            state.diffScrollOffset = 0;
-            updateLogDetail();
-            state.focusPanel = 'status';
-            render();
-          }
-        }
-      } else {
-        // Diff mode: right-click on file list updates cursor
-        const bodyRowIdx = cy - (bodyTop);
-        const inMiddle2 = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
-        if (inMiddle2 && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
-          const fileIdx = ui.fileLineMap[bodyRowIdx];
-          const fileList = buildFileList();
-          const item = fileList[fileIdx];
-          state.cursor = fileIdx;
-          updateDiff();
-          state.focusPanel = 'status';
-          if (item) {
-            // If right-clicked file is not in current selection, scope context menu to it.
-            if (!state.selectedFiles.has(fileIdx)) {
-              state.selectedFiles.clear();
-              state.selectedFiles.add(fileIdx);
-            }
-            const targets = Array.from(state.selectedFiles)
-              .sort((a, b) => a - b)
-              .map((idx) => fileList[idx])
-              .filter(Boolean);
-            registerFileContextMenu(item, targets);
-          }
-          render();
-          continue;
-        }
-      }
-    }
   }
   return hadMouse;
 }
 
 function cleanup() {
   process.stdout.write(CSI + '?7h' + require('./ansi').ansi.showCursor + require('./ansi').ansi.reset + require('./ansi').ansi.clear);
+}
+
+function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
+
+function handleContextMenuRequest(col, row) {
+  const L = ui.lastLayout;
+  if (!L) return;
+
+  const titleH = (L.titleRows || 2) + 1;
+  const bodyTop = L.startRow + titleH;
+  const midStart = L.startCol + L.leftW + L.divider1W;
+  const cx = col;
+  const cy = row;
+
+  // Title bar: tab context menu
+  if (cy >= L.startRow && cy < bodyTop) {
+    for (let i = 0; i < ui.titleClickZones.length; i++) {
+      const zone = ui.titleClickZones[i];
+      if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
+        const act = zone.action;
+        if (act === 'tab-local' || act === 'tab-commits' || act === 'tab-fresh') {
+          ui.contextMenuTab = true;
+          ui.contextMenuStashRef = null;
+          ui.contextMenuFileItem = null;
+          ui.contextMenuFileItems = [];
+          ui.contextMenuFilePath = '';
+          sendRpc('show_context_menu', { items: buildTabContextMenuItems() });
+          render();
+          return;
+        }
+      }
+    }
+  }
+
+  // Left panel
+  if (!ui.leftPanelCollapsed) {
+    const bodyRowIdx = cy - bodyTop;
+    const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
+    if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length) {
+      const entry = ui.leftPanelClickMap[bodyRowIdx];
+      if (entry && entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) {
+        ui.leftPanelActiveBranch = entry.branch;
+        ui.contextMenuRemoteBranch = entry.branch;
+        sendRpc('show_context_menu', { items: buildRemoteBranchContextMenuItems(entry.branch) });
+        render();
+        return;
+      }
+      if (isRemoteMenuTarget(entry)) {
+        ui.contextMenuStashRef = null;
+        ui.contextMenuFileItem = null;
+        ui.contextMenuFileItems = [];
+        ui.contextMenuFilePath = '';
+        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
+        render();
+        return;
+      }
+      if (entry && entry.action === 'goto-stash' && entry.ref) {
+        ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
+        ui.contextMenuStashRef = entry.ref;
+        sendRpc('show_context_menu', { items: buildStashContextMenuItems(entry.ref) });
+        render();
+        return;
+      }
+      if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
+        ui.leftPanelActiveBranch = entry.branch;
+        ui.contextMenuBranch = entry.branch;
+        sendRpc('show_context_menu', { items: buildBranchContextMenuItems(entry.branch) });
+        render();
+        return;
+      }
+    }
+  }
+
+  // Right panel: log view
+  if (state.rightView === 'log') {
+    const bodyRowIdx = cy - bodyTop;
+    const rightStart2 = midStart + L.middleW + L.divider2W;
+    const inRight2 = cx >= rightStart2 && cx < L.startCol + L.width;
+    if (inRight2 && bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
+      const itemIdx = state.logScrollOffset + bodyRowIdx;
+      const selectIdx = state.logSelectables.indexOf(itemIdx);
+      if (selectIdx >= 0) {
+        state.logCursor = selectIdx;
+        state.diffScrollOffset = 0;
+        updateLogDetail();
+        state.focusPanel = 'status';
+      }
+    }
+    sendRpc('show_context_menu', { items: buildHistoryContextMenuItems() });
+    render();
+    return;
+  }
+
+  // Middle panel: file list (diff mode)
+  {
+    const bodyRowIdx = cy - bodyTop;
+    const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
+    if (inMiddle && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
+      const fileIdx = ui.fileLineMap[bodyRowIdx];
+      const fileList = buildFileList();
+      const item = fileList[fileIdx];
+      state.cursor = fileIdx;
+      updateDiff();
+      state.focusPanel = 'status';
+      if (item) {
+        if (!state.selectedFiles.has(fileIdx)) {
+          state.selectedFiles.clear();
+          state.selectedFiles.add(fileIdx);
+        }
+        const targets = Array.from(state.selectedFiles)
+          .sort((a, b) => a - b)
+          .map((idx) => fileList[idx])
+          .filter(Boolean);
+        ui.contextMenuStashRef = null;
+        ui.contextMenuFileItem = item;
+        ui.contextMenuFileItems = targets;
+        ui.contextMenuFilePath = joinPath(state.cwd, item.file);
+        sendRpc('show_context_menu', { items: buildFileContextMenuItems(item, targets) });
+      }
+      render();
+      return;
+    }
+  }
 }
 
 function isRemoteMenuTarget(entry) {
@@ -1778,4 +1784,4 @@ function isRemoteMenuTarget(entry) {
   return false;
 }
 
-module.exports = { handleKey, handleMouseData, actionToKey, cleanup };
+module.exports = { handleKey, handleMouseData, actionToKey, cleanup, handleContextMenuRequest };

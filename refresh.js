@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitBranches, gitRemoteBranches, gitRemotes, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
+const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -89,7 +89,7 @@ async function refresh() {
   }
   if (!state.spinnerActive) state.error = null;
   state.branch = await gitBranch(state.cwd);
-  state.rebaseState = await gitRebaseState(state.cwd);
+  state.operationState = await gitOperationState(state.cwd);
   state.branches = await gitBranches(state.cwd);
   state.remoteBranches = await gitRemoteBranches(state.cwd);
   state.remotes = await gitRemotes(state.cwd);
@@ -189,8 +189,8 @@ async function refreshAsync() {
     ? remotesRaw.trim().split('\n').filter(b => !b.includes('/HEAD'))
     : [];
 
-  // rebaseState — gitDirRaw를 이용해 파일시스템 확인 (호스트 API 사용)
-  state.rebaseState = null;
+  // operationState — detect rebase/merge/cherry-pick/revert in progress
+  state.operationState = null;
   const gitDir = gitDirRaw.trim();
   if (gitDir) {
     const sep = (process.platform === 'win32') ? '\\' : '/';
@@ -202,7 +202,7 @@ async function refreshAsync() {
       const totalRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
       const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
       const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
-      state.rebaseState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
+      state.operationState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
     } else {
       const rebaseApply = base + sep + 'rebase-apply';
       const raStat = await hecaton.fs_stat({ path: rebaseApply });
@@ -211,7 +211,26 @@ async function refreshAsync() {
         const totalRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
         const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
         const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
-        state.rebaseState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
+        state.operationState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
+      } else {
+        // Check merge/cherry-pick/revert
+        const mergeHead = base + sep + 'MERGE_HEAD';
+        const mhStat = await hecaton.fs_stat({ path: mergeHead });
+        if (mhStat && mhStat.exists) {
+          state.operationState = { type: 'merge' };
+        } else {
+          const cherryHead = base + sep + 'CHERRY_PICK_HEAD';
+          const chStat = await hecaton.fs_stat({ path: cherryHead });
+          if (chStat && chStat.exists) {
+            state.operationState = { type: 'cherry-pick' };
+          } else {
+            const revertHead = base + sep + 'REVERT_HEAD';
+            const rvStat = await hecaton.fs_stat({ path: revertHead });
+            if (rvStat && rvStat.exists) {
+              state.operationState = { type: 'revert' };
+            }
+          }
+        }
       }
     }
   }
