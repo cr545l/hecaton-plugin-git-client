@@ -370,7 +370,7 @@ async function handleContextMenuAction(actionId) {
           message: 'Discard changes in ' + count + ' file(s)?\n\nThis cannot be undone.',
           buttons: [
             { id: 'discard', label: 'Discard' },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'cancel', label: 'Cancel', default: true },
           ],
         });
         state.pendingDialogAction = 'discard-confirm';
@@ -628,7 +628,7 @@ async function handleContextMenuAction(actionId) {
           message: 'Drop ' + ref + '?\n\nThis cannot be undone.',
           buttons: [
             { id: 'drop', label: 'Drop' },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'cancel', label: 'Cancel', default: true },
           ],
         });
         state.pendingDialogAction = 'stash-drop-confirm';
@@ -739,7 +739,7 @@ async function handleContextMenuAction(actionId) {
         message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\nThis will discard commits. This cannot be undone.",
         buttons: [
           { id: 'reset', label: 'Reset' },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'cancel', label: 'Cancel', default: true },
         ],
       });
       state.pendingDialogAction = 'reset-confirm';
@@ -752,7 +752,7 @@ async function handleContextMenuAction(actionId) {
         title: 'Checkout Commit',
         message: 'Checkout ' + hash.substring(0, 8) + "?\n\nThis will put you in 'detached HEAD' state.",
         buttons: [
-          { id: 'checkout', label: 'Checkout' },
+          { id: 'checkout', label: 'Checkout', default: true },
           { id: 'cancel', label: 'Cancel' },
         ],
       });
