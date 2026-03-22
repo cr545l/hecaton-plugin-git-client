@@ -431,15 +431,17 @@ function handleCommitInput(key) {
       return;
     }
     state.mode = 'normal';
-    render();
+    startSpinner('Committing...');
     gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
       if (err) {
+        stopSpinner();
         showErrorDialog(err);
         render();
       } else {
         state.commitMsg = '';
         state.commitCursor = 0;
         await refreshAsync();
+        stopSpinner();
         render();
       }
     });

@@ -376,10 +376,12 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_stage_all':
+        startSpinner('Staging all...');
         await gitStageAll(state.cwd);
         await afterGitOp(null);
         break;
       case 'file_ignore_name': {
+        startSpinner('Ignoring...');
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -401,6 +403,7 @@ async function handleContextMenuAction(actionId) {
           showError('No extension to ignore');
           break;
         }
+        startSpinner('Ignoring...');
         let err = null;
         for (const ext of exts) {
           const oneErr = await gitIgnorePattern(state.cwd, '*' + ext);
@@ -410,6 +413,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_ignore_path': {
+        startSpinner('Ignoring...');
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -420,6 +424,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_stash_one': {
+        startSpinner('Stashing...');
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -508,6 +513,7 @@ async function handleContextMenuAction(actionId) {
 
     if (actionId.startsWith('branch_track:')) {
       const remoteBranch = actionId.substring('branch_track:'.length);
+      startSpinner('Setting upstream...');
       const err = await gitSetUpstream(state.cwd, branchName, remoteBranch);
       await afterGitOp(err, 'Set upstream');
       return;
@@ -804,9 +810,11 @@ async function handleDialogResult(params) {
     // delete-branch is a message dialog with delete/force/cancel buttons
     if (action === 'delete-branch') {
       if (buttonId === 'delete') {
+        startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, false);
         await afterGitOp(err, 'Delete branch');
       } else if (buttonId === 'force') {
+        startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, true);
         await afterGitOp(err, 'Delete branch');
       }
@@ -821,6 +829,7 @@ async function handleDialogResult(params) {
     }
     if (action === 'stash-drop-confirm') {
       if (buttonId === 'drop') {
+        startSpinner('Dropping stash...');
         const err = await gitStashDrop(state.cwd, target);
         await afterGitOp(err, 'Stash drop');
       }
@@ -828,6 +837,7 @@ async function handleDialogResult(params) {
     }
     if (action === 'discard-confirm') {
       if (buttonId === 'discard') {
+        startSpinner('Discarding...');
         const files = state.pendingDiscardFiles || [];
         state.pendingDiscardFiles = null;
         let err = null;
@@ -856,6 +866,12 @@ async function handleDialogResult(params) {
         showError('Name cannot be empty');
         return;
       }
+      const opName = action === 'rename-branch' ? 'Rename branch'
+        : action === 'rename-stash' ? 'Rename stash'
+        : action === 'new-remote' ? 'Remote'
+        : action === 'new-branch' ? 'Branch'
+        : 'Tag';
+      startSpinner(opName + '...');
       let err;
       if (action === 'rename-branch') {
         err = await gitRenameBranch(state.cwd, target, name);
@@ -875,11 +891,6 @@ async function handleDialogResult(params) {
       } else if (action === 'new-tag') {
         err = await gitCreateTag(state.cwd, name, target);
       }
-      const opName = action === 'rename-branch' ? 'Rename branch'
-        : action === 'rename-stash' ? 'Rename stash'
-        : action === 'new-remote' ? 'Remote'
-        : action === 'new-branch' ? 'Branch'
-        : 'Tag';
       await afterGitOp(err, opName);
     }
     return;
