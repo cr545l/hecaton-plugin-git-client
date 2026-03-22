@@ -1083,7 +1083,7 @@ function showRebaseConflictDialog(err) {
 }
 
 function copyToClipboard(text) {
-  sendRpcNotify('set_clipboard', { text });
+  sendRpcNotify('write_clipboard', { text });
 }
 
 async function openExternal(fullPath) {

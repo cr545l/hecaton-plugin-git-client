@@ -28,18 +28,43 @@ async function gitResult(args, cwd, timeout) {
 
 function unquoteGitPath(p) {
   if (p.length >= 2 && p[0] === '"' && p[p.length - 1] === '"') {
-    return p.slice(1, -1).replace(/\\([ntab\\""])|\\([0-7]{1,3})/g, (_, esc, oct) => {
-      if (oct) return String.fromCharCode(parseInt(oct, 8));
-      switch (esc) {
-        case 'n': return '\n';
-        case 't': return '\t';
-        case 'a': return '\x07';
-        case 'b': return '\b';
-        case '\\': return '\\';
-        case '"': return '"';
-        default: return esc;
+    const inner = p.slice(1, -1);
+    const bytes = [];
+    let i = 0;
+    while (i < inner.length) {
+      if (inner[i] === '\\' && i + 1 < inner.length) {
+        const next = inner[i + 1];
+        if (next >= '0' && next <= '7') {
+          let oct = next;
+          let j = i + 2;
+          while (j < inner.length && j < i + 4 && inner[j] >= '0' && inner[j] <= '7') {
+            oct += inner[j];
+            j++;
+          }
+          bytes.push(parseInt(oct, 8));
+          i = j;
+        } else {
+          // Flush pending bytes as UTF-8 before handling escape
+          if (bytes.length > 0) {
+            // Will be flushed at the end
+          }
+          switch (next) {
+            case 'n': bytes.push(0x0A); break;
+            case 't': bytes.push(0x09); break;
+            case 'a': bytes.push(0x07); break;
+            case 'b': bytes.push(0x08); break;
+            case '\\': bytes.push(0x5C); break;
+            case '"': bytes.push(0x22); break;
+            default: bytes.push(next.charCodeAt(0)); break;
+          }
+          i += 2;
+        }
+      } else {
+        bytes.push(inner.charCodeAt(i));
+        i++;
       }
-    });
+    }
+    return Buffer.from(bytes).toString('utf8');
   }
   return p;
 }
