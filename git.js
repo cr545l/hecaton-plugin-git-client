@@ -45,12 +45,25 @@ function unquoteGitPath(p) {
 }
 
 async function gitIsRepo(cwd) {
-  try {
-    await git(['rev-parse', '--is-inside-work-tree'], cwd);
-    return true;
-  } catch {
-    return false;
+  const result = await hecaton.exec_process({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout: 5000 });
+  if (result && result.ok) return true;
+  // Provide diagnostic detail for troubleshooting
+  const detail = {};
+  // Dump raw result for diagnosis
+  detail.error = 'raw: ' + JSON.stringify(result);
+  if (result && result.__rpcError) {
+    detail.error = 'RPC error: ' + (result.__rpcError.message || JSON.stringify(result.__rpcError));
+  } else if (result) {
+    if (result.error) detail.error = result.error;
+    if (result.stderr) detail.stderr = result.stderr;
+    if (result.exitCode !== undefined) detail.exitCode = result.exitCode;
+  } else {
+    detail.error = 'exec_process returned null';
   }
+  if (detail.error && /not found|cannot find|no such file|ENOENT/i.test(detail.error)) {
+    detail.notFound = true;
+  }
+  return detail;
 }
 
 async function gitBranch(cwd) {

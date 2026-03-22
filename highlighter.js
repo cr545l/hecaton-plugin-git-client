@@ -166,29 +166,26 @@ function formatToAnsi(result) {
   if (!value) return '';
 
   let output = '';
-  let currentColor = null;
+  const colorStack = [];
 
-  // Parse HTML span tags and convert to ANSI
-  const spanRegex = /<span class="([^"]+)">([^<]*)<\/span>|([^<]+)/g;
+  // Token-based parser to handle nested <span> tags from highlight.js
+  const tagRegex = /<span class="([^"]+)">|<\/span>|([^<]+)/g;
   let match;
 
-  while ((match = spanRegex.exec(value)) !== null) {
-    if (match[3] !== undefined) {
-      // Plain text - don't reset, just output as-is
-      output += decodeHtmlEntities(match[3]);
+  while ((match = tagRegex.exec(value)) !== null) {
+    if (match[1] !== undefined) {
+      // Opening <span> — push color and emit ANSI
+      const color = getAnsiForClass(match[1]);
+      colorStack.push(color);
+      if (color) output += color;
+    } else if (match[0] === '</span>') {
+      // Closing </span> — pop and restore parent color
+      colorStack.pop();
+      const parentColor = colorStack[colorStack.length - 1];
+      if (parentColor) output += parentColor;
     } else {
-      // Styled span
-      const className = match[1];
-      const text = match[2];
-      const color = getAnsiForClass(className);
-
-      if (color !== currentColor) {
-        if (color) {
-          output += color;
-        }
-        currentColor = color;
-      }
-      output += decodeHtmlEntities(text);
+      // Plain text
+      output += decodeHtmlEntities(match[2]);
     }
   }
 

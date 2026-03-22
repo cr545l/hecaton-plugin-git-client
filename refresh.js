@@ -75,9 +75,25 @@ function remapSelectedFiles() {
 
 async function refresh() {
   if (!state.cwd) return;
-  state.isGitRepo = await gitIsRepo(state.cwd);
+  // Set pending message before exec_process (may hang)
+  state.error = 'Checking git... cwd: ' + state.cwd;
+  const repoCheck = await gitIsRepo(state.cwd);
+  if (repoCheck === true) {
+    state.isGitRepo = true;
+    state.gitNotFound = false;
+    state.error = null;
+  } else {
+    state.isGitRepo = false;
+    const diag = repoCheck || {};
+    state.gitNotFound = !!diag.notFound;
+    const parts = [state.gitNotFound ? 'git not found' : 'Not a git repository'];
+    parts.push('cwd: ' + state.cwd);
+    if (diag.error) parts.push('error: ' + diag.error);
+    if (diag.stderr) parts.push('stderr: ' + diag.stderr.trim());
+    if (diag.exitCode !== undefined) parts.push('exit: ' + diag.exitCode);
+    state.error = parts.join(' | ');
+  }
   if (!state.isGitRepo) {
-    state.error = 'Not a git repository: ' + state.cwd;
     state.branch = '';
     state.staged = [];
     state.unstaged = [];
@@ -122,6 +138,23 @@ async function refreshAsync() {
   }
 
   try {
+
+  // Pre-check: can git run at all? (with diagnostic on failure)
+  const preCheck = await hecaton.exec_process({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
+  if (!preCheck || !preCheck.ok) {
+    state.isGitRepo = false;
+    const parts = ['Not a git repository', 'cwd: ' + state.cwd];
+    if (preCheck) {
+      if (preCheck.error) parts.push('error: ' + preCheck.error);
+      if (preCheck.stderr) parts.push('stderr: ' + preCheck.stderr.trim());
+      if (preCheck.exitCode !== undefined) parts.push('exit: ' + preCheck.exitCode);
+    } else {
+      parts.push('exec_process returned null');
+    }
+    state.error = parts.join(' | ');
+    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
+    return;
+  }
 
   const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([

@@ -175,8 +175,10 @@ function buildBranchContextMenuItems(branchName) {
   items.push({ type: 'separator' });
   items.push(
     { id: 'branch_rename', label: "Rename '" + branchName + "'...", shortcut: 'F2' },
-    { id: 'branch_delete', label: "Delete '" + branchName + "'...", shortcut: 'Delete' },
   );
+  if (!branch.isCurrent) {
+    items.push({ id: 'branch_delete', label: "Delete '" + branchName + "'...", shortcut: 'Delete' });
+  }
   items.push({ type: 'separator' });
   items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
 
@@ -361,13 +363,18 @@ async function handleContextMenuAction(actionId) {
         }
         break;
       case 'file_discard': {
-        let err = null;
-        for (const item of fileItems) {
-          if (!item) continue;
-          const oneErr = await gitDiscardFile(state.cwd, item);
-          if (!err && oneErr) err = oneErr;
-        }
-        await afterGitOp(err, 'Discard');
+        const count = fileItems.length;
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Discard Changes',
+          message: 'Discard changes in ' + count + ' file(s)?\n\nThis cannot be undone.',
+          buttons: [
+            { id: 'discard', label: 'Discard' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+        state.pendingDialogAction = 'discard-confirm';
+        state.pendingDiscardFiles = [...fileItems];
         break;
       }
       case 'file_stage_all':
@@ -591,19 +598,13 @@ async function handleContextMenuAction(actionId) {
       case 'branch_rebase_onto':
         startSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, branchName).then(async err => {
-          stopSpinner();
-          await refreshAsync();
-          if (state.rightView === 'log') refreshLog();
-          if (err) showError(err); else render();
+          stopSpinner(); await afterGitOp(err, 'Rebase');
         });
         break;
       case 'branch_merge_into':
         startSpinner('Merging...');
         gitMergeAsync(state.cwd, branchName).then(async err => {
-          stopSpinner();
-          await refreshAsync();
-          if (state.rightView === 'log') refreshLog();
-          if (err) showError(err); else render();
+          stopSpinner(); await afterGitOp(err, 'Merge');
         });
         break;
     }
@@ -621,8 +622,17 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'stash_drop': {
-        const err = await gitStashDrop(state.cwd, ref);
-        await afterGitOp(err, 'Stash drop');
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Drop Stash',
+          message: 'Drop ' + ref + '?\n\nThis cannot be undone.',
+          buttons: [
+            { id: 'drop', label: 'Drop' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+        state.pendingDialogAction = 'stash-drop-confirm';
+        state.pendingDialogTarget = ref;
         break;
       }
       case 'stash_rename':
@@ -723,16 +733,31 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'reset': {
-      startSpinner('Resetting...');
-      gitResetAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Reset'); });
+      sendRpc('show_dialog', {
+        type: 'message',
+        title: 'Reset',
+        message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\nThis will discard commits. This cannot be undone.",
+        buttons: [
+          { id: 'reset', label: 'Reset' },
+          { id: 'cancel', label: 'Cancel' },
+        ],
+      });
+      state.pendingDialogAction = 'reset-confirm';
+      state.pendingDialogTarget = hash;
       break;
     }
     case 'checkout': {
-      startSpinner('Checking out...');
-      gitCheckoutRefAsync(state.cwd, hash).then(async err => {
-        stopSpinner();
-        await afterGitOp(err, 'Checkout');
+      sendRpc('show_dialog', {
+        type: 'message',
+        title: 'Checkout Commit',
+        message: 'Checkout ' + hash.substring(0, 8) + "?\n\nThis will put you in 'detached HEAD' state.",
+        buttons: [
+          { id: 'checkout', label: 'Checkout' },
+          { id: 'cancel', label: 'Cancel' },
+        ],
       });
+      state.pendingDialogAction = 'checkout-commit-confirm';
+      state.pendingDialogTarget = hash;
       break;
     }
     case 'cherry_pick': {
@@ -788,6 +813,43 @@ async function handleDialogResult(params) {
       } else if (buttonId === 'force') {
         const err = await gitDeleteBranch(state.cwd, target, true);
         await afterGitOp(err, 'Delete branch');
+      }
+      return;
+    }
+    if (action === 'reset-confirm') {
+      if (buttonId === 'reset') {
+        startSpinner('Resetting...');
+        gitResetAsync(state.cwd, target).then(async err => { stopSpinner(); await afterGitOp(err, 'Reset'); });
+      }
+      return;
+    }
+    if (action === 'stash-drop-confirm') {
+      if (buttonId === 'drop') {
+        const err = await gitStashDrop(state.cwd, target);
+        await afterGitOp(err, 'Stash drop');
+      }
+      return;
+    }
+    if (action === 'discard-confirm') {
+      if (buttonId === 'discard') {
+        const files = state.pendingDiscardFiles || [];
+        state.pendingDiscardFiles = null;
+        let err = null;
+        for (const item of files) {
+          if (!item) continue;
+          const oneErr = await gitDiscardFile(state.cwd, item);
+          if (!err && oneErr) err = oneErr;
+        }
+        await afterGitOp(err, 'Discard');
+      } else {
+        state.pendingDiscardFiles = null;
+      }
+      return;
+    }
+    if (action === 'checkout-commit-confirm') {
+      if (buttonId === 'checkout') {
+        startSpinner('Checking out...');
+        gitCheckoutRefAsync(state.cwd, target).then(async err => { stopSpinner(); await afterGitOp(err, 'Checkout'); });
       }
       return;
     }

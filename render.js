@@ -398,6 +398,8 @@ function render() {
     }
     windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply' + ansi.reset;
     hintContent = windowHint;
+  } else if (!state.isGitRepo && (state.error || state.cwd)) {
+    hintContent = ' ' + colors.red + (state.error || 'cwd: ' + state.cwd) + ansi.reset;
   } else if (state.error) {
     const isInProgress = state.error.endsWith('...');
     const msgColor = isInProgress ? colors.yellow : colors.red;
@@ -666,7 +668,11 @@ function buildLeftPanel(w, h) {
   }
 
   if (!state.isGitRepo) {
-    pushLine(colors.red + ' Not a git repository' + ansi.reset);
+    if (state.gitNotFound) {
+      pushLine(colors.red + ' git executable not found' + ansi.reset);
+    } else {
+      pushLine(colors.red + ' Not a git repository' + ansi.reset);
+    }
     ui.leftTabInfo = null;
     ui.leftPanelClickMap = clickMap.slice(0, h);
     return lines.slice(0, h);

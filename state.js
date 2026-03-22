@@ -37,6 +37,7 @@ const state = {
   minimized: false,
   pendingStash: false,
   pendingRebaseRef: null,
+  pendingDiscardFiles: null,
   committerName: '',
   committerEmail: '',
   committerNameIsLocal: false,
