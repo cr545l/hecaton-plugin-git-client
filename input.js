@@ -74,14 +74,15 @@ async function handleKey(key) {
   if (key === CSI + '112;6u') {
     startSpinner('Pushing...');
     gitPushAsync(state.cwd).then(async err => {
-      stopSpinner();
       if (err) {
+        stopSpinner();
         showErrorDialog(err);
         render();
       } else {
         await refreshAsync();
         if (state.rightView === 'log') refreshLog();
         if (state.rightView === 'fresh') refreshFresh();
+        stopSpinner();
         render();
       }
     });
@@ -206,9 +207,9 @@ async function handleKey(key) {
           startSpinner('Staging...');
           (async () => {
             await gitStageMultiple(state.cwd, filesToStage);
-            stopSpinner();
             state.selectedFiles.clear();
             await refreshAsync();
+            stopSpinner();
             render();
           })();
         }
@@ -230,9 +231,9 @@ async function handleKey(key) {
           startSpinner('Unstaging...');
           (async () => {
             await gitUnstageMultiple(state.cwd, filesToUnstage);
-            stopSpinner();
             state.selectedFiles.clear();
             await refreshAsync();
+            stopSpinner();
             render();
           })();
         }
@@ -316,8 +317,8 @@ async function handleKey(key) {
         } else {
           startSpinner('Rebasing...');
           gitRebaseAsync(state.cwd, logItem.ref).then(async err => {
-            stopSpinner();
             await refreshAsync();
+            stopSpinner();
             if (state.rightView === 'log') refreshLog();
             if (err && isStaleRebaseError(err)) {
               state.pendingRebaseRef = logItem.ref;
@@ -561,9 +562,9 @@ function handleRebaseMenuInput(key) {
     state.mode = 'normal';
     startSpinner('Rebase continue...');
     gitRebaseContinueAsync(state.cwd).then(async err => {
-      stopSpinner();
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
+      stopSpinner();
       if (err) showErrorDialog(err);
       render();
     });
@@ -573,9 +574,9 @@ function handleRebaseMenuInput(key) {
     state.mode = 'normal';
     startSpinner('Aborting rebase...');
     gitRebaseAbortAsync(state.cwd).then(async err => {
-      stopSpinner();
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
+      stopSpinner();
       if (err) showErrorDialog(err);
       render();
     });
@@ -585,9 +586,9 @@ function handleRebaseMenuInput(key) {
     state.mode = 'normal';
     startSpinner('Rebase skip...');
     gitRebaseSkipAsync(state.cwd).then(async err => {
-      stopSpinner();
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
+      stopSpinner();
       if (err) showErrorDialog(err);
       render();
     });
@@ -1128,14 +1129,15 @@ async function handleMouseData(data) {
             } else if (zone.action === 'git-fetch') {
               startSpinner('Fetching...');
               gitFetchAsync(state.cwd).then(async err => {
-                stopSpinner();
                 if (err) {
+                  stopSpinner();
                   showErrorDialog(err);
                   render();
                 } else {
                   await refreshAsync();
                   if (state.rightView === 'log') refreshLog();
                   if (state.rightView === 'fresh') refreshFresh();
+                  stopSpinner();
                   render();
                 }
               });
@@ -1143,14 +1145,15 @@ async function handleMouseData(data) {
             } else if (zone.action === 'git-pull') {
               startSpinner('Pulling...');
               gitPullAsync(state.cwd).then(async err => {
-                stopSpinner();
                 if (err) {
+                  stopSpinner();
                   showErrorDialog(err);
                   render();
                 } else {
                   await refreshAsync();
                   if (state.rightView === 'log') refreshLog();
                   if (state.rightView === 'fresh') refreshFresh();
+                  stopSpinner();
                   render();
                 }
               });
@@ -1164,14 +1167,15 @@ async function handleMouseData(data) {
                     : Promise.resolve('No remote configured for push'))
                 : gitPushAsync(state.cwd);
               pushPromise.then(async err => {
-                stopSpinner();
                 if (err) {
+                  stopSpinner();
                   showErrorDialog(err);
                   render();
                 } else {
                   await refreshAsync();
                   if (state.rightView === 'log') refreshLog();
                   if (state.rightView === 'fresh') refreshFresh();
+                  stopSpinner();
                   render();
                 }
               });
@@ -1513,9 +1517,9 @@ async function handleMouseData(data) {
                       const pct = Math.round(((i + 1) / total) * 100);
                       state.error = `${label}... (${i + 1}/${total}) ${pct}%`;
                     }
-                    stopSpinner();
                     state.selectedFiles.clear();
                     await refreshAsync();
+                    stopSpinner();
                     render();
                   })();
                 }
@@ -1540,8 +1544,8 @@ async function handleMouseData(data) {
                 const msg = isUnstage ? 'Unstaging...' : 'Staging...';
                 startSpinner(msg);
                 (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(async () => {
-                  stopSpinner();
                   await refreshAsync();
+                  stopSpinner();
                   render();
                 });
               }

@@ -346,7 +346,6 @@ async function handleContextMenuAction(actionId) {
           (async () => {
             const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
             if (files.length > 0) await gitStageMultiple(state.cwd, files);
-            stopSpinner();
             await afterGitOp(null);
           })();
         }
@@ -357,7 +356,6 @@ async function handleContextMenuAction(actionId) {
           (async () => {
             const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
             if (files.length > 0) await gitUnstageMultiple(state.cwd, files);
-            stopSpinner();
             await afterGitOp(null);
           })();
         }
@@ -474,12 +472,11 @@ async function handleContextMenuAction(actionId) {
     switch (actionId) {
       case 'remotebranch_checkout_local':
         startSpinner('Checking out...');
-        gitCheckoutRefAsync(state.cwd, localName).then(err => { stopSpinner(); afterGitOp(err, 'Checkout'); });
+        gitCheckoutRefAsync(state.cwd, localName).then(async err => { await afterGitOp(err, 'Checkout'); });
         break;
       case 'remotebranch_checkout_tracking': {
         startSpinner('Checking out...');
         const err = await gitCreateBranch(state.cwd, localName, remoteBranchName);
-        stopSpinner();
         await afterGitOp(err, 'Checkout');
         break;
       }
@@ -519,24 +516,23 @@ async function handleContextMenuAction(actionId) {
     switch (actionId) {
       case 'branch_checkout':
         startSpinner('Checking out...');
-        gitCheckoutRefAsync(state.cwd, branchName).then(err => { stopSpinner(); afterGitOp(err, 'Checkout'); });
+        gitCheckoutRefAsync(state.cwd, branchName).then(async err => { await afterGitOp(err, 'Checkout'); });
         break;
       case 'branch_ff':
         startSpinner('Fast-forwarding...');
-        gitMergeFastForwardAsync(state.cwd, upstream).then(err => { stopSpinner(); afterGitOp(err, 'Fast-forward'); });
+        gitMergeFastForwardAsync(state.cwd, upstream).then(async err => { await afterGitOp(err, 'Fast-forward'); });
         break;
       case 'branch_pull':
         startSpinner('Pulling...');
-        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(err => { stopSpinner(); afterGitOp(err, 'Pull'); });
+        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Pull'); });
         break;
       case 'branch_push':
         startSpinner('Pushing...');
-        gitPushToRemoteAsync(state.cwd, remote, branchName).then(err => { stopSpinner(); afterGitOp(err, 'Push'); });
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push'); });
         break;
       case 'branch_push_pr':
         startSpinner('Pushing...');
         gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-          stopSpinner();
           if (err) { await afterGitOp(err, 'Push'); return; }
           const remoteUrl = await gitGetRemoteUrl(state.cwd, remote);
           const prUrl = buildPullRequestUrl(remoteUrl, branchName);
@@ -598,13 +594,13 @@ async function handleContextMenuAction(actionId) {
       case 'branch_rebase_onto':
         startSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, branchName).then(async err => {
-          stopSpinner(); await afterGitOp(err, 'Rebase');
+          await afterGitOp(err, 'Rebase');
         });
         break;
       case 'branch_merge_into':
         startSpinner('Merging...');
         gitMergeAsync(state.cwd, branchName).then(async err => {
-          stopSpinner(); await afterGitOp(err, 'Merge');
+          await afterGitOp(err, 'Merge');
         });
         break;
     }
@@ -688,7 +684,7 @@ async function handleContextMenuAction(actionId) {
       break;
     case 'merge': {
       startSpinner('Merging...');
-      gitMergeAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Merge'); });
+      gitMergeAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Merge'); });
       break;
     }
     case 'rebase': {
@@ -706,8 +702,8 @@ async function handleContextMenuAction(actionId) {
       } else {
         startSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, hash).then(async err => {
-          stopSpinner();
           await refreshAsync();
+          stopSpinner();
           if (state.rightView === 'log') refreshLog();
           if (err && isStaleRebaseError(err)) {
             state.pendingRebaseRef = hash;
@@ -762,12 +758,12 @@ async function handleContextMenuAction(actionId) {
     }
     case 'cherry_pick': {
       startSpinner('Cherry-picking...');
-      gitCherryPickAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Cherry-pick'); });
+      gitCherryPickAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Cherry-pick'); });
       break;
     }
     case 'revert': {
       startSpinner('Reverting...');
-      gitRevertAsync(state.cwd, hash).then(async err => { stopSpinner(); await afterGitOp(err, 'Revert'); });
+      gitRevertAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Revert'); });
       break;
     }
     case 'save_patch': {
@@ -819,7 +815,7 @@ async function handleDialogResult(params) {
     if (action === 'reset-confirm') {
       if (buttonId === 'reset') {
         startSpinner('Resetting...');
-        gitResetAsync(state.cwd, target).then(async err => { stopSpinner(); await afterGitOp(err, 'Reset'); });
+        gitResetAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Reset'); });
       }
       return;
     }
@@ -849,7 +845,7 @@ async function handleDialogResult(params) {
     if (action === 'checkout-commit-confirm') {
       if (buttonId === 'checkout') {
         startSpinner('Checking out...');
-        gitCheckoutRefAsync(state.cwd, target).then(async err => { stopSpinner(); await afterGitOp(err, 'Checkout'); });
+        gitCheckoutRefAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Checkout'); });
       }
       return;
     }
@@ -951,11 +947,12 @@ async function handleDialogResult(params) {
     state.pendingStash = false;
     startSpinner('Stashing...');
     gitStashSaveAsync(state.cwd).then(async stashErr => {
-      stopSpinner();
       if (stashErr) {
+        stopSpinner();
         showError('Stash failed:\n' + stashErr);
       } else {
         await refreshAsync();
+        stopSpinner();
         render();
       }
     });
@@ -973,8 +970,8 @@ async function handleDialogResult(params) {
       await gitRebaseAbort(state.cwd);
       state.error = 'Retrying rebase...';
       const retryErr = await gitRebaseAsync(state.cwd, ref);
-      stopSpinner();
       await refreshAsync();
+      stopSpinner();
       if (state.rightView === 'log') refreshLog();
       if (retryErr && isRebaseConflictError(retryErr)) {
         showRebaseConflictDialog(retryErr);
@@ -1006,8 +1003,8 @@ async function handleDialogResult(params) {
         rebaseErr = await gitRebaseAsync(state.cwd, ref);
       }
       if (rebaseErr && isRebaseConflictError(rebaseErr)) {
-        stopSpinner();
         await refreshAsync();
+        stopSpinner();
         if (state.rightView === 'log') refreshLog();
         showRebaseConflictDialog(rebaseErr + '\n\nNote: Your changes are stashed. Run stash pop after resolving.');
         render();
@@ -1016,16 +1013,16 @@ async function handleDialogResult(params) {
       if (rebaseErr) {
         state.error = 'Stash & Rebase... (3/3) Restoring stash';
         await gitStashPopAsync(state.cwd);
-        stopSpinner();
         await refreshAsync();
+        stopSpinner();
         if (state.rightView === 'log') refreshLog();
         showError('Rebase failed:\n' + rebaseErr);
         return;
       }
       state.error = 'Stash & Rebase... (3/3) Restoring stash';
       const popErr = await gitStashPopAsync(state.cwd);
-      stopSpinner();
       await refreshAsync();
+      stopSpinner();
       if (state.rightView === 'log') refreshLog();
       if (popErr) {
         showError('Rebase succeeded, but stash pop failed:\n' + popErr);
@@ -1039,9 +1036,10 @@ async function handleDialogResult(params) {
 }
 
 async function afterGitOp(err, opName) {
-  state.error = null;
+  if (!state.spinnerActive) state.error = null;
   await refreshAsync();
   if (state.rightView === 'log') refreshLog();
+  stopSpinner();
   if (err) {
     showError(opName + ' failed:\n' + err);
   } else {
