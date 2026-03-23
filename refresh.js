@@ -129,8 +129,19 @@ async function refresh() {
   updateDiff();
 }
 
+let _refreshRunning = false;
+let _refreshQueued = false;
+
 async function refreshAsync() {
   if (!state.cwd) return;
+
+  // 동시 실행 방지 — 이미 실행 중이면 대기열에 넣고 리턴
+  if (_refreshRunning) {
+    _refreshQueued = true;
+    return;
+  }
+  _refreshRunning = true;
+  _refreshQueued = false;
 
   refreshCount++;
   if (refreshCount === 1) {
@@ -139,8 +150,22 @@ async function refreshAsync() {
 
   try {
 
+  // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
+  try {
+    const sep = (process.platform === 'win32') ? '\\' : '/';
+    const lockPath = state.cwd + sep + '.git' + sep + 'index.lock';
+    const lockStat = await hecaton.fs_stat({ path: lockPath });
+    if (lockStat && lockStat.exists) {
+      // 5초 이상 된 lock 파일은 stale로 판단 (git timeout이 5초이므로)
+      const age = Date.now() - (lockStat.modifiedTime || 0);
+      if (age > 5000) {
+        await hecaton.exec_process({ program: 'rm', args: ['-f', lockPath], cwd: state.cwd, timeout: 2000 });
+      }
+    }
+  } catch { /* ignore — lock cleanup is best-effort */ }
+
   // Pre-check: can git run at all? (with diagnostic on failure)
-  const preCheck = await hecaton.exec_process({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
+  const preCheck = await hecaton.exec_process({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
   if (!preCheck || !preCheck.ok) {
     state.isGitRepo = false;
     const parts = ['Not a git repository', 'cwd: ' + state.cwd];
@@ -156,31 +181,27 @@ async function refreshAsync() {
     return;
   }
 
-  const [isRepoRaw, branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
+  // preCheck를 통과했으므로 git 저장소 확정
+  state.isGitRepo = true;
+  if (!state.spinnerActive) state.error = null;
+
+  // 병렬 실행 — -unormal 사용으로 status도 빠르게 완료됨
+  const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
-      gitExec(['rev-parse', '--is-inside-work-tree'], state.cwd),
-      gitExec(['branch', '--show-current'], state.cwd),
-      gitExec(['status', '--porcelain=v1', '-uall', '--ignored'], state.cwd),
-      gitExec(['stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
-      gitExec(['branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
-      gitExec(['branch', '-r', '--format=%(refname:short)'], state.cwd),
-      gitExec(['remote'], state.cwd),
-      gitExec(['rev-parse', '--git-dir'], state.cwd),
-      gitExec(['config', 'user.name'], state.cwd),
-      gitExec(['config', 'user.email'], state.cwd),
-      gitExec(['config', '--local', 'user.name'], state.cwd),
-      gitExec(['config', '--local', 'user.email'], state.cwd),
-      gitExec(['rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
+      gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
+      gitExec(['--no-optional-locks', 'status', '--porcelain=v1', '-unormal', '--ignored'], state.cwd, 15000),
+      gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
+      gitExec(['--no-optional-locks', 'branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
+      gitExec(['--no-optional-locks', 'branch', '-r', '--format=%(refname:short)'], state.cwd),
+      gitExec(['--no-optional-locks', 'remote'], state.cwd),
+      gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd),
+      gitExec(['--no-optional-locks', 'config', 'user.name'], state.cwd),
+      gitExec(['--no-optional-locks', 'config', 'user.email'], state.cwd),
+      gitExec(['--no-optional-locks', 'config', '--local', 'user.name'], state.cwd),
+      gitExec(['--no-optional-locks', 'config', '--local', 'user.email'], state.cwd),
+      gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
     ]);
 
-  // isGitRepo 판정
-  if (isRepoRaw.trim() !== 'true') {
-    state.isGitRepo = false;
-    state.error = 'Not a git repository: ' + state.cwd;
-    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
-    return;
-  }
-  state.isGitRepo = true;
   if (!state.spinnerActive) state.error = null;
 
   // branch
@@ -286,6 +307,12 @@ async function refreshAsync() {
     refreshCount--;
     if (refreshCount === 0) {
       releaseSpinner();
+    }
+    _refreshRunning = false;
+    // 대기 중인 refresh가 있으면 다시 실행
+    if (_refreshQueued) {
+      _refreshQueued = false;
+      refreshAsync();
     }
   }
 }

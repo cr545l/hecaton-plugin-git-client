@@ -105,7 +105,7 @@ async function gitStatus(cwd) {
   const untracked = [];
   const ignored = [];
   try {
-    const output = await git(['status', '--porcelain=v1', '-uall', '--ignored'], cwd);
+    const output = await git(['--no-optional-locks', 'status', '--porcelain=v1', '-unormal', '--ignored'], cwd, 15000);
     for (const line of output.split('\n')) {
       if (!line) continue;
       const x = line[0];

@@ -215,7 +215,7 @@ async function setupGitWatcher() {
     statusPolling = true;
     try {
       const result = await hecaton.exec_process({
-        program: 'git', args: ['status', '--porcelain=v1', '-uall'], cwd: state.cwd, timeout: 5000
+        program: 'git', args: ['--no-optional-locks', 'status', '--porcelain=v1', '-unormal'], cwd: state.cwd, timeout: 15000
       });
       const snapshot = (result && result.ok) ? (result.stdout || '') : '';
       if (snapshot !== lastStatusSnapshot) {

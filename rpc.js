@@ -12,7 +12,7 @@ function sendRpc(method, params = {}) {
         pendingRpc.delete(id);
         resolve(null);
       }
-    }, 3000);
+    }, 30000);
   });
 }
 
