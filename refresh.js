@@ -185,7 +185,7 @@ async function refreshAsync() {
   state.isGitRepo = true;
   if (!state.spinnerActive) state.error = null;
 
-  // 병렬 실행 — -unormal 사용으로 status도 빠르게 완료됨
+  // 동작 확인된 git status -unormal 방식 유지 + gui 설정 지원
   const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
@@ -207,7 +207,7 @@ async function refreshAsync() {
   // branch
   state.branch = branchRaw.trim() || 'HEAD (detached)';
 
-  // status — gitStatus()와 동일한 파싱 로직
+  // status 파싱
   const staged = [], unstaged = [], untracked = [], ignored = [];
   for (const line of statusRaw.split('\n')) {
     if (!line) continue;

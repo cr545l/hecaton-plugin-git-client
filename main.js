@@ -205,7 +205,7 @@ async function setupGitWatcher() {
     }
   }, 1000);
 
-  // 워킹 디렉토리 변경 감지 (git status 결과 비교)
+  // 워킹 디렉토리 변경 감지 (diff-files로 변경 여부만 확인 — 가볍고 빠름)
   let lastStatusSnapshot = '';
   let statusPolling = false;
   const statusPollInterval = setInterval(async () => {
@@ -215,7 +215,7 @@ async function setupGitWatcher() {
     statusPolling = true;
     try {
       const result = await hecaton.exec_process({
-        program: 'git', args: ['--no-optional-locks', 'status', '--porcelain=v1', '-unormal'], cwd: state.cwd, timeout: 15000
+        program: 'git', args: ['--no-optional-locks', 'diff-files', '--name-only'], cwd: state.cwd, timeout: 5000
       });
       const snapshot = (result && result.ok) ? (result.stdout || '') : '';
       if (snapshot !== lastStatusSnapshot) {

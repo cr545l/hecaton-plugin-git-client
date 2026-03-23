@@ -99,33 +99,88 @@ async function gitBranch(cwd) {
   }
 }
 
-async function gitStatus(cwd) {
-  const staged = [];
-  const unstaged = [];
-  const untracked = [];
-  const ignored = [];
-  try {
-    const output = await git(['--no-optional-locks', 'status', '--porcelain=v1', '-unormal', '--ignored'], cwd, 15000);
-    for (const line of output.split('\n')) {
-      if (!line) continue;
-      const x = line[0];
-      const y = line[1];
-      const file = unquoteGitPath(line.substring(3));
-      if (x === '!' && y === '!') {
-        ignored.push({ file });
-      } else if (x === '?') {
-        untracked.push({ file });
-      } else {
-        if (x !== ' ' && x !== '?') {
-          staged.push({ status: x, file });
-        }
-        if (y !== ' ' && y !== '?') {
-          unstaged.push({ status: y, file });
-        }
-      }
+// git-gui 방식: git status 대신 diff-index + diff-files + ls-files 분리
+// - diff-index/diff-files는 index lock 불필요, 빠름
+// - ls-files --others는 gui.displayuntracked 설정으로 조건부 실행
+// - gui.maxfilesdisplayed로 표시 한도 제한 (untracked 우선 제외)
+
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf899d15363bf59a8';
+
+function parseDiffOutput(raw) {
+  const files = [];
+  if (!raw) return files;
+  const parts = raw.split('\0');
+  let i = 0;
+  while (i < parts.length) {
+    const meta = parts[i];
+    if (!meta || meta[0] !== ':') { i++; continue; }
+    // :old_mode new_mode old_hash new_hash status
+    const fields = meta.substring(1).split(/\s+/);
+    const statusField = fields[4] || '';
+    const status = statusField[0] || '?';
+    i++;
+    const file = parts[i] || '';
+    i++;
+    if (status === 'R' || status === 'C') {
+      const newFile = parts[i] || '';
+      i++;
+      files.push({ status, file: newFile });
+    } else {
+      files.push({ status, file });
     }
-  } catch { /* empty */ }
+  }
+  return files;
+}
+
+function parseLsFilesOutput(raw) {
+  if (!raw) return [];
+  return raw.split('\0').filter(p => p).map(file => {
+    // 디렉토리 끝의 / 제거
+    if (file.endsWith('/')) file = file.slice(0, -1);
+    return { file };
+  });
+}
+
+async function gitStatusSplit(cwd, opts = {}) {
+  const showUntracked = opts.displayUntracked !== false;
+  const maxFiles = opts.maxFilesDisplayed || 0;
+
+  // HEAD 존재 여부 확인 → diff-index 대상 결정
+  const headRef = await gitExec(['--no-optional-locks', 'rev-parse', '--verify', 'HEAD'], cwd);
+  const diffTarget = headRef.trim() || EMPTY_TREE;
+
+  // 1단계: 빠른 명령 병렬 실행
+  const promises = [
+    gitExec(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd),
+    gitExec(['--no-optional-locks', 'diff-files', '-z'], cwd),
+  ];
+  // untracked/ignored는 조건부
+  if (showUntracked) {
+    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '-z', '--exclude-standard'], cwd, 15000));
+    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--ignored', '-z', '--exclude-standard'], cwd, 15000));
+  }
+
+  const results = await Promise.all(promises);
+  const staged = parseDiffOutput(results[0]);
+  const unstaged = parseDiffOutput(results[1]);
+  let untracked = showUntracked ? parseLsFilesOutput(results[2]) : [];
+  let ignored = showUntracked ? parseLsFilesOutput(results[3]) : [];
+
+  // maxFilesDisplayed 적용 — git-gui처럼 untracked 파일부터 제한
+  if (maxFiles > 0) {
+    const trackedCount = staged.length + unstaged.length;
+    const untrackedLimit = Math.max(0, maxFiles - trackedCount);
+    if (untracked.length > untrackedLimit) {
+      untracked = untracked.slice(0, untrackedLimit);
+    }
+  }
+
   return { staged, unstaged, untracked, ignored };
+}
+
+// 하위 호환: 기존 gitStatus도 유지 (git-gui 방식으로 내부 변경)
+async function gitStatus(cwd) {
+  return gitStatusSplit(cwd);
 }
 
 async function gitDiff(cwd, file, isStaged) {
@@ -633,6 +688,7 @@ module.exports = {
   gitDiscardFile, gitStashFile, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitFreshLog, gitShowCommitFile,
+  gitStatusSplit, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
