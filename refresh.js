@@ -185,11 +185,20 @@ async function refreshAsync() {
   state.isGitRepo = true;
   if (!state.spinnerActive) state.error = null;
 
-  // 동작 확인된 git status -unormal 방식 유지 + gui 설정 지원
+  // gui 설정 읽기 (git-gui 호환)
+  const duRaw = await gitExec(['--no-optional-locks', 'config', 'gui.displayuntracked'], state.cwd);
+  const mfRaw = await gitExec(['--no-optional-locks', 'config', 'gui.maxfilesdisplayed'], state.cwd);
+  // gui.displayuntracked (기본: true) — false면 untracked 스캔 건너뜀
+  const duVal = duRaw.trim().toLowerCase();
+  const showUntracked = !duVal || duVal === 'true' || duVal === '1' || duVal === 'yes' || duVal === 'on';
+  const untrackedFlag = showUntracked ? '-unormal' : '-uno';
+  // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
+  const maxFilesDisplayed = parseInt(mfRaw.trim()) || 5000;
+
   const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
-      gitExec(['--no-optional-locks', 'status', '--porcelain=v1', '-unormal', '--ignored'], state.cwd, 15000),
+      gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
       gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
       gitExec(['--no-optional-locks', 'branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
       gitExec(['--no-optional-locks', 'branch', '-r', '--format=%(refname:short)'], state.cwd),
@@ -219,6 +228,13 @@ async function refreshAsync() {
       if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
     }
   }
+  // gui.maxfilesdisplayed — git-gui처럼 한도 초과 시 untracked부터 제외
+  const trackedCount = staged.length + unstaged.length;
+  const untrackedLimit = Math.max(0, maxFilesDisplayed - trackedCount);
+  if (untracked.length > untrackedLimit) {
+    untracked.length = untrackedLimit;
+  }
+
   state._prevFileList = buildFileList();
   state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
   sendRpcNotify('set_title', { title: formatWindowTitle() });
