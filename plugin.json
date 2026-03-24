@@ -2,7 +2,7 @@
   "id": "git-client",
   "name": "Git Client",
   "icon": "terminal-git-bash",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "entry": "main.js",
   "apiVersion": { "major": 1, "minor": 0 },
   "shortcut": { "key": "G", "mod": "ctrl+shift" },
