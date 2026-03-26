@@ -1,4 +1,6 @@
-let rpcIdCounter = 0;
+// Runner(Deno)의 rpcAsync도 1부터 시작하는 정수 ID를 사용하므로,
+// 플러그인 자체 RPC는 충돌하지 않도록 높은 범위에서 시작한다.
+let rpcIdCounter = 100000;
 const pendingRpc = new Map();
 
 function sendRpc(method, params = {}) {

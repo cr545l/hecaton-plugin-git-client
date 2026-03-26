@@ -126,12 +126,17 @@ async function main() {
   state.minimized = hecaton.initialState?.minimized ?? false;
   render();
 
-  // Get CWD from host (stdin handler is ready, so RPC response will be received)
-  const cwdResult = await sendRpc('get_cwd');
-  if (cwdResult && cwdResult.cwd) {
-    state.cwd = cwdResult.cwd;
+  // Get CWD from host (launchParams.path overrides)
+  const params = hecaton.initialState?.params;
+  if (params && params.path) {
+    state.cwd = params.path;
   } else {
-    state.cwd = process.cwd();
+    const cwdResult = await sendRpc('get_cwd');
+    if (cwdResult && cwdResult.cwd) {
+      state.cwd = cwdResult.cwd;
+    } else {
+      state.cwd = process.cwd();
+    }
   }
 
   // Get initial cell size from host
@@ -175,7 +180,20 @@ async function setupGitWatcher() {
   }
 
   // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
-  const gitDir = state.cwd + sep + '.git';
+  // Worktree인 경우 .git은 파일이므로 실제 git 디렉토리를 찾아야 함
+  let gitDir = state.cwd + sep + '.git';
+  try {
+    const gitDirResult = await hecaton.exec_process({
+      program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout: 3000
+    });
+    if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
+      const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
+      if (resolved) {
+        const isAbsolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolved);
+        gitDir = isAbsolute ? resolved : (state.cwd + sep + resolved);
+      }
+    }
+  } catch { /* fallback to .git */ }
   const pollTargets = [
     gitDir + sep + 'index',
     gitDir + sep + 'HEAD',

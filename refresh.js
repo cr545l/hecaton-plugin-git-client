@@ -165,16 +165,25 @@ async function refreshAsync() {
   } catch { /* ignore — lock cleanup is best-effort */ }
 
   // Pre-check: can git run at all? (with diagnostic on failure)
+  // Also verify stdout content — host may return ok:true even on timeout/cancellation
   const preCheck = await hecaton.exec_process({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
-  if (!preCheck || !preCheck.ok) {
+  const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
+  if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
     state.isGitRepo = false;
-    const parts = ['Not a git repository', 'cwd: ' + state.cwd];
+    const parts = [];
+    if (preCheck && preCheck.ok && preCheckStdout !== 'true') {
+      parts.push('Not a git repository');
+    } else if (!preCheck) {
+      parts.push('exec_process returned null');
+    } else {
+      parts.push(preCheck.error || 'git failed');
+    }
+    parts.push('cwd: ' + state.cwd);
     if (preCheck) {
       if (preCheck.error) parts.push('error: ' + preCheck.error);
-      if (preCheck.stderr) parts.push('stderr: ' + preCheck.stderr.trim());
-      if (preCheck.exitCode !== undefined) parts.push('exit: ' + preCheck.exitCode);
-    } else {
-      parts.push('exec_process returned null');
+      if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
+      if (preCheck.exitCode !== undefined && preCheck.exitCode !== 0) parts.push('exit: ' + preCheck.exitCode);
+      parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
     }
     state.error = parts.join(' | ');
     state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
@@ -264,7 +273,9 @@ async function refreshAsync() {
   const gitDir = gitDirRaw.trim();
   if (gitDir) {
     const sep = (process.platform === 'win32') ? '\\' : '/';
-    const base = state.cwd + sep + gitDir;
+    // gitDir may be absolute (worktrees) or relative (.git)
+    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
+    const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
     const rebaseMerge = base + sep + 'rebase-merge';
     const rmStat = await hecaton.fs_stat({ path: rebaseMerge });
     if (rmStat && rmStat.exists && rmStat.isDir) {

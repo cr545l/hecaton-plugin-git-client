@@ -114,6 +114,8 @@ function buildFileContextMenuItems(fileItem, fileItems) {
     { type: 'separator' },
     { id: 'file_copy_path', label: 'Copy Path', icon: 'copy' },
     { id: 'file_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
+    { type: 'separator' },
+    { id: 'file_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' },
   ];
 
   return items;
@@ -461,6 +463,11 @@ async function handleContextMenuAction(actionId) {
           .filter(Boolean)
           .map((item) => joinPath(state.cwd, item.file));
         copyToClipboard(paths.join('\n'));
+        break;
+      }
+      case 'file_open_explorer': {
+        const dir = fullPath.substring(0, fullPath.replace(/\\/g, '/').lastIndexOf('/')) || state.cwd;
+        sendRpc('open_plugin_overlay', { plugin_id: 'explorer', params: { path: dir } });
         break;
       }
     }
