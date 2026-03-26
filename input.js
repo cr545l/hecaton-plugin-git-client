@@ -247,8 +247,13 @@ async function handleKey(key) {
         break;
       }
       state.mode = 'commit';
-      state.commitMsg = '';
-      state.commitCursor = 0;
+      if (state.operationState && state.rebaseMessage) {
+        state.commitMsg = state.rebaseMessage;
+        state.commitCursor = state.rebaseMessage.length;
+      } else {
+        state.commitMsg = '';
+        state.commitCursor = 0;
+      }
       render();
       break;
     }
@@ -423,28 +428,45 @@ function handleCommitInput(key) {
     render();
     return;
   }
-  // Ctrl+Enter → submit commit
+  // Ctrl+Enter → submit commit or continue rebase
   if (key === CSI + '13;5u') {
     if (state.commitMsg.trim().length === 0) {
       showErrorDialog('Commit message cannot be empty');
       render();
       return;
     }
+    const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     state.mode = 'normal';
-    startSpinner('Committing...');
-    gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
-      if (err) {
-        stopSpinner();
-        showErrorDialog(err);
-        render();
-      } else {
+    if (isRebaseOp) {
+      // Write commit message to COMMIT_EDITMSG then rebase --continue
+      startSpinner('Rebase continue...');
+      gitCommitAsync(state.cwd, state.commitMsg).then(async commitErr => {
+        // After committing, continue the rebase
+        const err = await gitRebaseContinueAsync(state.cwd);
         state.commitMsg = '';
         state.commitCursor = 0;
         await refreshAsync();
+        if (state.rightView === 'log') refreshLog();
         stopSpinner();
+        if (err) showErrorDialog(err);
         render();
-      }
-    });
+      });
+    } else {
+      startSpinner('Committing...');
+      gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
+        if (err) {
+          stopSpinner();
+          showErrorDialog(err);
+          render();
+        } else {
+          state.commitMsg = '';
+          state.commitCursor = 0;
+          await refreshAsync();
+          stopSpinner();
+          render();
+        }
+      });
+    }
     return;
   }
   // Ctrl+C → clear commit message
@@ -1451,8 +1473,13 @@ async function handleMouseData(data) {
           handleCommitInput(CSI + '13;5u');
         } else if (state.staged.length > 0 && state.mode !== 'commit') {
           state.mode = 'commit';
-          state.commitMsg = '';
-          state.commitCursor = 0;
+          if (state.operationState && state.rebaseMessage) {
+            state.commitMsg = state.rebaseMessage;
+            state.commitCursor = state.rebaseMessage.length;
+          } else {
+            state.commitMsg = '';
+            state.commitCursor = 0;
+          }
           render();
         }
         continue;
@@ -1462,8 +1489,13 @@ async function handleMouseData(data) {
       if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= rightStart && cx < L.startCol + L.width) {
         if (state.mode !== 'commit' && state.staged.length > 0) {
           state.mode = 'commit';
-          state.commitMsg = '';
-          state.commitCursor = 0;
+          if (state.operationState && state.rebaseMessage) {
+            state.commitMsg = state.rebaseMessage;
+            state.commitCursor = state.rebaseMessage.length;
+          } else {
+            state.commitMsg = '';
+            state.commitCursor = 0;
+          }
           render();
         }
         continue;

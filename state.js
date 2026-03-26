@@ -25,6 +25,7 @@ const state = {
   remotes: [],            // ['origin', 'upstream', ...]
   stashes: [],            // [{ hash, shortHash, ref }]
   operationState: null,  // null | { type: 'rebase-merge'|'rebase-apply'|'merge'|'cherry-pick'|'revert', step?, total? }
+  rebaseMessage: '',     // pre-filled commit message during rebase/merge/cherry-pick
   selectedFiles: new Set(),
   mode: 'normal',        // 'normal' | 'commit'
   commitMsg: '',

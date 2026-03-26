@@ -316,6 +316,37 @@ async function refreshAsync() {
     }
   }
 
+  // Read rebase/merge commit message for pre-fill
+  state.rebaseMessage = '';
+  if (state.operationState && gitDir) {
+    const sep = (process.platform === 'win32') ? '\\' : '/';
+    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
+    const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
+    // Try multiple message sources in priority order
+    const msgPaths = [];
+    if (state.operationState.type === 'rebase-merge') {
+      msgPaths.push(base + sep + 'rebase-merge' + sep + 'message');
+    } else if (state.operationState.type === 'rebase-apply') {
+      msgPaths.push(base + sep + 'rebase-apply' + sep + 'msg');
+    }
+    msgPaths.push(base + sep + 'MERGE_MSG');
+    msgPaths.push(base + sep + 'COMMIT_EDITMSG');
+    for (const p of msgPaths) {
+      try {
+        const res = await hecaton.fs_read_file({ path: p });
+        if (res && res.content && res.content.trim()) {
+          state.rebaseMessage = res.content.replace(/\r\n/g, '\n').trim();
+          break;
+        }
+      } catch { /* ignore */ }
+    }
+    // Append conflict file list if there are unmerged files
+    const conflictFiles = state.unstaged.filter(f => f.status === 'U').map(f => f.file);
+    if (conflictFiles.length > 0 && state.rebaseMessage && !state.rebaseMessage.includes('# Conflicts:')) {
+      state.rebaseMessage += '\n\n# Conflicts:\n' + conflictFiles.map(f => '#\t' + f).join('\n');
+    }
+  }
+
   state.committerName = nameRaw.trim();
   state.committerEmail = emailRaw.trim();
   state.committerNameIsLocal = !!localNameRaw.trim();

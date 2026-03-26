@@ -368,7 +368,9 @@ function render() {
       + colors.value + '[a]bort' + ansi.reset + '  '
       + colors.value + '[s]kip' + ansi.reset;
   } else if (state.mode === 'commit') {
-    hintContent = colors.yellow + ' Commit: ' + ansi.reset
+    const commitOpRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
+    const commitHintLabel = commitOpRebase ? ' Continue Rebase: ' : ' Commit: ';
+    hintContent = colors.yellow + commitHintLabel + ansi.reset
       + colors.dim + '[Ctrl+Enter]submit  [Esc]cancel' + ansi.reset;
   } else if (state.mode === 'new-branch') {
     hintContent = colors.yellow + ' New Branch: ' + ansi.reset
@@ -570,10 +572,13 @@ function render() {
     const visLines = ui.commitMsgVisibleLines || 1;
     const hsbOffset = ui.diffMaxScrollX > 0 ? 1 : 0;
     ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1;
+    const btnIsRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
+    const btnIsMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
+    const btnLabelLen = btnIsRebase ? 18 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 15 : state.operationState.type === 'cherry-pick' ? 21 : 16) : 8; // [Continue Rebase]=18, [Commit]=8, etc
     ui.commitButtonZone = {
       row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1,
       colStart: rpStartCol + 1,
-      colEnd: rpStartCol + 9,
+      colEnd: rpStartCol + 1 + btnLabelLen,
     };
   } else {
     ui.commitInputRow = -1;
@@ -1139,7 +1144,9 @@ function buildDiffCommitPanel(w, h) {
       }
     } else if (state.staged.length > 0) {
       if (state.operationState) {
-        lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [b] rebase menu' + ansi.reset);
+        const opIsRebase = state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply';
+        const opLabel = opIsRebase ? 'continue rebase' : 'commit';
+        lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] ' + opLabel + '  [b] menu' + ansi.reset);
       } else {
         lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + ansi.reset);
       }
@@ -1147,7 +1154,9 @@ function buildDiffCommitPanel(w, h) {
       lines.push(colors.dim + ' No files staged' + ansi.reset);
     }
 
-    const commitLabel = '[Commit]';
+    const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
+    const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
+    const commitLabel = isRebaseOp ? '[Continue Rebase]' : isMergeOp ? '[Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') + ']' : '[Commit]';
     const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0;
     const isHovered = ui.hoveredCommitButton;
     if (canCommit) {
