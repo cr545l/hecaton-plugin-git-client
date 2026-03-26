@@ -124,6 +124,8 @@ function buildFileContextMenuItems(fileItem, fileItems) {
 function buildTabContextMenuItems() {
   const items = [
     { id: 'tab_refresh', label: 'Refresh' },
+    { type: 'separator' },
+    { id: 'tab_change_repo', label: 'Change Repository...' },
   ];
   return items;
 }
@@ -246,6 +248,28 @@ async function handleContextMenuAction(actionId) {
       }
       render();
     });
+    return;
+  }
+
+  if (actionId === 'tab_change_repo') {
+    const result = await hecaton.pick_folder({ title: 'Select Git Repository', defaultPath: state.cwd || '' });
+    if (result && result.path) {
+      state.cwd = result.path;
+      state.isGitRepo = false;
+      state.error = null;
+      state.branch = '';
+      state.staged = [];
+      state.unstaged = [];
+      state.untracked = [];
+      state.ignored = [];
+      state.diffLines = [];
+      state.currentDiffFile = null;
+      render();
+      await refreshAsync();
+      if (state.rightView === 'log') { refreshLog(); updateLogDetail(); }
+      if (state.rightView === 'fresh') { refreshFresh(); updateFreshDetail(); }
+      render();
+    }
     return;
   }
 
