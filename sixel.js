@@ -6,8 +6,9 @@ const SIXEL_PALETTE = [
   [97,  175, 239],
   [198, 120, 221],
   [86,  182, 194],
-  [80,  80,  80],   // index 7: cursor/selected row background (bright black / \x1b[100m)
-  [50,  50,  50],   // index 8: hover row background
+  [80,  80,  80],
+  [50,  50,  50],
+  [160, 160, 160],
 ];
 
 function pxSet(buf, w, h, x, y, c) { if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c; }
@@ -31,11 +32,28 @@ function pxCircle(buf, w, h, cx, cy, r, c) {
       if (dx * dx + dy * dy <= r2) pxSet(buf, w, h, cx + dx, cy + dy, c);
 }
 
+function pxRing(buf, w, h, cx, cy, rOuter, rInner, c) {
+  const radius = Math.max(1, Math.floor((rOuter + rInner) / 2));
+  const thickness = Math.max(1, rOuter - rInner);
+  const steps = Math.max(12, radius * 10);
+  for (let i = 0; i < steps; i++) {
+    const theta = (Math.PI * 2 * i) / steps;
+    const x = Math.round(cx + Math.cos(theta) * radius);
+    const y = Math.round(cy + Math.sin(theta) * radius);
+    for (let dx = -Math.floor(thickness / 2); dx <= Math.floor(thickness / 2); dx++) {
+      for (let dy = -Math.floor(thickness / 2); dy <= Math.floor(thickness / 2); dy++) {
+        pxSet(buf, w, h, x + dx, y + dy, c);
+      }
+    }
+  }
+}
+
 function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
   const half = t >> 1;
   const steps = 20;
   for (let i = 0; i <= steps; i++) {
-    const s = i / steps, ms = 1 - s;
+    const s = i / steps;
+    const ms = 1 - s;
     const px = Math.round(ms * ms * x0 + 2 * ms * s * x1 + s * s * x2);
     const py = Math.round(ms * ms * y0 + 2 * ms * s * y1 + s * s * y2);
     for (let bx = -half; bx < t - half; bx++)
@@ -44,60 +62,86 @@ function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
   }
 }
 
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
+function pxRecoveryBranch(buf, w, h, cx, cy, top, bot, left, right, c, t, towardRight) {
+  pxVLine(buf, w, h, cx, top, bot, c, t);
+  if (towardRight) {
+    pxBezier(buf, w, h, cx, cy, Math.round(cx + (right - cx) * 0.55), cy, right + 1, cy, c, t);
+  } else {
+    pxBezier(buf, w, h, cx, cy, Math.round(cx - (cx - left) * 0.55), cy, left - 1, cy, c, t);
+  }
+}
+
+function isConnectedChar(ch) {
+  return ch && ch !== ' ';
+}
+
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charStyles, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
     if (cc < 0 || ch === ' ') continue;
-    const c = (cc % 6) + 1; // 1-6, 0 = transparent
-    const cx = i * cellW + (cellW >> 1); // center x of cell
-    const cy = yOff + (cellH >> 1);       // center y in combined image
-    const top = yOff, bot = yOff + cellH - 1;
-    const left = i * cellW, right = (i + 1) * cellW - 1;
+    const style = charStyles && i < charStyles.length ? charStyles[i] : 0;
+    const c = style === 1 ? 9 : (cc % 6) + 1;
+    const cx = i * cellW + (cellW >> 1);
+    const cy = yOff + (cellH >> 1);
+    const top = yOff;
+    const bot = yOff + cellH - 1;
+    const left = i * cellW;
+    const right = (i + 1) * cellW - 1;
 
     switch (ch) {
-      case '\u2502': // │ vertical line
+      case '\u2502':
+      case '\u2506':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
         break;
-      case '\u25cf': { // ● commit dot
-        const hasAbove = prevChars && i < prevChars.length && prevChars[i] !== ' ';
-        const hasBelow = nextChars && i < nextChars.length && nextChars[i] !== ' ';
+      case '\u25cf':
+      case '\u25cc': {
+        const hasAbove = prevChars && i < prevChars.length && isConnectedChar(prevChars[i]);
+        const hasBelow = nextChars && i < nextChars.length && isConnectedChar(nextChars[i]);
         if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lineW);
         if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lineW);
-        pxCircle(buf, pw, ph, cx, cy, dotR, c);
-        // Bridge to adjacent cells for 1-cell-per-lane connections
-        if (i > 0 && chars[i - 1] !== ' ' && chars[i - 1] !== '\u2502' && chars[i - 1] !== '\u25cf') {
+        if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - 3), c);
+        else pxCircle(buf, pw, ph, cx, cy, dotR, c);
+        if (i > 0 && isConnectedChar(chars[i - 1]) && chars[i - 1] !== '\u2502' && chars[i - 1] !== '\u2506' && chars[i - 1] !== '\u25cf' && chars[i - 1] !== '\u25cc') {
           pxHLine(buf, pw, ph, left, cx - dotR - 1, cy, c, lineW);
         }
-        if (i + 1 < numCols && i + 1 < chars.length && chars[i + 1] !== ' ' && chars[i + 1] !== '\u2502' && chars[i + 1] !== '\u25cf') {
+        if (i + 1 < numCols && i + 1 < chars.length && isConnectedChar(chars[i + 1]) && chars[i + 1] !== '\u2502' && chars[i + 1] !== '\u2506' && chars[i + 1] !== '\u25cf' && chars[i + 1] !== '\u25cc') {
           pxHLine(buf, pw, ph, cx + dotR + 1, right, cy, c, lineW);
         }
         break;
       }
-      case '\u251c': // ├ vertical + right (extend 1px into next cell)
+      case '\u251c':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
         pxHLine(buf, pw, ph, cx, right + 1, cy, c, lineW);
         break;
-      case '\u2524': // ┤ vertical + left (extend 1px into prev cell)
+      case '\u2524':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
         pxHLine(buf, pw, ph, left - 1, cx, cy, c, lineW);
         break;
-      case '\u256e': // ╮ bezier: left → down
+      case '\uE000':
+        pxRecoveryBranch(buf, pw, ph, cx, cy, top, bot, left, right, c, lineW, true);
+        break;
+      case '\uE001':
+        pxRecoveryBranch(buf, pw, ph, cx, cy, top, bot, left, right, c, lineW, false);
+        break;
+      case '\u256e':
         pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
         break;
-      case '\u256d': // ╭ bezier: right → down
+      case '\u256d':
         pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lineW);
         break;
-      case '\u256f': // ╯ bezier: up → left
+      case '\u256f':
         pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, lineW);
         break;
-      case '\u2570': // ╰ bezier: up → right
+      case '\u2570':
         pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, lineW);
         break;
-      case '\u2500': // ─ horizontal line (extend 1px each side for cell bridging)
+      case '\u2500':
+      case '\u2504':
         pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lineW);
         break;
-      case '\u253c': // ┼ cross (extend horizontal 1px each side)
+      case '\u253c':
+      case '\u254c':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
         pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lineW);
         break;
@@ -105,9 +149,8 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevC
   }
 }
 
-// Background color indices in the extended palette (after the 6 graph colors)
-const BG_CURSOR = 7;  // palette index for cursor/selected row background
-const BG_HOVER = 8;   // palette index for hover row background
+const BG_CURSOR = 7;
+const BG_HOVER = 8;
 
 function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundary, nextBoundary) {
   const pw = numCols * cellW;
@@ -116,7 +159,6 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
   const lineW = Math.max(1, Math.round(cellW * 0.25));
   const dotR = Math.max(2, Math.round(cellW * 0.375));
   const buf = new Uint8Array(pw * ph);
-  // Fill background for cursor/hover rows first
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
@@ -124,13 +166,10 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
     if (bgIdx > 0) {
       const yStart = r * cellH;
       for (let y = yStart; y < yStart + cellH && y < ph; y++) {
-        for (let x = 0; x < pw; x++) {
-          buf[y * pw + x] = bgIdx;
-        }
+        for (let x = 0; x < pw; x++) buf[y * pw + x] = bgIdx;
       }
     }
   }
-  // Draw graph lines/dots on top
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
@@ -140,27 +179,22 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
     const next = r < graphRows.length - 1
       ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
       : (nextBoundary ? nextBoundary.chars : null);
-    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, numCols, prev, next, cellW, cellH, lineW, dotR);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charStyles, numCols, prev, next, cellW, cellH, lineW, dotR);
   }
   return buf;
 }
 
 function encodeSixel(buf, w, h, palette) {
-  // DCS header: P0;1;0q  (Ps2=1 → transparent background)
   let out = '\x1bP0;1;0q';
-  // Raster attributes
   out += '"1;1;' + w + ';' + h;
-  // Palette definitions (RGB 0-100)
   for (let i = 0; i < palette.length; i++) {
     const [r, g, b] = palette[i];
     out += '#' + (i + 1) + ';2;' + Math.round(r * 100 / 255) + ';' + Math.round(g * 100 / 255) + ';' + Math.round(b * 100 / 255);
   }
-  // Pixel data: process 6 rows at a time (one sixel band)
   for (let bandY = 0; bandY < h; bandY += 6) {
     const bandH = Math.min(6, h - bandY);
     let bandHasData = false;
     for (let ci = 1; ci <= palette.length; ci++) {
-      // Build sixel row for this color
       let row = '';
       let runChar = '';
       let runLen = 0;
@@ -186,20 +220,14 @@ function encodeSixel(buf, w, h, palette) {
         if (runLen >= 4) row += '!' + runLen + runChar;
         else row += runChar.repeat(runLen);
       }
-      // Skip color if entirely transparent (all '?' = 63+0)
       if (row.replace(/[!0-9]/g, '').replace(/\?/g, '') === '') continue;
       bandHasData = true;
-      out += '#' + ci + row + '$'; // $ = carriage return (same band, next color)
+      out += '#' + ci + row + '$';
     }
-    if (bandHasData) {
-      // Remove trailing $ and add - (next band / line feed)
-      if (out.endsWith('$')) out = out.slice(0, -1);
-    }
-    out += '-'; // - = next sixel line (band)
+    if (bandHasData && out.endsWith('$')) out = out.slice(0, -1);
+    out += '-';
   }
-  // Remove trailing -
   if (out.endsWith('-')) out = out.slice(0, -1);
-  // String terminator
   out += '\x1b\\';
   return out;
 }

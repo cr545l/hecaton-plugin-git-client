@@ -5,7 +5,7 @@ const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
-const { renderGraphCharsFixed } = require('./graph');
+const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 
 function render() {
   if (state.minimized) {
@@ -699,6 +699,12 @@ function buildLeftPanel(w, h) {
     }
   }
 
+  function basename(path) {
+    const norm = (path || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const idx = norm.lastIndexOf('/');
+    return idx >= 0 ? norm.substring(idx + 1) : norm;
+  }
+
   // Branches
   {
     const collapsed = !!ui.collapsedSections.branches;
@@ -799,6 +805,30 @@ function buildLeftPanel(w, h) {
           for (const item of topLevel) {
             pushLine(branchLine(6, item.shortName, item.fullRef, false), { action: 'goto-branch', branch: item.fullRef });
           }
+        }
+      }
+    }
+  }
+
+  // Worktrees
+  if (state.worktrees.length > 0) {
+    const collapsed = !!ui.collapsedSections.worktrees;
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Worktrees' + ansi.reset, { action: 'toggle-section', section: 'worktrees' });
+    if (!collapsed) {
+      for (const wt of state.worktrees) {
+        const stateParts = [];
+        if (wt.branch) stateParts.push(wt.branch);
+        else if (wt.isDetached) stateParts.push('detached');
+        if (wt.isLocked) stateParts.push('locked');
+        if (wt.isPrunable) stateParts.push('prunable');
+        const label = basename(wt.path || '') || wt.path || '(unknown)';
+        const detail = stateParts.length > 0 ? '  ' + stateParts.join(', ') : '';
+        const line = (wt.isCurrent ? '  ' + colors.green + ansi.bold + '\u2713 ' : '    ')
+          + colors.value + truncate(label, Math.max(1, innerW - 6 - visLen(detail))) + ansi.reset
+          + (detail ? colors.dim + detail + ansi.reset : '');
+        pushLine(wt.isCurrent ? colors.cursorBg + padRight(line, innerW) + ansi.reset : line);
+        if (wt.path) {
+          pushLine('      ' + colors.dim + truncate(wt.path, innerW - 6) + ansi.reset);
         }
       }
     }
@@ -1221,7 +1251,6 @@ function buildLogPanel(w, h) {
       maxNaturalWidth = item.naturalWidth;
     }
   }
-
   const graphRows = [];
   let graphWidth = 0;
   for (let i = 0; i < listH; i++) {
@@ -1234,9 +1263,7 @@ function buildLogPanel(w, h) {
     if (item.type === 'commit') {
       const prefix = ' ';
       const graphVisLen = maxNaturalWidth;
-      const graphPart = SIXEL_ENABLED
-        ? ' '.repeat(graphVisLen) + ' '
-        : renderGraphCharsFixed(item.chars, item.charColors, maxNaturalWidth) + ' ';
+      const graphPart = ' '.repeat(graphVisLen) + ' ';
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
       const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
@@ -1265,21 +1292,23 @@ function buildLogPanel(w, h) {
         }
       }
       const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
-      const subjPart = (isHead ? ansi.bold : '') + colors.value + subjStr + resetTo;
-      const hashPart = (isHead ? colors.green + ansi.bold : colors.yellow) + item.ref + resetTo;
+      const subjectStyle = item.isRecovery ? RECOVERY_TEXT : colors.value;
+      const hashStyle = item.isRecovery
+        ? RECOVERY_TEXT
+        : (isHead ? colors.green + ansi.bold : colors.yellow);
+      const subjPart = (isHead ? ansi.bold : '') + subjectStyle + subjStr + resetTo;
+      const hashPart = hashStyle + item.ref + resetTo;
       const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
       const pad = Math.max(1, innerW - usedLen - 7);
       const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
       const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
       lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
-      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors, isCursor } : null);
+      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles, isCursor } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
     } else {
-      const graphPart = SIXEL_ENABLED
-        ? ' '.repeat(maxNaturalWidth)
-        : renderGraphCharsFixed(item.chars, item.charColors, maxNaturalWidth);
+      const graphPart = ' '.repeat(maxNaturalWidth);
       lines.push(' ' + graphPart);
-      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
+      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
     }
   }
@@ -1311,6 +1340,8 @@ function buildLogPanel(w, h) {
     if (pixBuf) {
       ui.logSixelOverlay = encodeSixel(pixBuf, maxNaturalWidth * ui.cellW, graphRows.length * ui.cellH, SIXEL_PALETTE);
     }
+  } else {
+    ui.logSixelOverlay = null;
   }
 
   // Scroll pct for title
@@ -1693,6 +1724,8 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
       parts.push(colors.green + ansi.bold + 'HEAD' + ansi.reset);
     } else if (ref === currentBranch) {
       parts.push(colors.green + (isHead ? ansi.bold : '') + ref + ansi.reset);
+    } else if (ref === 'recovery') {
+      parts.push(RECOVERY_TEXT + 'recovery' + ansi.reset);
     } else if (ref.startsWith('tag:')) {
       parts.push(colors.yellow + ref + ansi.reset);
     } else {

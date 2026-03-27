@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
+const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -257,6 +257,7 @@ async function refresh() {
   }
   if (!state.isGitRepo) {
     state.branch = '';
+    state.worktrees = [];
     state.staged = [];
     state.unstaged = [];
     state.untracked = [];
@@ -271,6 +272,7 @@ async function refresh() {
   state.branches = await gitBranches(state.cwd);
   state.remoteBranches = await gitRemoteBranches(state.cwd);
   state.remotes = await gitRemotes(state.cwd);
+  state.worktrees = await gitWorktrees(state.cwd);
   state.stashes = await gitStashRefs(state.cwd);
   state.committerName = await gitGetConfig(state.cwd, 'user.name');
   state.committerEmail = await gitGetConfig(state.cwd, 'user.email');
@@ -349,7 +351,7 @@ async function refreshAsync() {
       parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
     }
     state.error = parts.join(' | ');
-    state.branch = ''; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
+    state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
     return;
   }
 
@@ -367,7 +369,7 @@ async function refreshAsync() {
   // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
   const maxFilesDisplayed = parseInt(mfRaw.trim()) || 5000;
 
-  const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
+  const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, worktrees, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
       gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
@@ -375,6 +377,7 @@ async function refreshAsync() {
       gitExec(['--no-optional-locks', 'branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
       gitExec(['--no-optional-locks', 'branch', '-r', '--format=%(refname:short)'], state.cwd),
       gitExec(['--no-optional-locks', 'remote'], state.cwd),
+      gitWorktrees(state.cwd),
       gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd),
       gitExec(['--no-optional-locks', 'config', 'user.name'], state.cwd),
       gitExec(['--no-optional-locks', 'config', 'user.email'], state.cwd),
@@ -430,6 +433,8 @@ async function refreshAsync() {
   state.remoteBranches = remotesRaw.trim()
     ? remotesRaw.trim().split('\n').filter(b => !b.includes('/HEAD'))
     : [];
+
+  state.worktrees = worktrees;
 
   // operationState — detect rebase/merge/cherry-pick/revert in progress
   state.operationState = null;
@@ -542,6 +547,7 @@ function refreshLog() {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
     state.logSelectables = [];
+    state.recoveryRefs = {};
     ui.stashMap = new Map();
     return;
   }
@@ -558,11 +564,18 @@ function refreshLog() {
   }
 
   const seq = ++_logSeq;
-  const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%aI%x00%cn%x00%cI%x00%B'];
-  if (stashHashes.length > 0) args.push(...stashHashes);
-  args.push('-2000');
+  (async () => {
+    const recovery = await gitReflogRecoveries(state.cwd, 250, 64, 256);
+    if (_logSeq !== seq) return;
+    state.recoveryRefs = recovery.refsByHash || {};
+    const recoveryHashSet = new Set(recovery.hashes || []);
 
-  gitExec(args, state.cwd, 30000).then(raw => {
+    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%aI%x00%cn%x00%cI%x00%B'];
+    if (stashHashes.length > 0) args.push(...stashHashes);
+    if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
+    args.push('-2000');
+
+    let raw = await gitExec(args, state.cwd, 30000);
     if (_logSeq !== seq) return;
 
     raw = raw.replace(/\r/g, '').trim();
@@ -591,6 +604,8 @@ function refreshLog() {
           committerDate: parts[6] || '',
           subject: firstLine.replace(/[\r\n]/g, ''),
           body: fullBody,
+          isRecovery: recoveryHashSet.has(parts[0] || ''),
+          recoveryRef: recovery.refsByHash ? recovery.refsByHash[parts[0] || ''] || null : null,
         };
       });
     }
@@ -663,7 +678,7 @@ function refreshLog() {
     }
 
     require('./render').render();
-  });
+  })();
 }
 
 function selectedLogRef() {
@@ -697,6 +712,17 @@ function updateLogDetail() {
   if (item.body) {
     for (const l of item.body.split('\n')) {
       lines.push(l.replace(/[\r\n]/g, ''));
+    }
+  }
+
+  if (item.isRecovery) {
+    lines.push('');
+    lines.push('Recovery: reflog-only commit');
+    if (item.recoveryRef && item.recoveryRef.selector) {
+      lines.push('Reflog: ' + item.recoveryRef.selector);
+    }
+    if (item.recoveryRef && item.recoveryRef.subject) {
+      lines.push('Event: ' + item.recoveryRef.subject);
     }
   }
 

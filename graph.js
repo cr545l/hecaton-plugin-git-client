@@ -1,114 +1,190 @@
-const { ansi, seriePalette } = require('./ansi');
+const STYLE_NORMAL = 0;
+const STYLE_RECOVERY = 1;
+const CHAR_BRANCH_RIGHT = '\uE000';
+const CHAR_BRANCH_LEFT = '\uE001';
+
+function ensureWidth(row, width) {
+  while (row.chars.length <= width) {
+    row.chars.push(' ');
+    row.charColors.push(-1);
+    row.charStyles.push(STYLE_NORMAL);
+  }
+}
+
+function laneStyleForHash(hash, recoveryHashes) {
+  return recoveryHashes.has(hash) ? STYLE_RECOVERY : STYLE_NORMAL;
+}
+
+function setCell(row, lane, ch, color, style) {
+  if (lane < 0) return;
+  ensureWidth(row, lane);
+  row.chars[lane] = ch;
+  row.charColors[lane] = color;
+  row.charStyles[lane] = style;
+}
+
+function addHorizontalConnector(row, lane, color, style, towardRight) {
+  if (lane < 0) return;
+  ensureWidth(row, lane);
+  const existing = row.chars[lane];
+  if (existing === ' ' || existing === '\u2502') {
+    row.chars[lane] = towardRight ? CHAR_BRANCH_RIGHT : CHAR_BRANCH_LEFT;
+  } else if (existing === '\u2500') {
+    row.chars[lane] = '\u253c';
+  } else if (
+    existing === '\u256d' || existing === '\u256e' || existing === '\u256f' || existing === '\u2570' ||
+    existing === CHAR_BRANCH_RIGHT || existing === CHAR_BRANCH_LEFT
+  ) {
+    row.chars[lane] = '\u253c';
+  }
+  row.charColors[lane] = color;
+  row.charStyles[lane] = style;
+}
+
+function fillHorizontal(row, fromLane, toLane, color, style) {
+  const left = Math.min(fromLane, toLane);
+  const right = Math.max(fromLane, toLane);
+  for (let lane = left + 1; lane < right; lane++) {
+    ensureWidth(row, lane);
+    const existing = row.chars[lane];
+    if (
+      existing === '\u2502' || existing === '\u251c' || existing === '\u2524' ||
+      existing === '\u256e' || existing === '\u256d' ||
+      existing === CHAR_BRANCH_RIGHT || existing === CHAR_BRANCH_LEFT
+    ) {
+      row.chars[lane] = '\u253c';
+    } else if (existing === ' ') {
+      row.chars[lane] = '\u2500';
+      row.charColors[lane] = color;
+    }
+    row.charStyles[lane] = style;
+  }
+}
 
 function calcGraphRows(commits, stashHashes, stashMap) {
   const rows = [];
   let lanes = [];
   let maxLanes = 0;
+  let recoveryDisplayBase = 0;
+  const recoveryHashes = new Set(commits.filter(c => c.isRecovery).map(c => c.hash));
 
   for (const commit of commits) {
     const { hash, parents } = commit;
 
-    let commitLane = lanes.indexOf(hash);
-    if (commitLane === -1) {
-      // Reuse a null (empty) lane slot to keep graph compact
-      commitLane = lanes.indexOf(null);
-      if (commitLane === -1) {
-        commitLane = lanes.length;
+    let baseLane = lanes.indexOf(hash);
+    if (baseLane === -1) {
+      baseLane = lanes.indexOf(null);
+      if (baseLane === -1) {
+        baseLane = lanes.length;
         lanes.push(hash);
       } else {
-        lanes[commitLane] = hash;
+        lanes[baseLane] = hash;
       }
+    }
+
+    recoveryDisplayBase = Math.max(recoveryDisplayBase, lanes.length);
+    const displayLane = commit.isRecovery ? recoveryDisplayBase : baseLane;
+    const row = {
+      type: 'commit',
+      chars: [],
+      charColors: [],
+      charStyles: [],
+      commitLane: displayLane,
+      hash,
+      ref: hash.substring(0, 7),
+      decoration: '',
+      subject: commit.subject,
+      body: commit.body,
+      authorName: commit.authorName,
+      authorDate: commit.authorDate,
+      committerName: commit.committerName,
+      committerDate: commit.committerDate,
+      isRecovery: !!commit.isRecovery,
+      recoveryRef: commit.recoveryRef || null,
+    };
+
+    const nodeStyle = commit.isRecovery ? STYLE_RECOVERY : STYLE_NORMAL;
+    setCell(row, displayLane, commit.isRecovery ? '\u25cc' : '\u25cf', baseLane, nodeStyle);
+
+    for (let lane = 0; lane < lanes.length; lane++) {
+      if (lane === baseLane) continue;
+      if (lanes[lane] === null) continue;
+      setCell(row, lane, '\u2502', lane, laneStyleForHash(lanes[lane], recoveryHashes));
     }
 
     const merges = [];
-
     if (parents.length === 0) {
-      lanes[commitLane] = null;
+      lanes[baseLane] = null;
     } else {
-      lanes[commitLane] = parents[0];
+      lanes[baseLane] = parents[0];
       for (let p = 1; p < parents.length; p++) {
-        const existing = lanes.indexOf(parents[p]);
-        if (existing !== -1 && existing !== commitLane) {
-          merges.push({ lane: existing, isNew: false });
+        const parentHash = parents[p];
+        const existing = lanes.indexOf(parentHash);
+        if (existing !== -1 && existing !== baseLane) {
+          merges.push({ lane: existing, isNew: false, hash: parentHash });
         } else if (existing === -1) {
-          // Reuse a null lane slot or append
           let newLane = lanes.indexOf(null);
           if (newLane === -1) {
             newLane = lanes.length;
-            lanes.push(parents[p]);
+            lanes.push(parentHash);
           } else {
-            lanes[newLane] = parents[p];
+            lanes[newLane] = parentHash;
           }
-          merges.push({ lane: newLane, isNew: true });
+          merges.push({ lane: newLane, isNew: true, hash: parentHash });
         }
       }
     }
 
-    const { chars, charColors } = buildGraphChars(commitLane, lanes, merges);
-    maxLanes = Math.max(maxLanes, lanes.length);
-
-    // Handle incoming lanes: other lanes pointing to this commit's hash
-    for (let i = 0; i < lanes.length; i++) {
-      if (i === commitLane) continue;
-      if (lanes[i] !== hash) continue;
-      while (chars.length <= i) { chars.push(' '); charColors.push(-1); }
-      if (i > commitLane) {
-        chars[i] = '\u256f'; // ╯ curve: up → left
-      } else {
-        chars[i] = '\u2570'; // ╰ curve: up → right
-      }
-      charColors[i] = i;
-      fillHorizontal(chars, charColors, commitLane, i, lanes);
-      lanes[i] = null;
-      maxLanes = Math.max(maxLanes, i + 1);
+    if (commit.isRecovery && baseLane !== displayLane) {
+      const style = STYLE_RECOVERY;
+      addHorizontalConnector(row, baseLane, baseLane, style, displayLane > baseLane);
+      fillHorizontal(row, baseLane, displayLane, baseLane, style);
+      maxLanes = Math.max(maxLanes, displayLane + 1);
     }
 
-    const shortHash = hash.substring(0, 7);
+    for (const merge of merges) {
+      const style = commit.isRecovery || recoveryHashes.has(merge.hash) ? STYLE_RECOVERY : STYLE_NORMAL;
+      addHorizontalConnector(row, baseLane, baseLane, style, merge.lane > baseLane);
+      fillHorizontal(row, baseLane, merge.lane, merge.lane, style);
+      if (merge.isNew) {
+        setCell(row, merge.lane, merge.lane > baseLane ? '\u256e' : '\u256d', merge.lane, style);
+      } else {
+        addHorizontalConnector(row, merge.lane, merge.lane, style, baseLane > merge.lane);
+      }
+    }
+
+    for (let lane = 0; lane < lanes.length; lane++) {
+      if (lane === baseLane) continue;
+      if (lanes[lane] !== hash) continue;
+      setCell(row, lane, lane > baseLane ? '\u256f' : '\u2570', lane, laneStyleForHash(hash, recoveryHashes));
+      fillHorizontal(row, baseLane, lane, lane, laneStyleForHash(hash, recoveryHashes));
+      lanes[lane] = null;
+    }
+
     let decoration = '';
     if (commit.refs) {
       decoration = ' (' + commit.refs + ')';
-      const sRef = stashMap.get(shortHash);
+      const sRef = stashMap.get(row.ref);
       if (sRef) decoration = decoration.replace(/\)$/, ', ' + sRef + ')');
     } else {
-      const sRef = stashMap.get(shortHash);
+      const sRef = stashMap.get(row.ref);
       if (sRef) decoration = ' (' + sRef + ')';
     }
-
-    rows.push({ type: 'commit', chars, charColors, commitLane, hash, ref: shortHash, decoration, subject: commit.subject, body: commit.body, authorName: commit.authorName, authorDate: commit.authorDate, committerName: commit.committerName, committerDate: commit.committerDate });
-
-    // Collapse duplicate lanes
-    const lastRow = rows[rows.length - 1];
-    for (let i = 0; i < lanes.length; i++) {
-      if (lanes[i] === null) continue;
-      for (let j = i + 1; j < lanes.length; j++) {
-        if (lanes[j] === lanes[i]) {
-          if (lastRow.chars[j] === '\u25cf') continue;
-          maxLanes = Math.max(maxLanes, lanes.length);
-          while (lastRow.chars.length < lanes.length) {
-            lastRow.chars.push(' ');
-            lastRow.charColors.push(-1);
-          }
-          if (lastRow.chars[j] === '\u2502') {
-            lastRow.chars[j] = j > i ? '\u256f' : '\u2570';
-            lastRow.charColors[j] = j;
-          }
-          if (lastRow.chars[i] === '\u2502') {
-            lastRow.chars[i] = j > i ? '\u251c' : '\u2524';
-            lastRow.charColors[i] = i;
-          }
-          fillHorizontal(lastRow.chars, lastRow.charColors, i, j, lanes);
-          lanes[j] = null;
-        }
-      }
+    if (commit.isRecovery) {
+      decoration = decoration
+        ? decoration.replace(/\)$/, ', recovery)')
+        : ' (recovery)';
     }
+    row.decoration = decoration;
+    rows.push(row);
 
-    // Only remove trailing null lanes
     while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
       lanes.pop();
     }
+    recoveryDisplayBase = Math.max(recoveryDisplayBase, lanes.length);
+    maxLanes = Math.max(maxLanes, lanes.length, row.chars.length);
   }
 
-  // Compute naturalWidth for each row (last non-space char position + 1)
   for (const row of rows) {
     let nw = 1;
     for (let i = row.chars.length - 1; i >= 0; i--) {
@@ -117,79 +193,15 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     row.naturalWidth = nw;
   }
 
-  // Post-process: align all rows to same width
-  const graphWidth = maxLanes;
-  for (let idx = 0; idx < rows.length; idx++) {
-    const row = rows[idx];
-    while (row.chars.length < graphWidth) {
+  for (const row of rows) {
+    while (row.chars.length < maxLanes) {
       row.chars.push(' ');
       row.charColors.push(-1);
+      row.charStyles.push(STYLE_NORMAL);
     }
-    row.graphStr = renderGraphCharsFixed(row.chars, row.charColors, graphWidth);
   }
 
   return rows;
 }
 
-function buildGraphChars(commitLane, lanes, merges) {
-  const n = lanes.length;
-  const width = n;
-  const chars = new Array(width).fill(' ');
-  const charColors = new Array(width).fill(-1);
-
-  for (let i = 0; i < n; i++) {
-    if (i === commitLane) {
-      chars[i] = '\u25cf';
-      charColors[i] = commitLane;
-    } else if (lanes[i] !== null) {
-      chars[i] = '\u2502';
-      charColors[i] = i;
-    }
-  }
-
-  for (const merge of merges) {
-    const target = merge.lane;
-    fillHorizontal(chars, charColors, commitLane, target, lanes);
-    if (merge.isNew) {
-      chars[target] = target > commitLane ? '\u256e' : '\u256d';
-    } else {
-      chars[target] = target > commitLane ? '\u2524' : '\u251c';
-    }
-    charColors[target] = target;
-  }
-
-  return { chars, charColors };
-}
-
-function fillHorizontal(chars, charColors, fromLane, toLane, lanes) {
-  const left = Math.min(fromLane, toLane);
-  const right = Math.max(fromLane, toLane);
-  const lineColor = toLane;
-
-  for (let col = left + 1; col < right; col++) {
-    if (col === fromLane || col === toLane) continue;
-    const existing = chars[col];
-    if (existing === '\u2502' || existing === '\u251c' || existing === '\u2524' || existing === '\u256e' || existing === '\u256d') {
-      chars[col] = '\u253c';
-    } else if (existing === ' ') {
-      chars[col] = '\u2500';
-      charColors[col] = lineColor;
-    }
-  }
-}
-
-function renderGraphCharsFixed(chars, charColors, width) {
-  let result = '';
-  for (let i = 0; i < width; i++) {
-    const ch = i < chars.length ? chars[i] : ' ';
-    const cc = i < charColors.length ? charColors[i] : -1;
-    if (cc >= 0) {
-      result += seriePalette[cc % seriePalette.length] + ch + ansi.reset;
-    } else {
-      result += ch;
-    }
-  }
-  return result;
-}
-
-module.exports = { calcGraphRows, renderGraphCharsFixed };
+module.exports = { calcGraphRows };

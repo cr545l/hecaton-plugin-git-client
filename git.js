@@ -390,6 +390,106 @@ async function gitBranches(cwd) {
   }
 }
 
+function normalizePathForCompare(path) {
+  if (!path) return '';
+  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+async function gitWorktrees(cwd) {
+  try {
+    const raw = (await git(['worktree', 'list', '--porcelain'], cwd)).replace(/\r/g, '').trim();
+    if (!raw) return [];
+    const currentPath = normalizePathForCompare(cwd);
+    const blocks = raw.split(/\n\s*\n/).filter(Boolean);
+    return blocks.map(block => {
+      const item = {
+        path: '',
+        head: '',
+        branch: '',
+        isCurrent: false,
+        isDetached: false,
+        isBare: false,
+        isLocked: false,
+        isPrunable: false,
+      };
+      for (const line of block.split('\n')) {
+        if (line.startsWith('worktree ')) item.path = line.substring(9).trim();
+        else if (line.startsWith('HEAD ')) item.head = line.substring(5).trim();
+        else if (line.startsWith('branch ')) item.branch = line.substring(7).trim().replace(/^refs\/heads\//, '');
+        else if (line === 'detached') item.isDetached = true;
+        else if (line === 'bare') item.isBare = true;
+        else if (line.startsWith('locked')) item.isLocked = true;
+        else if (line.startsWith('prunable')) item.isPrunable = true;
+      }
+      item.isCurrent = normalizePathForCompare(item.path) === currentPath;
+      return item;
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function gitReflogRecoveries(cwd, maxEntries, maxCandidates, maxDepth) {
+  try {
+    const entryLimit = maxEntries || 200;
+    const candidateLimit = maxCandidates || 64;
+    const depthLimit = maxDepth || 256;
+    const raw = (await git([
+      'reflog',
+      '--all',
+      '-n',
+      String(entryLimit),
+      '--format=%H%x00%gd%x00%gs',
+    ], cwd, 30000)).replace(/\r/g, '').trim();
+    if (!raw) return { hashes: [], refsByHash: {} };
+
+    const refsByHash = {};
+    const candidates = [];
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\x00');
+      const hash = (parts[0] || '').trim();
+      if (!/^[0-9a-f]{40}$/i.test(hash)) continue;
+      if (!refsByHash[hash]) {
+        refsByHash[hash] = {
+          selector: (parts[1] || '').trim(),
+          subject: (parts[2] || '').trim(),
+        };
+        candidates.push(hash);
+        if (candidates.length >= candidateLimit) break;
+      }
+    }
+    if (candidates.length === 0) return { hashes: [], refsByHash: {} };
+
+    const lostRaw = (await git([
+      'rev-list',
+      '--topo-order',
+      '--max-count',
+      String(depthLimit),
+      ...candidates,
+      '--not',
+      '--all',
+    ], cwd, 30000)).replace(/\r/g, '').trim();
+    if (!lostRaw) return { hashes: [], refsByHash: {} };
+
+    const hashes = [];
+    const seen = new Set();
+    for (const hash of lostRaw.split('\n')) {
+      if (hash && !seen.has(hash)) {
+        seen.add(hash);
+        hashes.push(hash);
+      }
+    }
+    const filteredRefs = {};
+    for (const hash of hashes) {
+      if (refsByHash[hash]) filteredRefs[hash] = refsByHash[hash];
+    }
+    return { hashes, refsByHash: filteredRefs };
+  } catch {
+    return { hashes: [], refsByHash: {} };
+  }
+}
+
 async function gitRemotes(cwd) {
   try {
     const raw = (await git(['remote'], cwd)).trim();
@@ -697,7 +797,7 @@ module.exports = {
   gitRebaseState, gitOperationState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
   gitRevertContinue, gitRevertAbort, gitRevertSkip, gitWriteRebaseMessage,
-  gitBranches, gitRemoteBranches, gitRemotes, gitRemoteAdd,
+  gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,

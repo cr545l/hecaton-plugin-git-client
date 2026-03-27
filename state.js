@@ -23,7 +23,9 @@ const state = {
   branches: [],           // [{ name, isCurrent }]
   remoteBranches: [],     // ['origin/main', ...]
   remotes: [],            // ['origin', 'upstream', ...]
+  worktrees: [],          // [{ path, branch, head, isCurrent, isDetached, isBare, isLocked, isPrunable }]
   stashes: [],            // [{ hash, shortHash, ref }]
+  recoveryRefs: {},       // { [hash]: { selector, subject } }
   operationState: null,  // null | { type: 'rebase-merge'|'rebase-apply'|'merge'|'cherry-pick'|'revert', step?, total? }
   rebaseMessage: '',     // pre-filled commit message during rebase/merge/cherry-pick
   selectedFiles: new Set(),
