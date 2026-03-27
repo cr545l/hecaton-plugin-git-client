@@ -252,6 +252,8 @@ async function handleContextMenuAction(actionId) {
   }
 
   if (actionId === 'tab_change_repo') {
+    // 기존 워처 정지 (폴링 RPC가 pick_folder 중 큐를 채우는 것 방지)
+    if (ui.stopGitWatcher) ui.stopGitWatcher();
     const result = await hecaton.pick_folder({ title: 'Select Git Repository', defaultPath: state.cwd || '' });
     if (result && result.path) {
       state.cwd = result.path;
@@ -264,11 +266,20 @@ async function handleContextMenuAction(actionId) {
       state.ignored = [];
       state.diffLines = [];
       state.currentDiffFile = null;
+      state.logEntries = [];
+      state.logCursor = 0;
+      state.logScrollOffset = 0;
+      state.diffScrollOffset = 0;
       render();
       await refreshAsync();
       if (state.rightView === 'log') { refreshLog(); updateLogDetail(); }
       if (state.rightView === 'fresh') { refreshFresh(); updateFreshDetail(); }
       render();
+      // 새 cwd로 워처 재시작
+      if (ui.setupGitWatcher) ui.setupGitWatcher();
+    } else {
+      // 취소 시 워처 복원
+      if (ui.setupGitWatcher) ui.setupGitWatcher();
     }
     return;
   }
@@ -1105,7 +1116,7 @@ function isStaleRebaseError(err) {
 }
 
 function isRebaseConflictError(err) {
-  return err && (err.includes('could not apply') || err.includes('Resolve all conflicts'));
+  return err && (err.includes('could not apply') || err.includes('Resolve all conflicts') || err.includes('CONFLICT') || err.includes('fix conflicts') || err.includes('needs merge'));
 }
 
 function showRebaseConflictDialog(err) {

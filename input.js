@@ -4,6 +4,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
+  gitWriteRebaseMessage,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
@@ -41,7 +42,7 @@ function isStaleRebaseError(err) {
 }
 
 function isRebaseConflictError(err) {
-  return err && (err.includes('could not apply') || err.includes('Resolve all conflicts'));
+  return err && (err.includes('could not apply') || err.includes('Resolve all conflicts') || err.includes('CONFLICT') || err.includes('fix conflicts') || err.includes('needs merge'));
 }
 
 async function handleKey(key) {
@@ -438,19 +439,47 @@ function handleCommitInput(key) {
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     state.mode = 'normal';
     if (isRebaseOp) {
-      // Write commit message to COMMIT_EDITMSG then rebase --continue
+      // Fork-style: write message to rebase message file, then rebase --continue
       startSpinner('Rebase continue...');
-      gitCommitAsync(state.cwd, state.commitMsg).then(async commitErr => {
-        // After committing, continue the rebase
-        const err = await gitRebaseContinueAsync(state.cwd);
-        state.commitMsg = '';
-        state.commitCursor = 0;
-        await refreshAsync();
-        if (state.rightView === 'log') refreshLog();
-        stopSpinner();
-        if (err) showErrorDialog(err);
-        render();
-      });
+      (async () => {
+        try {
+          const writeErr = await gitWriteRebaseMessage(state.cwd, state.commitMsg, state.operationState.type);
+          if (writeErr) {
+            stopSpinner();
+            showErrorDialog('Failed to write rebase message:\n' + writeErr);
+            render();
+            return;
+          }
+          const err = await gitRebaseContinueAsync(state.cwd);
+          state.commitMsg = '';
+          state.commitCursor = 0;
+          await refreshAsync();
+          if (state.rightView === 'log') refreshLog();
+          stopSpinner();
+          if (err && isRebaseConflictError(err)) {
+            state.pendingRebaseMenu = true;
+            sendRpc('show_dialog', {
+              type: 'message',
+              title: 'Rebase Conflict',
+              message: err + '\n\nResolve conflicts and choose an action:',
+              buttons: [
+                { id: 'continue', label: 'Continue', default: true },
+                { id: 'skip', label: 'Skip Commit' },
+                { id: 'abort', label: 'Abort Rebase' },
+              ],
+            });
+            render();
+          } else if (err) {
+            showErrorDialog(err);
+          } else {
+            render();
+          }
+        } catch (e) {
+          stopSpinner();
+          showErrorDialog(e.message || 'Rebase continue failed');
+          render();
+        }
+      })();
     } else {
       startSpinner('Committing...');
       gitCommitAsync(state.cwd, state.commitMsg).then(async err => {

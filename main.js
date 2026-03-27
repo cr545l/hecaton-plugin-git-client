@@ -156,12 +156,23 @@ async function main() {
   await setupGitWatcher();
 
   // Graceful shutdown
-  process.on('SIGTERM', () => { cleanup(); process.exit(0); });
-  process.on('SIGINT', () => { cleanup(); process.exit(0); });
-  process.stdin.on('end', () => { cleanup(); process.exit(0); });
+  process.on('SIGTERM', () => { stopGitWatcher(); process.exit(0); });
+  process.on('SIGINT', () => { stopGitWatcher(); process.exit(0); });
+  process.stdin.on('end', () => { stopGitWatcher(); process.exit(0); });
 }
 
+let _gitWatcherCleanup = null;
+
+function stopGitWatcher() {
+  if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
+}
+
+// context-menu 등 외부에서 워처 재시작 가능하도록 노출
+ui.stopGitWatcher = stopGitWatcher;
+ui.setupGitWatcher = () => setupGitWatcher();
+
 async function setupGitWatcher() {
+  stopGitWatcher(); // 기존 워처 정리
   if (!state.cwd || !state.isGitRepo) return;
 
   let debounceTimer = null;
@@ -244,14 +255,11 @@ async function setupGitWatcher() {
     statusPolling = false;
   }, 2000);
 
-  // 종료 시 정리
-  function cleanup() {
+  _gitWatcherCleanup = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     clearInterval(pollInterval);
     clearInterval(statusPollInterval);
-  }
-  process.on('SIGTERM', cleanup);
-  process.on('SIGINT', cleanup);
+  };
 }
 
 main().catch((e) => {

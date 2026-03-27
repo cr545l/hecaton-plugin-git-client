@@ -1240,7 +1240,7 @@ function buildLogPanel(w, h) {
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
       const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
-      const isHead = decoRawOrig.includes('HEAD');
+      const isHead = /(?:^|,\s*)HEAD(?:\s*->|,|\s*$)/.test(decoRawOrig);
       const decoRaw = decoRawOrig.split(', ').map(r =>
         r.startsWith('HEAD -> ') ? r.substring(8) : r
       ).join(', ');
@@ -1265,14 +1265,14 @@ function buildLogPanel(w, h) {
         }
       }
       const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
-      const subjPart = colors.value + subjStr + resetTo;
+      const subjPart = (isHead ? ansi.bold : '') + colors.value + subjStr + resetTo;
       const hashPart = (isHead ? colors.green + ansi.bold : colors.yellow) + item.ref + resetTo;
       const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
       const pad = Math.max(1, innerW - usedLen - 7);
       const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
       const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
       lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
-      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors } : null);
+      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors, isCursor } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
     } else {
       const graphPart = SIXEL_ENABLED
@@ -1296,6 +1296,7 @@ function buildLogPanel(w, h) {
         const orig = lines[hoverRow];
         const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
         lines[hoverRow] = colors.hoverBg + padRight(deBg.replace(/\x1b\[0m/g, ansi.reset + colors.hoverBg), innerW) + ansi.reset;
+        if (graphRows[hoverRow]) graphRows[hoverRow].isHover = true;
       }
     }
   }

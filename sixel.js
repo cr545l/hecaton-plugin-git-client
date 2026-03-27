@@ -6,6 +6,8 @@ const SIXEL_PALETTE = [
   [97,  175, 239],
   [198, 120, 221],
   [86,  182, 194],
+  [80,  80,  80],   // index 7: cursor/selected row background (bright black / \x1b[100m)
+  [50,  50,  50],   // index 8: hover row background
 ];
 
 function pxSet(buf, w, h, x, y, c) { if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c; }
@@ -103,6 +105,10 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, numCols, prevC
   }
 }
 
+// Background color indices in the extended palette (after the 6 graph colors)
+const BG_CURSOR = 7;  // palette index for cursor/selected row background
+const BG_HOVER = 8;   // palette index for hover row background
+
 function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundary, nextBoundary) {
   const pw = numCols * cellW;
   const ph = graphRows.length * cellH;
@@ -110,6 +116,21 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
   const lineW = Math.max(1, Math.round(cellW * 0.25));
   const dotR = Math.max(2, Math.round(cellW * 0.375));
   const buf = new Uint8Array(pw * ph);
+  // Fill background for cursor/hover rows first
+  for (let r = 0; r < graphRows.length; r++) {
+    const row = graphRows[r];
+    if (!row) continue;
+    const bgIdx = row.isCursor ? BG_CURSOR : row.isHover ? BG_HOVER : 0;
+    if (bgIdx > 0) {
+      const yStart = r * cellH;
+      for (let y = yStart; y < yStart + cellH && y < ph; y++) {
+        for (let x = 0; x < pw; x++) {
+          buf[y * pw + x] = bgIdx;
+        }
+      }
+    }
+  }
+  // Draw graph lines/dots on top
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
@@ -235,7 +256,8 @@ function renderHScrollbarPixels(cW, cH, trackCols, viewportCols, offset, maxScro
 }
 
 module.exports = {
-  SIXEL_ENABLED, SIXEL_PALETTE,
+  SIXEL_ENABLED,
+  SIXEL_PALETTE,
   SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE,
   renderScrollbarPixels, renderHScrollbarPixels,
   renderCombinedGraphPixels, encodeSixel,

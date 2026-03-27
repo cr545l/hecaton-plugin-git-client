@@ -322,21 +322,23 @@ const gitRebaseState = gitOperationState; // backward compat
 async function gitRunOrError(args, cwd, timeout, errorMsg) {
   const r = await gitResult(args, cwd, timeout || 30000);
   if (r && r.ok && r.exitCode === 0) return null;
-  return (r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '') || errorMsg;
+  const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';
+  const stdout = r && r.stdout ? r.stdout.replace(/\r\n/g, '\n').trim() : '';
+  return stderr || stdout || errorMsg;
 }
 
 async function gitRebase(cwd, ref) { return await gitRunOrError(['rebase', ref], cwd, 30000, 'Rebase failed'); }
-async function gitRebaseContinue(cwd) { return await gitRunOrError(['rebase', '--continue'], cwd, 30000, 'Rebase continue failed'); }
+async function gitRebaseContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--continue'], cwd, 30000, 'Rebase continue failed'); }
 async function gitRebaseAbort(cwd) { return await gitRunOrError(['rebase', '--abort'], cwd, 30000, 'Rebase abort failed'); }
-async function gitRebaseSkip(cwd) { return await gitRunOrError(['rebase', '--skip'], cwd, 30000, 'Rebase skip failed'); }
+async function gitRebaseSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--skip'], cwd, 30000, 'Rebase skip failed'); }
 async function gitMergeContinue(cwd) { return await gitRunOrError(['commit', '--no-edit'], cwd, 30000, 'Merge commit failed'); }
 async function gitMergeAbort(cwd) { return await gitRunOrError(['merge', '--abort'], cwd, 30000, 'Merge abort failed'); }
-async function gitCherryPickContinue(cwd) { return await gitRunOrError(['cherry-pick', '--continue'], cwd, 30000, 'Cherry-pick continue failed'); }
+async function gitCherryPickContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cwd, 30000, 'Cherry-pick continue failed'); }
 async function gitCherryPickAbort(cwd) { return await gitRunOrError(['cherry-pick', '--abort'], cwd, 30000, 'Cherry-pick abort failed'); }
-async function gitCherryPickSkip(cwd) { return await gitRunOrError(['cherry-pick', '--skip'], cwd, 30000, 'Cherry-pick skip failed'); }
-async function gitRevertContinue(cwd) { return await gitRunOrError(['revert', '--continue'], cwd, 30000, 'Revert continue failed'); }
+async function gitCherryPickSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'cherry-pick', '--skip'], cwd, 30000, 'Cherry-pick skip failed'); }
+async function gitRevertContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'revert', '--continue'], cwd, 30000, 'Revert continue failed'); }
 async function gitRevertAbort(cwd) { return await gitRunOrError(['revert', '--abort'], cwd, 30000, 'Revert abort failed'); }
-async function gitRevertSkip(cwd) { return await gitRunOrError(['revert', '--skip'], cwd, 30000, 'Revert skip failed'); }
+async function gitRevertSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'revert', '--skip'], cwd, 30000, 'Revert skip failed'); }
 
 async function gitLogCommits(cwd, extraRefs, maxCount) {
   try {
@@ -458,9 +460,9 @@ async function gitFetchAsync(cwd) { return await gitAsyncWrap(['fetch', '--all',
 async function gitPullAsync(cwd) { return await gitAsyncWrap(['pull'], cwd); }
 async function gitPushAsync(cwd) { return await gitAsyncWrap(['push'], cwd); }
 async function gitRebaseAsync(cwd, ref) { return await gitAsyncWrap(['rebase', ref], cwd); }
-async function gitRebaseContinueAsync(cwd) { return await gitAsyncWrap(['rebase', '--continue'], cwd); }
+async function gitRebaseContinueAsync(cwd) { return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--continue'], cwd); }
 async function gitRebaseAbortAsync(cwd) { return await gitAsyncWrap(['rebase', '--abort'], cwd); }
-async function gitRebaseSkipAsync(cwd) { return await gitAsyncWrap(['rebase', '--skip'], cwd); }
+async function gitRebaseSkipAsync(cwd) { return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--skip'], cwd); }
 async function gitMergeAsync(cwd, ref) { return await gitAsyncWrap(['merge', ref], cwd); }
 async function gitResetAsync(cwd, ref) { return await gitAsyncWrap(['reset', '--hard', ref], cwd); }
 async function gitCheckoutRefAsync(cwd, ref) { return await gitAsyncWrap(['checkout', ref], cwd, 10000); }
@@ -520,6 +522,22 @@ async function gitStashRename(cwd, ref, newMessage) {
     return null;
   } catch (e) {
     return e.stderr || e.message || 'Stash rename failed';
+  }
+}
+
+async function gitWriteRebaseMessage(cwd, message, opType) {
+  try {
+    const gitDir = (await git(['rev-parse', '--git-dir'], cwd)).trim();
+    const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
+    const base = isAbsolute ? gitDir : (cwd + sep + gitDir);
+    const msgPath = opType === 'rebase-merge'
+      ? base + sep + 'rebase-merge' + sep + 'message'
+      : base + sep + 'rebase-apply' + sep + 'final-commit';
+    await hecaton.fs_write_file({ path: msgPath, content: message + '\n' });
+    return null;
+  } catch (e) {
+    return e.message || 'Failed to write rebase message';
   }
 }
 
@@ -678,7 +696,7 @@ module.exports = {
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitOperationState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
-  gitRevertContinue, gitRevertAbort, gitRevertSkip,
+  gitRevertContinue, gitRevertAbort, gitRevertSkip, gitWriteRebaseMessage,
   gitBranches, gitRemoteBranches, gitRemotes, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,

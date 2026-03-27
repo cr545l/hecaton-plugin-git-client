@@ -14,6 +14,168 @@ const { sendRpcNotify } = require('./rpc');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
 const { formatWindowTitle } = require('./title');
 
+// Fork-style reorder: DFS traversal of the branch tree.
+// HEAD's first-parent chain is the trunk; at each commit,
+// branches that fork from it are recursively inserted before it.
+function reorderForkStyle(commits) {
+  if (commits.length <= 1) return commits;
+
+  const byHash = new Map();
+  for (const c of commits) byHash.set(c.hash, c);
+
+  // Find HEAD commit
+  let headHash = null;
+  for (const c of commits) {
+    if (c.refs && (c.refs.includes('HEAD') || c.refs.startsWith('HEAD'))) {
+      headHash = c.hash;
+      break;
+    }
+  }
+  if (!headHash) return commits;
+
+  // Build first-parent chain from HEAD
+  const fpChain = []; // ordered list of hashes on HEAD's first-parent path
+  const fpSet = new Set();
+  let cur = headHash;
+  while (cur && byHash.has(cur)) {
+    fpChain.push(cur);
+    fpSet.add(cur);
+    const c = byHash.get(cur);
+    cur = c.parents.length > 0 ? c.parents[0] : null;
+  }
+
+  // For any commit, find its closest ancestor on a given chain (BFS up parents)
+  function findAncestorIn(hash, chainSet) {
+    const visited = new Set();
+    const queue = [hash];
+    while (queue.length > 0) {
+      const h = queue.shift();
+      if (visited.has(h)) continue;
+      visited.add(h);
+      if (chainSet.has(h)) return h;
+      const c = byHash.get(h);
+      if (c) {
+        for (const p of c.parents) queue.push(p);
+      }
+    }
+    return null;
+  }
+
+  // Collect all non-fp commits and group by their fork point on fpChain
+  const commitSet = new Set(commits.map(c => c.hash));
+  const branchTips = []; // non-fp commits that are branch tips (no child points to them as first-parent)
+  const childOf = new Map(); // hash → list of commits whose first parent is hash
+  for (const c of commits) {
+    if (c.parents.length > 0 && byHash.has(c.parents[0])) {
+      if (!childOf.has(c.parents[0])) childOf.set(c.parents[0], []);
+      childOf.get(c.parents[0]).push(c.hash);
+    }
+  }
+
+  // Group non-fp commits by their fork point on the fp chain
+  const branchesByFork = new Map(); // fpHash → [commit objects in topo-order]
+  for (const c of commits) {
+    if (fpSet.has(c.hash)) continue;
+    const fork = findAncestorIn(c.hash, fpSet);
+    if (!fork) continue;
+    if (!branchesByFork.has(fork)) branchesByFork.set(fork, []);
+    branchesByFork.get(fork).push(c);
+  }
+
+  // Within each fork group, recursively sub-sort:
+  // build a sub-first-parent chain for each branch tip, and nest sub-branches
+  function sortBranchGroup(groupCommits) {
+    if (groupCommits.length <= 1) return groupCommits;
+
+    const groupSet = new Set(groupCommits.map(c => c.hash));
+
+    // Find tip commits in this group (commits not referenced as first-parent by another group commit)
+    const hasChild = new Set();
+    for (const c of groupCommits) {
+      if (c.parents.length > 0 && groupSet.has(c.parents[0])) {
+        hasChild.add(c.parents[0]);
+      }
+    }
+    const tips = groupCommits.filter(c => !hasChild.has(c.hash));
+
+    // For each tip, collect its first-parent chain within the group
+    const result = [];
+    const placed = new Set();
+
+    for (const tip of tips) {
+      // Walk first-parent chain within group
+      const chain = [];
+      let h = tip.hash;
+      while (h && groupSet.has(h) && !placed.has(h)) {
+        chain.push(h);
+        placed.add(h);
+        const cc = byHash.get(h);
+        h = cc && cc.parents.length > 0 ? cc.parents[0] : null;
+      }
+      // Find sub-branches: group commits whose ancestor is on this chain but not on the chain itself
+      const chainSet = new Set(chain);
+      const subBranches = new Map();
+      for (const gc of groupCommits) {
+        if (placed.has(gc.hash) || chainSet.has(gc.hash)) continue;
+        const anc = findAncestorIn(gc.hash, chainSet);
+        if (!anc) continue;
+        if (!subBranches.has(anc)) subBranches.set(anc, []);
+        subBranches.get(anc).push(gc);
+      }
+      // Walk chain, inserting sub-branches at fork points
+      for (const ch of chain) {
+        const subs = subBranches.get(ch);
+        if (subs) {
+          const sorted = sortBranchGroup(subs);
+          for (const s of sorted) {
+            if (!placed.has(s.hash)) {
+              result.push(s);
+              placed.add(s.hash);
+            }
+          }
+        }
+        result.push(byHash.get(ch));
+      }
+    }
+
+    // Append any remaining
+    for (const c of groupCommits) {
+      if (!placed.has(c.hash)) result.push(c);
+    }
+    return result;
+  }
+
+  // Build final result: walk fp chain, insert sorted branch groups before each fp commit
+  const result = [];
+  const inserted = new Set();
+
+  for (const fpHash of fpChain) {
+    const group = branchesByFork.get(fpHash);
+    if (group) {
+      const sorted = sortBranchGroup(group);
+      for (const c of sorted) {
+        if (!inserted.has(c.hash)) {
+          result.push(c);
+          inserted.add(c.hash);
+        }
+      }
+    }
+    if (!inserted.has(fpHash)) {
+      result.push(byHash.get(fpHash));
+      inserted.add(fpHash);
+    }
+  }
+
+  // Append remaining commits not on fp chain and not grouped
+  for (const c of commits) {
+    if (!inserted.has(c.hash)) {
+      result.push(c);
+    }
+  }
+
+  return result;
+}
+
 let refreshCount = 0;
 let _diffSeq = 0;
 let _logDetailSeq = 0;
@@ -167,6 +329,7 @@ async function refreshAsync() {
   // Pre-check: can git run at all? (with diagnostic on failure)
   // Also verify stdout content — host may return ok:true even on timeout/cancellation
   const preCheck = await hecaton.exec_process({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
+  console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
   const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
   if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
     state.isGitRepo = false;
@@ -479,6 +642,10 @@ function refreshLog() {
         commits = reordered;
       }
     }
+
+    // Fork-style reorder: HEAD's first-parent chain as main lane,
+    // branch tips inserted at their fork points
+    commits = reorderForkStyle(commits);
 
     const graphRows = calcGraphRows(commits, stashFullHashes, ui.stashMap);
 
