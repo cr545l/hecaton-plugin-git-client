@@ -1,7 +1,5 @@
 const STYLE_NORMAL = 0;
 const STYLE_RECOVERY = 1;
-const CHAR_BRANCH_RIGHT = '\uE000';
-const CHAR_BRANCH_LEFT = '\uE001';
 
 function ensureWidth(row, width) {
   while (row.chars.length <= width) {
@@ -27,13 +25,15 @@ function addHorizontalConnector(row, lane, color, style, towardRight) {
   if (lane < 0) return;
   ensureWidth(row, lane);
   const existing = row.chars[lane];
-  if (existing === ' ' || existing === '\u2502') {
-    row.chars[lane] = towardRight ? CHAR_BRANCH_RIGHT : CHAR_BRANCH_LEFT;
+  if (existing === ' ') {
+    row.chars[lane] = '\u2500';
+  } else if (existing === '\u2502') {
+    row.chars[lane] = towardRight ? '\u251c' : '\u2524';
   } else if (existing === '\u2500') {
-    row.chars[lane] = '\u253c';
+    // already horizontal
   } else if (
     existing === '\u256d' || existing === '\u256e' || existing === '\u256f' || existing === '\u2570' ||
-    existing === CHAR_BRANCH_RIGHT || existing === CHAR_BRANCH_LEFT
+    existing === '\u251c' || existing === '\u2524'
   ) {
     row.chars[lane] = '\u253c';
   }
@@ -49,8 +49,7 @@ function fillHorizontal(row, fromLane, toLane, color, style) {
     const existing = row.chars[lane];
     if (
       existing === '\u2502' || existing === '\u251c' || existing === '\u2524' ||
-      existing === '\u256e' || existing === '\u256d' ||
-      existing === CHAR_BRANCH_RIGHT || existing === CHAR_BRANCH_LEFT
+      existing === '\u256e' || existing === '\u256d'
     ) {
       row.chars[lane] = '\u253c';
     } else if (existing === ' ') {
@@ -65,7 +64,6 @@ function calcGraphRows(commits, stashHashes, stashMap) {
   const rows = [];
   let lanes = [];
   let maxLanes = 0;
-  let recoveryDisplayBase = 0;
   const recoveryHashes = new Set(commits.filter(c => c.isRecovery).map(c => c.hash));
 
   for (const commit of commits) {
@@ -82,14 +80,12 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       }
     }
 
-    recoveryDisplayBase = Math.max(recoveryDisplayBase, lanes.length);
-    const displayLane = commit.isRecovery ? recoveryDisplayBase : baseLane;
     const row = {
       type: 'commit',
       chars: [],
       charColors: [],
       charStyles: [],
-      commitLane: displayLane,
+      commitLane: baseLane,
       hash,
       ref: hash.substring(0, 7),
       decoration: '',
@@ -104,7 +100,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     };
 
     const nodeStyle = commit.isRecovery ? STYLE_RECOVERY : STYLE_NORMAL;
-    setCell(row, displayLane, commit.isRecovery ? '\u25cc' : '\u25cf', baseLane, nodeStyle);
+    setCell(row, baseLane, commit.isRecovery ? '\u25cc' : '\u25cf', baseLane, nodeStyle);
 
     for (let lane = 0; lane < lanes.length; lane++) {
       if (lane === baseLane) continue;
@@ -133,13 +129,6 @@ function calcGraphRows(commits, stashHashes, stashMap) {
           merges.push({ lane: newLane, isNew: true, hash: parentHash });
         }
       }
-    }
-
-    if (commit.isRecovery && baseLane !== displayLane) {
-      const style = STYLE_RECOVERY;
-      addHorizontalConnector(row, baseLane, baseLane, style, displayLane > baseLane);
-      fillHorizontal(row, baseLane, displayLane, baseLane, style);
-      maxLanes = Math.max(maxLanes, displayLane + 1);
     }
 
     for (const merge of merges) {
@@ -181,7 +170,6 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
       lanes.pop();
     }
-    recoveryDisplayBase = Math.max(recoveryDisplayBase, lanes.length);
     maxLanes = Math.max(maxLanes, lanes.length, row.chars.length);
   }
 

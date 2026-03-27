@@ -62,15 +62,6 @@ function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
   }
 }
 
-function pxRecoveryBranch(buf, w, h, cx, cy, top, bot, left, right, c, t, towardRight) {
-  pxVLine(buf, w, h, cx, top, bot, c, t);
-  if (towardRight) {
-    pxBezier(buf, w, h, cx, cy, Math.round(cx + (right - cx) * 0.55), cy, right + 1, cy, c, t);
-  } else {
-    pxBezier(buf, w, h, cx, cy, Math.round(cx - (cx - left) * 0.55), cy, left - 1, cy, c, t);
-  }
-}
-
 function isConnectedChar(ch) {
   return ch && ch !== ' ';
 }
@@ -117,12 +108,6 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charStyles, nu
       case '\u2524':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
         pxHLine(buf, pw, ph, left - 1, cx, cy, c, lineW);
-        break;
-      case '\uE000':
-        pxRecoveryBranch(buf, pw, ph, cx, cy, top, bot, left, right, c, lineW, true);
-        break;
-      case '\uE001':
-        pxRecoveryBranch(buf, pw, ph, cx, cy, top, bot, left, right, c, lineW, false);
         break;
       case '\u256e':
         pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
