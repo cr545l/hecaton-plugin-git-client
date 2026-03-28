@@ -740,14 +740,15 @@ function buildLeftPanel(w, h) {
   const ARROW_CLOSED = '+';
   const activeBranch = ui.leftPanelActiveBranch;
 
-  function branchLine(indent, name, fullRef, isCurrent) {
+  function branchLine(indent, name, fullRef, isCurrent, isRemote) {
     const isActive = activeBranch === fullRef;
     const maxW = innerW - indent;
     if (isCurrent) {
       const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, maxW - 2) + ansi.reset;
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     } else {
-      const content = ' '.repeat(indent) + colors.value + truncate(name, maxW) + ansi.reset;
+      const clr = isRemote ? colors.red : colors.value;
+      const content = ' '.repeat(indent) + clr + truncate(name, maxW) + ansi.reset;
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     }
   }
@@ -851,12 +852,12 @@ function buildLeftPanel(w, h) {
             pushLine(colors.dim + '     ' + (subCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset, { action: 'toggle-group', group: subKey });
             if (!subCollapsed) {
               for (const item of items) {
-                pushLine(branchLine(8, item.shortName, item.fullRef, false), { action: 'goto-branch', branch: item.fullRef });
+                pushLine(branchLine(8, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef });
               }
             }
           }
           for (const item of topLevel) {
-            pushLine(branchLine(6, item.shortName, item.fullRef, false), { action: 'goto-branch', branch: item.fullRef });
+            pushLine(branchLine(6, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef });
           }
         }
       }
@@ -1808,6 +1809,8 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
       parts.push(STASH_TEXT + ref + ansi.reset);
     } else if (ref.startsWith('tag:')) {
       parts.push(colors.yellow + ref + ansi.reset);
+    } else if (ref.includes('/')) {
+      parts.push(colors.red + ref + ansi.reset);
     } else {
       parts.push(colors.cyan + ref + ansi.reset);
     }
