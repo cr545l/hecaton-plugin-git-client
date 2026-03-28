@@ -10,6 +10,7 @@ const state = {
   scrollOffset: 0,
   focusPanel: 'status',  // 'status' | 'diff'
   diffLines: [],
+  conflictView: null,      // conflict chunks for unmerged file side-by-side view
   diffScrollOffset: 0,
   diffScrollX: 0,
   filesScrollX: 0,
@@ -141,9 +142,10 @@ const ui = {
   logDetailMaxScrollX: 0,
   freshDetailMaxScrollX: 0,
   // Merge conflict resolution UI
-  mergeOurs: true,
-  mergeTheirs: true,
   mergeConflictFile: null,     // current conflict file being resolved
+  mergeChunkCursor: 0,         // focused conflict chunk index
+  mergeChunkSelections: {},    // { [chunkIndex]: 'ours' | 'theirs' }
+  mergeChunkLineMap: {},       // { [chunkIndex]: { start, end } }
   mergeClickZones: [],         // click zones for merge UI
 };
 

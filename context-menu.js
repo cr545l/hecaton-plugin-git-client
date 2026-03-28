@@ -939,7 +939,19 @@ async function handleDialogResult(params) {
       if (buttonId === 'delete') {
         startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, false);
-        await afterGitOp(err, 'Delete branch');
+        if (!state.spinnerActive) state.error = null;
+        await refreshAsync();
+        if (state.rightView === 'log') refreshLog();
+        stopSpinner();
+        if (err) {
+          if (isBranchNotFullyMergedError(err)) {
+            showForceDeleteBranchDialog(target, err);
+          } else {
+            showError('Delete branch failed:\n' + err);
+          }
+        } else {
+          render();
+        }
       } else if (buttonId === 'force') {
         startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, true);
@@ -1233,6 +1245,25 @@ function isStaleRebaseError(err) {
 
 function isRebaseConflictError(err) {
   return err && (err.includes('could not apply') || err.includes('Resolve all conflicts') || err.includes('CONFLICT') || err.includes('fix conflicts') || err.includes('needs merge'));
+}
+
+function isBranchNotFullyMergedError(err) {
+  return !!(err && /not fully merged/i.test(err));
+}
+
+function showForceDeleteBranchDialog(branchName, err) {
+  sendRpc('show_dialog', {
+    type: 'message',
+    title: 'Delete Branch',
+    message: "Branch '" + branchName + "' is not fully merged into the current branch.\n\nForce delete it anyway?\n\n" + err,
+    buttons: [
+      { id: 'force', label: 'Force Delete', default: true },
+      { id: 'cancel', label: 'Cancel' },
+    ],
+  });
+  state.pendingDialogAction = 'delete-branch';
+  state.pendingDialogTarget = branchName;
+  render();
 }
 
 function showRebaseConflictDialog(err) {

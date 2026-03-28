@@ -808,6 +808,126 @@ async function gitFilePatch(cwd, item) {
   }
 }
 
+function repoFilePath(cwd, file) {
+  const sep = cwd.includes('\\') ? '\\' : '/';
+  return cwd.replace(/[\\\/]+$/, '') + sep + file.split('/').join(sep);
+}
+
+function normalizeLineEndings(text) {
+  return (text || '').replace(/\r\n/g, '\n');
+}
+
+function splitTextLines(text) {
+  const normalized = normalizeLineEndings(text);
+  const hasTrailingNewline = normalized.endsWith('\n');
+  const lines = normalized.split('\n');
+  if (hasTrailingNewline) lines.pop();
+  return { lines, hasTrailingNewline };
+}
+
+function parseConflictMarkerContent(text) {
+  const { lines, hasTrailingNewline } = splitTextLines(text);
+  const chunks = [];
+  let context = [];
+  let i = 0;
+
+  function flushContext() {
+    if (context.length > 0) {
+      chunks.push({ type: 'context', lines: context });
+      context = [];
+    }
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.startsWith('<<<<<<< ')) {
+      context.push(line);
+      i++;
+      continue;
+    }
+
+    flushContext();
+    i++;
+    const ours = [];
+    while (i < lines.length && lines[i] !== '=======') {
+      ours.push(lines[i]);
+      i++;
+    }
+    if (i >= lines.length) {
+      context.push('<<<<<<<');
+      context.push(...ours);
+      break;
+    }
+
+    i++;
+    const theirs = [];
+    while (i < lines.length && !lines[i].startsWith('>>>>>>> ')) {
+      theirs.push(lines[i]);
+      i++;
+    }
+    if (i < lines.length) i++;
+
+    chunks.push({ type: 'conflict', ours, theirs });
+  }
+
+  flushContext();
+  return { chunks, hasTrailingNewline };
+}
+
+async function gitReadConflictFile(cwd, file) {
+  if (!cwd || !file) return null;
+  const stageRaw = await gitExec(['ls-files', '-u', '--', file], cwd, 10000);
+  const stageEntries = [];
+  for (const line of normalizeLineEndings(stageRaw).split('\n')) {
+    if (!line.trim()) continue;
+    const m = line.match(/^(\d+)\s+([0-9a-f]{40})\s+(\d)\t(.+)$/);
+    if (m) stageEntries.push({ mode: m[1], hash: m[2], stage: parseInt(m[3], 10), file: m[4] });
+  }
+
+  let worktree = '';
+  try {
+    const res = await hecaton.fs_read_file({ path: repoFilePath(cwd, file) });
+    worktree = typeof res === 'string' ? res : (res && res.content) ? res.content : '';
+  } catch {
+    worktree = '';
+  }
+
+  const [base, ours, theirs] = await Promise.all([
+    gitExec(['show', `:1:${file}`], cwd, 10000),
+    gitExec(['show', `:2:${file}`], cwd, 10000),
+    gitExec(['show', `:3:${file}`], cwd, 10000),
+  ]);
+
+  const parsed = parseConflictMarkerContent(worktree);
+  const oursStage = stageEntries.find(entry => entry.stage === 2);
+  const theirsStage = stageEntries.find(entry => entry.stage === 3);
+  const baseStage = stageEntries.find(entry => entry.stage === 1);
+
+  return {
+    file,
+    base: normalizeLineEndings(base),
+    ours: normalizeLineEndings(ours),
+    theirs: normalizeLineEndings(theirs),
+    worktree: normalizeLineEndings(worktree),
+    chunks: parsed.chunks,
+    hasTrailingNewline: parsed.hasTrailingNewline,
+    stages: {
+      base: baseStage || null,
+      ours: oursStage || null,
+      theirs: theirsStage || null,
+    },
+  };
+}
+
+async function gitWriteConflictResolution(cwd, file, content) {
+  try {
+    await hecaton.fs_write_file({ path: repoFilePath(cwd, file), content });
+    return null;
+  } catch (e) {
+    return e && e.message ? e.message : 'Failed to write conflict resolution';
+  }
+}
+
 module.exports = {
   git,
   gitExec,
@@ -827,6 +947,7 @@ module.exports = {
   gitStashApply, gitStashDrop, gitStashRename,
   gitDiscardFile, gitStashFile, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,
+  gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
   gitStatusSplit, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,

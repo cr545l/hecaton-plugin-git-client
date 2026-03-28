@@ -4,8 +4,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
-  gitWriteRebaseMessage, gitCheckRebaseConflicts,
-  gitCheckoutOurs, gitCheckoutTheirs,
+  gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
@@ -51,6 +50,93 @@ function switchToDiffViewForConflict() {
     state.rightView = 'diff';
     updateDiff();
   }
+}
+
+function getConflictChunkIndices() {
+  if (!state.conflictView) return [];
+  return state.conflictView.chunks
+    .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
+    .filter(idx => idx >= 0);
+}
+
+function moveConflictChunkCursor(delta) {
+  const conflictIndices = getConflictChunkIndices();
+  if (conflictIndices.length === 0) return false;
+  const currentPos = Math.max(0, conflictIndices.indexOf(ui.mergeChunkCursor));
+  const nextPos = Math.max(0, Math.min(conflictIndices.length - 1, currentPos + delta));
+  ui.mergeChunkCursor = conflictIndices[nextPos];
+  ensureConflictCursorVisible();
+  return true;
+}
+
+function ensureConflictCursorVisible() {
+  const range = ui.mergeChunkLineMap ? ui.mergeChunkLineMap[ui.mergeChunkCursor] : null;
+  const viewport = Math.max(1, ui.rightDiffH || 1);
+  if (!range) return;
+  if (range.start < state.diffScrollOffset) {
+    state.diffScrollOffset = range.start;
+  } else if (range.end >= state.diffScrollOffset + viewport) {
+    state.diffScrollOffset = Math.max(0, range.end - viewport + 1);
+  }
+}
+
+function buildResolvedConflictContent() {
+  if (!state.conflictView) return { ok: false, message: 'No conflict view is active' };
+  const outLines = [];
+  for (let i = 0; i < state.conflictView.chunks.length; i++) {
+    const chunk = state.conflictView.chunks[i];
+    if (chunk.type === 'context') {
+      outLines.push(...chunk.lines);
+      continue;
+    }
+    const selection = ui.mergeChunkSelections[i];
+    if (selection !== 'ours' && selection !== 'theirs') {
+      return { ok: false, message: 'Select a side for every conflict chunk before applying' };
+    }
+    outLines.push(...(selection === 'ours' ? chunk.ours : chunk.theirs));
+  }
+
+  let content = outLines.join('\n');
+  if (state.conflictView.hasTrailingNewline) content += '\n';
+  return { ok: true, content };
+}
+
+async function applyConflictSelections() {
+  const sel = selectedItem();
+  if (!sel || sel.status !== 'U' || !state.conflictView) {
+    showErrorDialog('Select a conflicted file first');
+    render();
+    return;
+  }
+
+  const resolved = buildResolvedConflictContent();
+  if (!resolved.ok) {
+    showErrorDialog(resolved.message);
+    render();
+    return;
+  }
+
+  startSpinner('Applying resolution...');
+  const writeErr = await gitWriteConflictResolution(state.cwd, sel.file, resolved.content);
+  if (writeErr) {
+    stopSpinner();
+    showErrorDialog(writeErr);
+    render();
+    return;
+  }
+
+  const stageErr = await gitStageAsync(state.cwd, sel.file);
+  if (stageErr) {
+    stopSpinner();
+    showErrorDialog(stageErr);
+    render();
+    return;
+  }
+
+  await refreshAsync();
+  stopSpinner();
+  updateDiff();
+  render();
 }
 
 async function handleKey(key) {
@@ -100,6 +186,10 @@ async function handleKey(key) {
 
   // Arrow keys (VT sequences)
   if (key === CSI + 'A' || key === 'k') { // Up
+    if (state.rightView === 'diff' && state.focusPanel === 'diff' && state.conflictView) {
+      if (moveConflictChunkCursor(-1)) render();
+      return;
+    }
     if (state.focusPanel === 'status') {
       if (state.rightView === 'fresh') {
         if (state.freshItems.length > 0) {
@@ -127,6 +217,10 @@ async function handleKey(key) {
     return;
   }
   if (key === CSI + 'B' || key === 'j') { // Down
+    if (state.rightView === 'diff' && state.focusPanel === 'diff' && state.conflictView) {
+      if (moveConflictChunkCursor(1)) render();
+      return;
+    }
     if (state.focusPanel === 'status') {
       if (state.rightView === 'fresh') {
         if (state.freshItems.length > 0) {
@@ -294,61 +388,18 @@ async function handleKey(key) {
     }
     case '1':
     case '2': {
-      // Toggle Ours (1) / Theirs (2) checkbox for conflict files
-      if (state.rightView !== 'diff' || !state.operationState) break;
+      if (state.rightView !== 'diff' || !state.conflictView) break;
       const sel = selectedItem();
       if (!sel || sel.status !== 'U') break;
-      if (key === '1') ui.mergeOurs = !ui.mergeOurs;
-      else ui.mergeTheirs = !ui.mergeTheirs;
+      if (key === '1') ui.mergeChunkSelections[ui.mergeChunkCursor] = 'ours';
+      if (key === '2') ui.mergeChunkSelections[ui.mergeChunkCursor] = 'theirs';
+      ensureConflictCursorVisible();
       render();
       break;
     }
     case 'm': {
-      // Merge: apply selected conflict resolution
-      if (state.rightView !== 'diff' || !state.operationState) break;
-      const selM = selectedItem();
-      if (!selM || selM.status !== 'U') break;
-      if (!ui.mergeOurs && !ui.mergeTheirs) {
-        showErrorDialog('Select at least one side to merge');
-        render();
-        break;
-      }
-      const conflictFile = selM.file;
-      if (ui.mergeOurs && !ui.mergeTheirs) {
-        startSpinner('Accepting ours...');
-        (async () => {
-          const err = await gitCheckoutOurs(state.cwd, conflictFile);
-          if (err) { stopSpinner(); showErrorDialog(err); render(); return; }
-          await gitStageAsync(state.cwd, conflictFile);
-          await refreshAsync();
-          stopSpinner();
-          updateDiff();
-          render();
-        })();
-      } else if (!ui.mergeOurs && ui.mergeTheirs) {
-        startSpinner('Accepting theirs...');
-        (async () => {
-          const err = await gitCheckoutTheirs(state.cwd, conflictFile);
-          if (err) { stopSpinner(); showErrorDialog(err); render(); return; }
-          await gitStageAsync(state.cwd, conflictFile);
-          await refreshAsync();
-          stopSpinner();
-          updateDiff();
-          render();
-        })();
-      } else {
-        // Both checked: accept theirs (incoming changes take priority in rebase)
-        startSpinner('Merging (accept theirs)...');
-        (async () => {
-          const err = await gitCheckoutTheirs(state.cwd, conflictFile);
-          if (err) { stopSpinner(); showErrorDialog(err); render(); return; }
-          await gitStageAsync(state.cwd, conflictFile);
-          await refreshAsync();
-          stopSpinner();
-          updateDiff();
-          render();
-        })();
-      }
+      if (state.rightView !== 'diff' || !state.conflictView) break;
+      await applyConflictSelections();
       break;
     }
     case 'b': {
@@ -1609,16 +1660,25 @@ async function handleMouseData(data) {
           const zoneColStart = rpStartCol + zone.colStart;
           const zoneColEnd = rpStartCol + zone.colEnd;
           if (cy === zoneRow && cx >= zoneColStart && cx <= zoneColEnd) {
-            if (zone.action === 'toggle-ours') {
-              ui.mergeOurs = !ui.mergeOurs;
+            if (zone.action === 'select-ours') {
+              ui.mergeChunkCursor = zone.chunkIndex;
+              ui.mergeChunkSelections[zone.chunkIndex] = 'ours';
+              ensureConflictCursorVisible();
               render();
               mergeHandled = true;
-            } else if (zone.action === 'toggle-theirs') {
-              ui.mergeTheirs = !ui.mergeTheirs;
+            } else if (zone.action === 'select-theirs') {
+              ui.mergeChunkCursor = zone.chunkIndex;
+              ui.mergeChunkSelections[zone.chunkIndex] = 'theirs';
+              ensureConflictCursorVisible();
               render();
               mergeHandled = true;
-            } else if (zone.action === 'merge') {
-              handleKey('m');
+            } else if (zone.action === 'focus-chunk') {
+              ui.mergeChunkCursor = zone.chunkIndex;
+              ensureConflictCursorVisible();
+              render();
+              mergeHandled = true;
+            } else if (zone.action === 'apply-merge') {
+              await applyConflictSelections();
               mergeHandled = true;
             }
             break;

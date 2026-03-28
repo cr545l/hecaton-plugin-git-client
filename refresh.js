@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal } = require('./git');
+const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal, gitReadConflictFile } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -178,6 +178,31 @@ function reorderForkStyle(commits) {
 
 let refreshCount = 0;
 let _diffSeq = 0;
+
+function ensureConflictSelections(conflictView) {
+  if (!conflictView) {
+    ui.mergeChunkCursor = 0;
+    ui.mergeChunkSelections = {};
+    return;
+  }
+
+  const nextSelections = {};
+  for (let i = 0; i < conflictView.chunks.length; i++) {
+    if (conflictView.chunks[i].type !== 'conflict') continue;
+    if (ui.mergeChunkSelections[i] === 'ours' || ui.mergeChunkSelections[i] === 'theirs') {
+      nextSelections[i] = ui.mergeChunkSelections[i];
+    }
+  }
+  ui.mergeChunkSelections = nextSelections;
+  const conflictIndices = conflictView.chunks
+    .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
+    .filter(idx => idx >= 0);
+  if (conflictIndices.length === 0) {
+    ui.mergeChunkCursor = 0;
+  } else if (!conflictIndices.includes(ui.mergeChunkCursor)) {
+    ui.mergeChunkCursor = conflictIndices[0];
+  }
+}
 let _logDetailSeq = 0;
 let _freshDetailSeq = 0;
 let _logSeq = 0;
@@ -263,6 +288,7 @@ async function refresh() {
     state.untracked = [];
     state.ignored = [];
     state.diffLines = [];
+    state.conflictView = null;
     state.currentDiffFile = null;
     return;
   }
@@ -351,7 +377,7 @@ async function refreshAsync() {
       parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
     }
     state.error = parts.join(' | ');
-    state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.currentDiffFile = null;
+    state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
     return;
   }
 
@@ -770,6 +796,7 @@ function updateDiff() {
   const item = selectedItem();
   if (!item) {
     state.diffLines = [];
+    state.conflictView = null;
     state.currentDiffFile = null;
     state.diffScrollOffset = 0;
     state.diffScrollX = 0;
@@ -781,9 +808,27 @@ function updateDiff() {
     state.diffScrollOffset = 0;
     state.diffScrollX = 0;
     state.diffLines = [];
+    state.conflictView = null;
   }
 
   const seq = ++_diffSeq;
+  if (item.status === 'U') {
+    gitReadConflictFile(state.cwd, item.file).then(conflictView => {
+      if (_diffSeq !== seq) return;
+      state.conflictView = conflictView;
+      state.diffLines = [];
+      if (ui.mergeConflictFile !== item.file) {
+        ui.mergeConflictFile = item.file;
+        ui.mergeChunkCursor = 0;
+        ui.mergeChunkSelections = {};
+      }
+      ensureConflictSelections(conflictView);
+      require('./render').render();
+    });
+    return;
+  }
+
+  state.conflictView = null;
   let args;
   if (item.type === 'staged') {
     args = ['diff', '--cached', '--', item.file];
@@ -794,6 +839,7 @@ function updateDiff() {
   }
   gitExec(args, state.cwd).then(raw => {
     if (_diffSeq !== seq) return;
+    state.conflictView = null;
     state.diffLines = raw.split('\n');
     require('./render').render();
   });
