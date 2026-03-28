@@ -701,7 +701,10 @@ async function handleContextMenuAction(actionId) {
           stopSpinner();
           if (state.rightView === 'log') refreshLog();
           if (err && isRebaseConflictError(err)) {
-            showRebaseConflictDialog(err);
+            if (state.rightView !== 'diff') {
+              state.rightView = 'diff';
+              updateDiff();
+            }
             render();
           } else if (err) {
             showError(err);
@@ -850,7 +853,10 @@ async function handleContextMenuAction(actionId) {
               ],
             });
           } else if (err && isRebaseConflictError(err)) {
-            showRebaseConflictDialog(err);
+            if (state.rightView !== 'diff') {
+              state.rightView = 'diff';
+              updateDiff();
+            }
             render();
           } else if (err) {
             showError(err);
@@ -1063,7 +1069,10 @@ async function handleDialogResult(params) {
       if (state.rightView === 'log') refreshLog();
       if (err && isRebaseConflictError(err)) {
         // Conflict on continue/skip — show info dialog and switch to diff view
-        showRebaseConflictDialog(err);
+        if (state.rightView !== 'diff') {
+          state.rightView = 'diff';
+          updateDiff();
+        }
         render();
       } else if (err) {
         showError(err);
@@ -1133,7 +1142,10 @@ async function handleDialogResult(params) {
           ],
         });
       } else if (err && isRebaseConflictError(err)) {
-        showRebaseConflictDialog(err);
+        if (state.rightView !== 'diff') {
+          state.rightView = 'diff';
+          updateDiff();
+        }
         render();
       } else if (err) {
         showError(err);
@@ -1155,7 +1167,10 @@ async function handleDialogResult(params) {
       stopSpinner();
       if (state.rightView === 'log') refreshLog();
       if (retryErr && isRebaseConflictError(retryErr)) {
-        showRebaseConflictDialog(retryErr);
+        if (state.rightView !== 'diff') {
+          state.rightView = 'diff';
+          updateDiff();
+        }
         render();
       } else if (retryErr) {
         showError('Rebase failed:\n' + retryErr);
@@ -1187,7 +1202,10 @@ async function handleDialogResult(params) {
         await refreshAsync();
         stopSpinner();
         if (state.rightView === 'log') refreshLog();
-        showRebaseConflictDialog(rebaseErr + '\n\nNote: Your changes are stashed. Run stash pop after resolving.');
+        if (state.rightView !== 'diff') {
+          state.rightView = 'diff';
+          updateDiff();
+        }
         render();
         return;
       }
@@ -1264,21 +1282,6 @@ function showForceDeleteBranchDialog(branchName, err) {
   state.pendingDialogAction = 'delete-branch';
   state.pendingDialogTarget = branchName;
   render();
-}
-
-function showRebaseConflictDialog(err) {
-  if (state.rightView !== 'diff') {
-    state.rightView = 'diff';
-    updateDiff();
-  }
-  sendRpc('show_dialog', {
-    type: 'message',
-    title: 'Rebase Conflict',
-    message: err + '\n\nResolve conflicts, then use Continue Rebase button or [b] menu.',
-    buttons: [
-      { id: 'ok', label: 'OK', default: true },
-    ],
-  });
 }
 
 function copyToClipboard(text) {

@@ -98,6 +98,8 @@ const ui = {
   hoveredLogRow: -1,          // hover row in log list (right panel)
   hoveredFreshRow: -1,        // hover row in fresh list (right panel)
   hoveredCommitButton: false, // hover on [Commit] button
+  hoveredMergeApplyButton: false,
+  hoveredMergeZoneIndex: -1,
   hoveredDivider: null,
   contextMenuActive: false,
   contextMenuStashRef: null,
@@ -147,6 +149,7 @@ const ui = {
   mergeChunkSelections: {},    // { [chunkIndex]: 'ours' | 'theirs' }
   mergeChunkLineMap: {},       // { [chunkIndex]: { start, end } }
   mergeClickZones: [],         // click zones for merge UI
+  mergeApplyZone: null,        // fixed apply button zone in footer area
 };
 
 function init() {

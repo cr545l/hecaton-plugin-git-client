@@ -132,7 +132,7 @@ function render() {
         const rebasedStep = Math.max(0, (op.step || 1) - 1);
         const totalSteps = op.total || '?';
         const rebaseBranch = op.headName || branch;
-        const progressLabel = " \u26A0 Rebasing '" + rebaseBranch + "' (rebased " + rebasedStep + '/' + totalSteps + ' commits) ';
+        const progressLabel = " Rebasing '" + rebaseBranch + "' (rebased " + rebasedStep + '/' + totalSteps + ' commits) ';
         row1 += colors.yellow + ansi.bold + progressLabel + ansi.reset;
         col1 += visLen(progressLabel);
 
@@ -604,18 +604,37 @@ function render() {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const visLines = ui.commitMsgVisibleLines || 1;
     const hsbOffset = ui.diffMaxScrollX > 0 ? 1 : 0;
-    ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1;
+    const mergeFooterOffset = state.conflictView ? 1 : 0;
+    ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1 + mergeFooterOffset;
     const btnIsRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const btnIsMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
     const btnLabelLen = btnIsRebase ? 18 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 15 : state.operationState.type === 'cherry-pick' ? 21 : 16) : 8; // [Continue Rebase]=18, [Commit]=8, etc
     ui.commitButtonZone = {
-      row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1,
+      row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset,
       colStart: rpStartCol + 1,
       colEnd: rpStartCol + 1 + btnLabelLen,
     };
+    if (state.conflictView) {
+      const conflictIndices = state.conflictView.chunks
+        .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
+        .filter(idx => idx >= 0);
+      const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
+      const canApply = conflictIndices.length > 0 && selectedCount === conflictIndices.length;
+      const applyLabel = canApply ? '[ Apply resolution ]' : '[ Select every conflict to apply ]';
+      ui.mergeApplyZone = {
+        row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1,
+        colStart: rpStartCol + 1,
+        colEnd: rpStartCol + applyLabel.length,
+        enabled: canApply,
+        label: applyLabel,
+      };
+    } else {
+      ui.mergeApplyZone = null;
+    }
   } else {
     ui.commitInputRow = -1;
     ui.commitButtonZone = null;
+    ui.mergeApplyZone = null;
   }
 
   // Clickable areas for hint bar
@@ -1109,7 +1128,8 @@ function buildDiffCommitPanel(w, h) {
     msgLineCount = state.commitMsg.split('\n').length;
   }
   const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
-  const commitAreaH = h >= 5 ? (2 + maxMsgLines) : 0;
+  const commitExtraH = state.conflictView ? 1 : 0;
+  const commitAreaH = h >= 5 ? (2 + maxMsgLines + commitExtraH) : 0;
   let diffH = h - commitAreaH;
 
   let preMaxScrollX = 0;
@@ -1190,6 +1210,19 @@ function buildDiffCommitPanel(w, h) {
   // Commit area
   if (commitAreaH > 0) {
     lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
+
+    if (state.conflictView) {
+      const conflictIndices = state.conflictView.chunks
+        .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
+        .filter(idx => idx >= 0);
+      const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
+      const canApply = conflictIndices.length > 0 && selectedCount === conflictIndices.length;
+      const applyLabel = canApply ? '[ Apply resolution ]' : '[ Select every conflict to apply ]';
+      const applyStyle = canApply
+        ? (ui.hoveredMergeApplyButton ? colors.cursorBg + colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold)
+        : (ui.hoveredMergeApplyButton ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m' : colors.dim);
+      lines.push(' ' + applyStyle + applyLabel + ansi.reset);
+    }
 
     if (state.mode === 'commit') {
       const msgLines = state.commitMsg.split('\n');
@@ -1789,6 +1822,9 @@ function buildConflictDiffLines(innerW) {
   const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
   const oursLabel = isRebase ? 'HEAD' : 'Ours';
   const theirsLabel = isRebase ? (op.headName || 'Incoming') : 'Theirs';
+  const white = ansi.fg(255, 255, 255);
+  const brightBlue = ansi.fg(120, 180, 255);
+  const accentBg = ansi.bg(156, 96, 0);
   const conflictIndices = conflictView.chunks
     .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
     .filter(idx => idx >= 0);
@@ -1797,15 +1833,15 @@ function buildConflictDiffLines(innerW) {
   const gap = ' ' + colors.border + '\u2502' + ansi.reset + ' ';
   const rightW = Math.max(10, innerW - leftW - 3);
 
-  lines.push(colors.yellow + ansi.bold + ' \u26A0 Merge conflict' + ansi.reset
+  lines.push(colors.yellow + ansi.bold + ' Merge conflict' + ansi.reset
     + colors.dim + '  Select each chunk from left or right' + ansi.reset);
-  lines.push(' ' + colors.cyan + '\u25C9 ' + conflictView.file + ansi.reset);
+  lines.push(' ' + colors.cyan + conflictView.file + ansi.reset);
   lines.push(colors.dim + ` ${selectedCount}/${conflictIndices.length} conflicts selected` + ansi.reset);
   lines.push('');
 
-  const headerLine = colors.cyan + ansi.bold + padRight(' ' + oursLabel, leftW)
+  const headerLine = brightBlue + ansi.bold + padRight(' ' + oursLabel, leftW)
     + ansi.reset + gap
-    + colors.cyan + ansi.bold + padRight(' ' + theirsLabel, rightW) + ansi.reset;
+    + brightBlue + ansi.bold + padRight(' ' + theirsLabel, rightW) + ansi.reset;
   lines.push(headerLine);
   lines.push(colors.border + '\u2500'.repeat(leftW) + ansi.reset + gap + colors.border + '\u2500'.repeat(rightW) + ansi.reset);
 
@@ -1822,14 +1858,13 @@ function buildConflictDiffLines(innerW) {
     ordinal++;
     const selection = ui.mergeChunkSelections[chunkIndex] || null;
     const isCursor = ui.mergeChunkCursor === chunkIndex;
+    const hoveredZone = ui.hoveredMergeZoneIndex >= 0 ? ui.mergeClickZones[ui.hoveredMergeZoneIndex] : null;
+    const headerBg = accentBg;
     const statusText = selection === 'ours' ? `${oursLabel} selected`
       : selection === 'theirs' ? `${theirsLabel} selected`
       : 'unresolved';
-    const statusColor = selection ? colors.green : colors.orange;
-    lines.push((isCursor ? colors.cursorBg : '') + colors.value + ansi.bold
-      + ` Conflict ${ordinal}/${conflictIndices.length} ` + ansi.reset
-      + (isCursor ? colors.cursorBg : '')
-      + statusColor + ' [' + statusText + ']' + ansi.reset);
+    const statusTextLine = ` Conflict ${ordinal}/${conflictIndices.length}  [${statusText}]`;
+    lines.push((headerBg || '') + white + ansi.bold + padRight(statusTextLine, innerW) + ansi.reset);
 
     const chunkStart = lines.length - 1;
     const bodyTop = lines.length;
@@ -1837,12 +1872,22 @@ function buildConflictDiffLines(innerW) {
     for (let row = 0; row < rowCount; row++) {
       const leftRaw = chunk.ours[row] !== undefined ? chunk.ours[row] : '';
       const rightRaw = chunk.theirs[row] !== undefined ? chunk.theirs[row] : '';
-      const leftPrefix = selection === 'ours' ? colors.green + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
-      const rightPrefix = selection === 'theirs' ? colors.green + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
-      const leftText = leftPrefix + truncate(leftRaw, Math.max(0, leftW - 2));
-      const rightText = rightPrefix + truncate(rightRaw, Math.max(0, rightW - 2));
-      const leftStyled = (isCursor ? colors.cursorBg : '') + padRight(leftText, leftW) + ansi.reset;
-      const rightStyled = (isCursor ? colors.cursorBg : '') + padRight(rightText, rightW) + ansi.reset;
+      const leftPrefix = selection === 'ours' ? white + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
+      const rightPrefix = selection === 'theirs' ? white + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
+      const leftHovered = hoveredZone && hoveredZone.chunkIndex === chunkIndex && hoveredZone.action === 'select-ours' && hoveredZone.lineIdx === bodyTop + row;
+      const rightHovered = hoveredZone && hoveredZone.chunkIndex === chunkIndex && hoveredZone.action === 'select-theirs' && hoveredZone.lineIdx === bodyTop + row;
+      const leftBg = selection === 'ours' ? colors.hoverBg : leftHovered ? colors.hoverBg : '';
+      const rightBg = selection === 'theirs' ? colors.hoverBg : rightHovered ? colors.hoverBg : '';
+      const leftCode = truncate(highlightCode(leftRaw, conflictView.file), Math.max(0, leftW - 2));
+      const rightCode = truncate(highlightCode(rightRaw, conflictView.file), Math.max(0, rightW - 2));
+      const leftText = leftPrefix + leftCode;
+      const rightText = rightPrefix + rightCode;
+      const leftStyled = leftBg
+        ? leftBg + padRight(leftText.replace(/\x1b\[0m/g, ansi.reset + leftBg), leftW) + ansi.reset
+        : padRight(leftText, leftW) + ansi.reset;
+      const rightStyled = rightBg
+        ? rightBg + padRight(rightText.replace(/\x1b\[0m/g, ansi.reset + rightBg), rightW) + ansi.reset
+        : padRight(rightText, rightW) + ansi.reset;
       lines.push(leftStyled + gap + rightStyled);
     }
 
@@ -1855,14 +1900,6 @@ function buildConflictDiffLines(innerW) {
     lines.push(colors.border + '\u2500'.repeat(innerW) + ansi.reset);
     chunkLineMap[chunkIndex] = { start: chunkStart, end: lines.length - 1 };
   }
-
-  const canApply = selectedCount === conflictIndices.length && conflictIndices.length > 0;
-  const applyLabel = canApply ? '[ Apply resolution ]' : '[ Select every conflict to apply ]';
-  const applyStyle = canApply ? colors.green + ansi.bold : colors.dim;
-  const applyColStart = Math.max(0, Math.floor((innerW - applyLabel.length) / 2));
-  const applyLineIdx = lines.length;
-  lines.push(' '.repeat(applyColStart) + applyStyle + applyLabel + ansi.reset);
-  zones.push({ lineIdx: applyLineIdx, colStart: applyColStart, colEnd: applyColStart + applyLabel.length, action: 'apply-merge' });
 
   return { lines, zones, chunkLineMap };
 }

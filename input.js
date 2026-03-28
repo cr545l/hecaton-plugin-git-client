@@ -126,9 +126,9 @@ async function applyConflictSelections() {
   }
 
   const stageErr = await gitStageAsync(state.cwd, sel.file);
-  if (stageErr) {
+  if (stageErr !== true) {
     stopSpinner();
-    showErrorDialog(stageErr);
+    showErrorDialog(typeof stageErr === 'string' && stageErr ? stageErr : 'Failed to stage resolved file');
     render();
     return;
   }
@@ -476,14 +476,6 @@ async function handleKey(key) {
               });
             } else if (err && isRebaseConflictError(err)) {
               switchToDiffViewForConflict();
-              sendRpc('show_dialog', {
-                type: 'message',
-                title: 'Rebase Conflict',
-                message: err + '\n\nResolve conflicts, then use Continue Rebase button or [b] menu.',
-                buttons: [
-                  { id: 'ok', label: 'OK', default: true },
-                ],
-              });
               render();
             } else if (err) {
               showErrorDialog(err);
@@ -593,14 +585,6 @@ function handleCommitInput(key) {
           stopSpinner();
           if (err && isRebaseConflictError(err)) {
             switchToDiffViewForConflict();
-            sendRpc('show_dialog', {
-              type: 'message',
-              title: 'Rebase Conflict',
-              message: err + '\n\nResolve conflicts, then use Continue Rebase button or [b] menu.',
-              buttons: [
-                { id: 'ok', label: 'OK', default: true },
-              ],
-            });
             render();
           } else if (err) {
             showErrorDialog(err);
@@ -1081,7 +1065,29 @@ async function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget) {
+      let newMergeApplyHover = false;
+      if (ui.mergeApplyZone && state.rightView === 'diff') {
+        if (cy === ui.mergeApplyZone.row && cx >= ui.mergeApplyZone.colStart && cx <= ui.mergeApplyZone.colEnd) {
+          newMergeApplyHover = true;
+        }
+      }
+
+      let newMergeZoneHover = -1;
+      if (ui.mergeClickZones && ui.mergeClickZones.length > 0 && state.rightView === 'diff' && inBody) {
+        const rpStartCol = L.startCol + L.leftW + L.divider1W + L.middleW + L.divider2W;
+        for (let i = 0; i < ui.mergeClickZones.length; i++) {
+          const zone = ui.mergeClickZones[i];
+          const zoneRow = bodyTop + zone.lineIdx;
+          const zoneColStart = rpStartCol + zone.colStart;
+          const zoneColEnd = rpStartCol + zone.colEnd;
+          if (cy === zoneRow && cx >= zoneColStart && cx <= zoneColEnd) {
+            newMergeZoneHover = i;
+            break;
+          }
+        }
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
@@ -1094,6 +1100,8 @@ async function handleMouseData(data) {
         ui.hoveredScrollbarTarget = newScrollbarHover;
         ui.hoveredCommitButton = newCommitButtonHover;
         ui.hoveredHScrollbarTarget = newHScrollbarHover;
+        ui.hoveredMergeApplyButton = newMergeApplyHover;
+        ui.hoveredMergeZoneIndex = newMergeZoneHover;
         render();
       }
       continue;
@@ -1197,7 +1205,7 @@ async function handleMouseData(data) {
             render();
           }
         }
-      } else if (inBody && inRight) {
+      } else if (inRight && (inBody || state.rightView === 'diff')) {
         let changed = false;
         if (state.rightView === 'fresh') {
           // Fresh mode: top = file list scroll, bottom = detail scroll
@@ -1247,7 +1255,8 @@ async function handleMouseData(data) {
           // Diff mode: diff scroll
           const prev = state.diffScrollOffset;
           const maxDiff = Math.max(0, state.diffLines.length - (ui.rightDiffH || 1));
-          state.diffScrollOffset = Math.max(0, Math.min(maxDiff, state.diffScrollOffset + wheelStep));
+          const conflictMaxDiff = Math.max(0, (ui.diffMaxScroll || 0));
+          state.diffScrollOffset = Math.max(0, Math.min(state.conflictView ? conflictMaxDiff : maxDiff, state.diffScrollOffset + wheelStep));
           if (state.diffScrollOffset !== prev) changed = true;
           state.focusPanel = 'diff';
         }
@@ -1685,6 +1694,11 @@ async function handleMouseData(data) {
           }
         }
         if (mergeHandled) continue;
+      }
+
+      if (ui.mergeApplyZone && cy === ui.mergeApplyZone.row && cx >= ui.mergeApplyZone.colStart && cx <= ui.mergeApplyZone.colEnd) {
+        await applyConflictSelections();
+        continue;
       }
 
       // Click on commit button zone

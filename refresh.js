@@ -516,7 +516,10 @@ async function refreshAsync() {
     }
   }
 
-  // Read rebase/merge commit message for pre-fill
+  // Read rebase/merge commit message for pre-fill.
+  // Preserve the previous value if the operation is still active and message files
+  // momentarily read as empty during a refresh after conflict resolution.
+  const prevRebaseMessage = state.rebaseMessage || '';
   state.rebaseMessage = '';
   if (state.operationState && gitDir) {
     const sep = (process.platform === 'win32') ? '\\' : '/';
@@ -528,6 +531,7 @@ async function refreshAsync() {
       msgPaths.push(base + sep + 'rebase-merge' + sep + 'message');
     } else if (state.operationState.type === 'rebase-apply') {
       msgPaths.push(base + sep + 'rebase-apply' + sep + 'msg');
+      msgPaths.push(base + sep + 'rebase-apply' + sep + 'final-commit');
     }
     msgPaths.push(base + sep + 'MERGE_MSG');
     msgPaths.push(base + sep + 'COMMIT_EDITMSG');
@@ -539,6 +543,9 @@ async function refreshAsync() {
           break;
         }
       } catch { /* ignore */ }
+    }
+    if (!state.rebaseMessage && prevRebaseMessage) {
+      state.rebaseMessage = prevRebaseMessage;
     }
     // Append conflict file list if there are unmerged files
     const conflictFiles = state.unstaged.filter(f => f.status === 'U').map(f => f.file);
