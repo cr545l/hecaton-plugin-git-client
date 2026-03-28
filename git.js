@@ -692,6 +692,11 @@ async function gitStashFile(cwd, file) {
   return await gitRunOrError(['stash', 'push', '-u', '--', file], cwd, 10000, 'Stash file failed');
 }
 
+async function gitStashFiles(cwd, files) {
+  if (!files || files.length === 0) return 'No files selected';
+  return await gitRunOrError(['stash', 'push', '-u', '--', ...files], cwd, 10000, 'Stash files failed');
+}
+
 async function gitIgnorePattern(cwd, pattern) {
   if (!pattern) return 'No ignore pattern';
   try {
@@ -945,7 +950,7 @@ module.exports = {
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
   gitAheadBehind, gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
   gitStashApply, gitStashDrop, gitStashRename,
-  gitDiscardFile, gitStashFile, gitIgnorePattern,
+  gitDiscardFile, gitStashFile, gitStashFiles, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,

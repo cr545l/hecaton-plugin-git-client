@@ -113,6 +113,8 @@ const ui = {
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,
   lastClickFileIdx: -1,
+  lastClickStashRef: null,
+  lastClickStashTime: 0,
   cellW: 8,
   cellH: 16,
   lastFreshListH: 0,

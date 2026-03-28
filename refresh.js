@@ -399,7 +399,7 @@ async function refreshAsync() {
     await Promise.all([
       gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
       gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
-      gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd'], state.cwd),
+      gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
       gitExec(['--no-optional-locks', 'branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
       gitExec(['--no-optional-locks', 'branch', '-r', '--format=%(refname:short)'], state.cwd),
       gitExec(['--no-optional-locks', 'remote'], state.cwd),
@@ -443,7 +443,7 @@ async function refreshAsync() {
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
     const parts = line.split('\t');
-    return { hash: parts[0], shortHash: parts[1], ref: parts[2] };
+    return { hash: parts[0], shortHash: parts[1], ref: parts[2], message: parts[3] || '' };
   }) : [];
 
   // branches

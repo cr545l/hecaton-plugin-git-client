@@ -1627,6 +1627,30 @@ async function handleMouseData(data) {
               state.focusPanel = 'status';
               render();
             } else if (entry.action === 'goto-stash') {
+              const now = Date.now();
+              if (ui.lastClickStashRef === entry.ref && now - ui.lastClickStashTime < 400) {
+                // Double-click: show Apply Stash dialog
+                ui.lastClickStashRef = null;
+                ui.lastClickStashTime = 0;
+                const stashEntry = state.stashes.find(s => s.ref === entry.ref);
+                const stashMessage = stashEntry ? stashEntry.message : '';
+                const displayRef = entry.ref + (stashMessage ? '  ' + stashMessage : '');
+                sendRpc('show_dialog', {
+                  type: 'message',
+                  title: 'Apply Stash',
+                  message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
+                  checkboxes: [{ id: 'delete_after', label: 'Delete stash after applying\nStash will not be deleted if a conflict occurs', checked: false }],
+                  buttons: [
+                    { id: 'apply', label: 'Apply', default: true },
+                    { id: 'cancel', label: 'Cancel' },
+                  ],
+                });
+                state.pendingDialogAction = 'stash-apply-confirm';
+                state.pendingDialogTarget = entry.ref;
+              } else {
+                ui.lastClickStashRef = entry.ref;
+                ui.lastClickStashTime = now;
+              }
               ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
               if (state.rightView !== 'log') {
                 state.rightView = 'log';
@@ -1983,7 +2007,9 @@ function handleContextMenuRequest(col, row) {
       if (entry && entry.action === 'goto-stash' && entry.ref) {
         ui.leftPanelActiveBranch = 'stash:' + entry.shortHash;
         ui.contextMenuStashRef = entry.ref;
-        sendRpc('show_context_menu', { items: buildStashContextMenuItems(entry.ref) });
+        const stashEntry = state.stashes.find(s => s.ref === entry.ref);
+        const stashMessage = stashEntry ? stashEntry.message : '';
+        sendRpc('show_context_menu', { items: buildStashContextMenuItems(entry.ref, stashMessage) });
         render();
         return;
       }
@@ -2012,7 +2038,17 @@ function handleContextMenuRequest(col, row) {
         state.focusPanel = 'status';
       }
     }
-    sendRpc('show_context_menu', { items: buildHistoryContextMenuItems() });
+    // stash 커밋이면 stash 전용 컨텍스트 메뉴 표시
+    const logItem = selectedLogRef();
+    const stashRef = logItem ? ui.stashMap.get(logItem.ref) : null;
+    if (stashRef) {
+      ui.contextMenuStashRef = stashRef;
+      const stashEntry = state.stashes.find(s => s.ref === stashRef);
+      const stashMessage = stashEntry ? stashEntry.message : '';
+      sendRpc('show_context_menu', { items: buildStashContextMenuItems(stashRef, stashMessage) });
+    } else {
+      sendRpc('show_context_menu', { items: buildHistoryContextMenuItems() });
+    }
     render();
     return;
   }

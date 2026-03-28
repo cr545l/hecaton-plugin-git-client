@@ -11,7 +11,7 @@ const {
   gitRevertContinue, gitRevertAbort, gitRevertSkip,
   gitStashApply, gitStashDrop, gitStashSave, gitStashPop, gitStashRename,
   gitStage, gitUnstage, gitStageAll, gitDiscardFile,
-  gitStashFile, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
+  gitStashFile, gitStashFiles, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
   gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
@@ -65,12 +65,17 @@ function buildHistoryContextMenuItems() {
   return items;
 }
 
-function buildStashContextMenuItems(stashRef) {
+function buildStashContextMenuItems(stashRef, stashMessage) {
+  const label = stashMessage ? "'" + stashMessage + "'" : stashRef;
   const items = [
-    { id: 'stash_apply', label: 'Apply', icon: 'add' },
-    { id: 'stash_drop', label: 'Drop', icon: 'warning' },
+    { id: 'stash_apply', label: 'Apply ' + label + '...', icon: 'add' },
+    { id: 'stash_rename', label: 'Rename ' + label + '...' },
+    { id: 'stash_drop', label: 'Delete ' + label + '...', icon: 'warning', shortcut: 'Delete' },
     { type: 'separator' },
-    { id: 'stash_rename', label: 'Rename...' },
+    { id: 'stash_compare', label: 'Compare to Local Changes' },
+    { type: 'separator' },
+    { id: 'stash_copy_sha', label: 'Copy Commit SHA', icon: 'copy', shortcut: 'Ctrl+C' },
+    { id: 'stash_copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   ];
   return items;
 }
@@ -119,7 +124,7 @@ function buildFileContextMenuItems(fileItem, fileItems) {
         { id: 'file_ignore_path', label: 'Ignore by Path' },
       ],
     },
-    { id: 'file_stash_one', label: 'Stash 1 File...' },
+    { id: 'file_stash_one', label: 'Stash ' + targets.length + ' File' + (targets.length > 1 ? 's' : '') + '...' },
     { id: 'file_save_patch', label: 'Save as Patch...', icon: 'save' },
     { type: 'separator' },
     { id: 'file_copy_path', label: 'Copy Path', icon: 'copy' },
@@ -498,11 +503,14 @@ async function handleContextMenuAction(actionId) {
       }
       case 'file_stash_one': {
         startSpinner('Stashing...');
-        let err = null;
-        for (const item of fileItems) {
-          if (!item) continue;
-          const oneErr = await gitStashFile(state.cwd, item.file);
-          if (!err && oneErr) err = oneErr;
+        const files = fileItems.filter(item => item && item.file).map(item => item.file);
+        let err;
+        if (files.length === 1) {
+          err = await gitStashFile(state.cwd, files[0]);
+        } else if (files.length > 1) {
+          err = await gitStashFiles(state.cwd, files);
+        } else {
+          err = 'No files selected';
         }
         await afterGitOp(err, 'Stash file');
         break;
@@ -728,19 +736,33 @@ async function handleContextMenuAction(actionId) {
   if (actionId.startsWith('stash_')) {
     const ref = ui.contextMenuStashRef;
     if (!ref) return;
+    const stashEntry = state.stashes.find(s => s.ref === ref);
+    const stashHash = stashEntry ? stashEntry.hash : '';
+    const stashMessage = stashEntry ? stashEntry.message : '';
     switch (actionId) {
       case 'stash_apply': {
-        const err = await gitStashApply(state.cwd, ref);
-        await afterGitOp(err, 'Stash apply');
+        const displayRef = ref + (stashMessage ? '  ' + stashMessage : '');
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Apply Stash',
+          message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
+          checkboxes: [{ id: 'delete_after', label: 'Delete stash after applying\nStash will not be deleted if a conflict occurs', checked: false }],
+          buttons: [
+            { id: 'apply', label: 'Apply', default: true },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+        state.pendingDialogAction = 'stash-apply-confirm';
+        state.pendingDialogTarget = ref;
         break;
       }
       case 'stash_drop': {
         sendRpc('show_dialog', {
           type: 'message',
-          title: 'Drop Stash',
-          message: 'Drop ' + ref + '?\n\nThis cannot be undone.',
+          title: 'Delete Stash',
+          message: 'Delete ' + ref + (stashMessage ? ' (' + stashMessage + ')' : '') + '?\n\nThis cannot be undone.',
           buttons: [
-            { id: 'drop', label: 'Drop' },
+            { id: 'drop', label: 'Delete' },
             { id: 'cancel', label: 'Cancel', default: true },
           ],
         });
@@ -753,12 +775,49 @@ async function handleContextMenuAction(actionId) {
           type: 'input',
           title: 'Rename Stash',
           message: 'Enter new name for stash:',
-          defaultValue: '',
+          defaultValue: stashMessage,
           buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'rename-stash';
         state.pendingDialogTarget = ref;
         break;
+      case 'stash_compare': {
+        // stash를 선택하고 로그 뷰로 이동하여 diff 표시
+        ui.leftPanelActiveBranch = 'stash:' + (stashEntry ? stashEntry.shortHash : '');
+        state.rightView = 'log';
+        refreshLog();
+        // stash 커밋 찾기
+        const targetHash = stashEntry ? stashEntry.shortHash : '';
+        let foundIdx = -1;
+        for (let si = 0; si < state.logItems.length; si++) {
+          const item = state.logItems[si];
+          if (item.type === 'commit' && item.ref === targetHash) { foundIdx = si; break; }
+        }
+        if (foundIdx >= 0) {
+          const selectIdx = state.logSelectables.indexOf(foundIdx);
+          if (selectIdx >= 0) {
+            state.logCursor = selectIdx;
+            state.diffScrollOffset = 0;
+            updateLogDetail();
+          }
+        }
+        render();
+        break;
+      }
+      case 'stash_copy_sha':
+        if (stashHash) copyToClipboard(stashHash);
+        break;
+      case 'stash_copy_info': {
+        if (stashHash) {
+          const raw = await gitCommitInfo(state.cwd, stashHash);
+          if (raw) {
+            copyToClipboard(raw);
+          } else {
+            copyToClipboard(stashHash + ' ' + stashMessage);
+          }
+        }
+        break;
+      }
     }
     return;
   }
@@ -974,9 +1033,23 @@ async function handleDialogResult(params) {
     }
     if (action === 'stash-drop-confirm') {
       if (buttonId === 'drop') {
-        startSpinner('Dropping stash...');
+        startSpinner('Deleting stash...');
         const err = await gitStashDrop(state.cwd, target);
-        await afterGitOp(err, 'Stash drop');
+        await afterGitOp(err, 'Stash delete');
+      }
+      return;
+    }
+    if (action === 'stash-apply-confirm') {
+      if (buttonId === 'apply') {
+        const deleteAfter = params.checkboxes && params.checkboxes.delete_after;
+        startSpinner('Applying stash...');
+        const err = await gitStashApply(state.cwd, target);
+        if (!err && deleteAfter) {
+          const dropErr = await gitStashDrop(state.cwd, target);
+          await afterGitOp(dropErr, 'Stash apply & delete');
+        } else {
+          await afterGitOp(err, 'Stash apply');
+        }
       }
       return;
     }

@@ -6,6 +6,7 @@ const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = requ
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
+const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
 function render() {
   if (state.minimized) {
@@ -893,7 +894,8 @@ function buildLeftPanel(w, h) {
     if (!collapsed) {
       for (const s of state.stashes) {
         const isActive = activeBranch === 'stash:' + s.shortHash;
-        const content = '  ' + colors.yellow + truncate(s.ref, innerW - 2) + ansi.reset;
+        const stashLabel = s.message ? s.ref + ' ' + s.message : s.ref;
+        const content = '  ' + STASH_TEXT + truncate(stashLabel, innerW - 2) + ansi.reset;
         pushLine(isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content, { action: 'goto-stash', shortHash: s.shortHash, ref: s.ref });
       }
     }
@@ -1802,6 +1804,8 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
       parts.push(colors.green + (isHead ? ansi.bold : '') + ref + ansi.reset);
     } else if (ref === 'recovery') {
       parts.push(RECOVERY_TEXT + 'recovery' + ansi.reset);
+    } else if (ref === 'refs/stash' || ref.startsWith('stash@{')) {
+      parts.push(STASH_TEXT + ref + ansi.reset);
     } else if (ref.startsWith('tag:')) {
       parts.push(colors.yellow + ref + ansi.reset);
     } else {
