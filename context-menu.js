@@ -18,8 +18,9 @@ const {
   gitCherryPickAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
+  gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs,
 } = require('./git');
-const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail } = require('./refresh');
+const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
@@ -74,6 +75,10 @@ function buildStashContextMenuItems(stashRef) {
   return items;
 }
 
+function isConflictFile(item) {
+  return item && item.status === 'U';
+}
+
 function buildFileContextMenuItems(fileItem, fileItems) {
   if (!fileItem || !fileItem.file) return [];
 
@@ -99,6 +104,11 @@ function buildFileContextMenuItems(fileItem, fileItems) {
     { id: 'file_stage', label: 'Stage', enabled: canStage },
     { id: 'file_unstage', label: 'Unstage', enabled: canUnstage },
     { id: 'file_discard', label: 'Discard changes...', icon: 'warning' },
+    ...(isConflictFile(fileItem) ? [
+      { type: 'separator' },
+      { id: 'file_accept_ours', label: 'Accept Ours (HEAD)' },
+      { id: 'file_accept_theirs', label: 'Accept Theirs (Incoming)' },
+    ] : []),
     { id: 'file_stage_all', label: 'Stage All' },
     {
       id: 'file_ignore',
@@ -412,6 +422,32 @@ async function handleContextMenuAction(actionId) {
         state.pendingDiscardFiles = [...fileItems];
         break;
       }
+      case 'file_accept_ours': {
+        startSpinner('Accepting ours...');
+        (async () => {
+          const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
+          for (const f of files) {
+            const err = await gitCheckoutOurs(state.cwd, f);
+            if (err) { showError(err); return; }
+            await gitStageAsync(state.cwd, f);
+          }
+          await afterGitOp(null);
+        })();
+        break;
+      }
+      case 'file_accept_theirs': {
+        startSpinner('Accepting theirs...');
+        (async () => {
+          const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
+          for (const f of files) {
+            const err = await gitCheckoutTheirs(state.cwd, f);
+            if (err) { showError(err); return; }
+            await gitStageAsync(state.cwd, f);
+          }
+          await afterGitOp(null);
+        })();
+        break;
+      }
       case 'file_stage_all':
         startSpinner('Staging all...');
         await gitStageAll(state.cwd);
@@ -639,12 +675,42 @@ async function handleContextMenuAction(actionId) {
       case 'branch_copy_name':
         copyToClipboard(branchName);
         break;
-      case 'branch_rebase_onto':
+      case 'branch_rebase_onto': {
+        // Pre-check for conflicts
+        const conflictCheck = await gitCheckRebaseConflicts(state.cwd, branchName);
+        if (conflictCheck.willConflict) {
+          const fileList = conflictCheck.files.length > 0
+            ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
+            : '';
+          state.pendingRebaseRef = branchName;
+          sendRpc('show_dialog', {
+            type: 'message',
+            title: 'Rebase',
+            message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
+            buttons: [
+              { id: 'rebase_proceed', label: 'Rebase', default: true },
+              { id: 'cancel', label: 'Cancel' },
+            ],
+          });
+          render();
+          break;
+        }
         startSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, branchName).then(async err => {
-          await afterGitOp(err, 'Rebase');
+          await refreshAsync();
+          stopSpinner();
+          if (state.rightView === 'log') refreshLog();
+          if (err && isRebaseConflictError(err)) {
+            showRebaseConflictDialog(err);
+            render();
+          } else if (err) {
+            showError(err);
+          } else {
+            render();
+          }
         });
         break;
+      }
       case 'branch_merge_into':
         startSpinner('Merging...');
         gitMergeAsync(state.cwd, branchName).then(async err => {
@@ -748,6 +814,25 @@ async function handleContextMenuAction(actionId) {
           ],
         });
       } else {
+        // Pre-check for conflicts
+        const conflictCheck = await gitCheckRebaseConflicts(state.cwd, hash);
+        if (conflictCheck.willConflict) {
+          const fileList = conflictCheck.files.length > 0
+            ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
+            : '';
+          state.pendingRebaseRef = hash;
+          sendRpc('show_dialog', {
+            type: 'message',
+            title: 'Rebase',
+            message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
+            buttons: [
+              { id: 'rebase_proceed', label: 'Rebase', default: true },
+              { id: 'cancel', label: 'Cancel' },
+            ],
+          });
+          render();
+          break;
+        }
         startSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, hash).then(async err => {
           await refreshAsync();
@@ -965,6 +1050,7 @@ async function handleDialogResult(params) {
     refreshAsync().then(() => {
       if (state.rightView === 'log') refreshLog();
       if (err && isRebaseConflictError(err)) {
+        // Conflict on continue/skip — show info dialog and switch to diff view
         showRebaseConflictDialog(err);
         render();
       } else if (err) {
@@ -1013,6 +1099,36 @@ async function handleDialogResult(params) {
   }
   if (state.pendingStash) {
     state.pendingStash = false;
+    return;
+  }
+  if (state.pendingRebaseRef && buttonId === 'rebase_proceed') {
+    const ref = state.pendingRebaseRef;
+    state.pendingRebaseRef = null;
+    startSpinner('Rebasing...');
+    gitRebaseAsync(state.cwd, ref).then(async err => {
+      await refreshAsync();
+      stopSpinner();
+      if (state.rightView === 'log') refreshLog();
+      if (err && isStaleRebaseError(err)) {
+        state.pendingRebaseRef = ref;
+        sendRpc('show_dialog', {
+          type: 'message',
+          title: 'Rebase',
+          message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+          buttons: [
+            { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+      } else if (err && isRebaseConflictError(err)) {
+        showRebaseConflictDialog(err);
+        render();
+      } else if (err) {
+        showError(err);
+      } else {
+        render();
+      }
+    });
     return;
   }
   if (state.pendingRebaseRef && buttonId === 'abort_retry_rebase') {
@@ -1120,17 +1236,18 @@ function isRebaseConflictError(err) {
 }
 
 function showRebaseConflictDialog(err) {
+  if (state.rightView !== 'diff') {
+    state.rightView = 'diff';
+    updateDiff();
+  }
   sendRpc('show_dialog', {
     type: 'message',
     title: 'Rebase Conflict',
-    message: err + '\n\nResolve conflicts and choose an action:',
+    message: err + '\n\nResolve conflicts, then use Continue Rebase button or [b] menu.',
     buttons: [
-      { id: 'continue', label: 'Continue', default: true },
-      { id: 'skip', label: 'Skip Commit' },
-      { id: 'abort', label: 'Abort Rebase' },
+      { id: 'ok', label: 'OK', default: true },
     ],
   });
-  state.pendingRebaseMenu = true;
 }
 
 function copyToClipboard(text) {

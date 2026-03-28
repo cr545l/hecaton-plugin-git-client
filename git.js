@@ -327,6 +327,9 @@ async function gitRunOrError(args, cwd, timeout, errorMsg) {
   return stderr || stdout || errorMsg;
 }
 
+async function gitCheckoutOurs(cwd, file) { return await gitRunOrError(['checkout', '--ours', '--', file], cwd, 10000, 'Checkout ours failed'); }
+async function gitCheckoutTheirs(cwd, file) { return await gitRunOrError(['checkout', '--theirs', '--', file], cwd, 10000, 'Checkout theirs failed'); }
+
 async function gitRebase(cwd, ref) { return await gitRunOrError(['rebase', ref], cwd, 30000, 'Rebase failed'); }
 async function gitRebaseContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--continue'], cwd, 30000, 'Rebase continue failed'); }
 async function gitRebaseAbort(cwd) { return await gitRunOrError(['rebase', '--abort'], cwd, 30000, 'Rebase abort failed'); }
@@ -554,6 +557,24 @@ async function gitAsyncWrap(args, cwd, timeout) {
   const r = await gitResult(args, cwd, timeout || 30000);
   if (r && r.ok && r.exitCode === 0) return null;
   return (r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '') || 'Operation failed';
+}
+
+async function gitCheckRebaseConflicts(cwd, targetRef) {
+  // Use merge-tree to predict conflicts without actually rebasing
+  // merge-tree --write-tree HEAD targetRef returns exit code 1 if there are conflicts
+  const r = await gitResult(['merge-tree', '--write-tree', 'HEAD', targetRef], cwd, 10000);
+  if (!r || !r.ok) return { willConflict: false };
+  if (r.exitCode === 0) return { willConflict: false };
+  // Parse conflict info from stdout
+  const stdout = (r.stdout || '').replace(/\r\n/g, '\n');
+  const conflictFiles = [];
+  const lines = stdout.split('\n');
+  for (const line of lines) {
+    const m = line.match(/^CONFLICT \([^)]+\): .* in (.+)$/);
+    if (m) conflictFiles.push(m[1]);
+    else if (line.startsWith('CONFLICT')) conflictFiles.push(line);
+  }
+  return { willConflict: true, files: conflictFiles };
 }
 
 async function gitFetchAsync(cwd) { return await gitAsyncWrap(['fetch', '--all', '--prune'], cwd); }
@@ -795,6 +816,7 @@ module.exports = {
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitOperationState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
+  gitCheckoutOurs, gitCheckoutTheirs,
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
   gitRevertContinue, gitRevertAbort, gitRevertSkip, gitWriteRebaseMessage,
   gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitRemoteAdd,
@@ -809,6 +831,7 @@ module.exports = {
   gitStatusSplit, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
+  gitCheckRebaseConflicts,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,

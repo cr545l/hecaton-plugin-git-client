@@ -140,6 +140,11 @@ const ui = {
   hoveredHScrollbarTarget: null,
   logDetailMaxScrollX: 0,
   freshDetailMaxScrollX: 0,
+  // Merge conflict resolution UI
+  mergeOurs: true,
+  mergeTheirs: true,
+  mergeConflictFile: null,     // current conflict file being resolved
+  mergeClickZones: [],         // click zones for merge UI
 };
 
 function init() {

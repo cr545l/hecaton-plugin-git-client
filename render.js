@@ -119,31 +119,64 @@ function render() {
       col1 += visLen(freshLabel);
     }
 
-    // === Action buttons: Fetch, Pull, Push, Stash (after separator) ===
+    // === Action buttons or Rebase progress bar ===
     {
       row1 += colors.border + ' \u2502 ' + ansi.reset;
       col1 += 3;
 
-      const pullLabel = state.behind > 0 ? 'Pull \u2193' + state.behind : 'Pull';
-      const pushLabel = state.ahead > 0 ? 'Push \u2191' + state.ahead : 'Push';
-      const actionBtns = [
-        { label: 'Fetch', action: 'git-fetch' },
-        { label: pullLabel, action: 'git-pull' },
-        { label: pushLabel, action: 'git-push' },
-        { label: 'Stash', action: 'git-stash' },
-      ];
-      for (let i = 0; i < actionBtns.length; i++) {
-        const btn = actionBtns[i];
-        const label = ' ' + btn.label + ' ';
-        const si = zoneIdx++;
-        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action });
-        const hasCount = (btn.action === 'git-pull' && state.behind > 0)
-          || (btn.action === 'git-push' && state.ahead > 0);
-        const style = si === ui.hoveredTitleZoneIndex
-          ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-          : hasCount ? colors.orange + ansi.bold : colors.dim;
-        row1 += style + label + ansi.reset;
-        col1 += visLen(label);
+      const op = state.operationState;
+      const isRebaseOp = op && (op.type === 'rebase-merge' || op.type === 'rebase-apply');
+      if (isRebaseOp) {
+        // Rebase progress bar (Fork-style)
+        const branch = state.branch || 'HEAD';
+        const rebasedStep = Math.max(0, (op.step || 1) - 1);
+        const totalSteps = op.total || '?';
+        const rebaseBranch = op.headName || branch;
+        const progressLabel = " \u26A0 Rebasing '" + rebaseBranch + "' (rebased " + rebasedStep + '/' + totalSteps + ' commits) ';
+        row1 += colors.yellow + ansi.bold + progressLabel + ansi.reset;
+        col1 += visLen(progressLabel);
+
+        // Abort button
+        const abortLabel = ' Abort ';
+        const abortIdx = zoneIdx++;
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'rebase-abort' });
+        const abortStyle = abortIdx === ui.hoveredTitleZoneIndex
+          ? colors.cursorBg + colors.red + ansi.bold + CSI + '4m'
+          : colors.red + ansi.bold;
+        row1 += abortStyle + abortLabel + ansi.reset;
+        col1 += visLen(abortLabel);
+
+        // Skip button
+        const skipLabel = ' Skip ';
+        const skipIdx = zoneIdx++;
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'rebase-skip' });
+        const skipStyle = skipIdx === ui.hoveredTitleZoneIndex
+          ? colors.cursorBg + colors.orange + ansi.bold + CSI + '4m'
+          : colors.orange;
+        row1 += skipStyle + skipLabel + ansi.reset;
+        col1 += visLen(skipLabel);
+      } else {
+        const pullLabel = state.behind > 0 ? 'Pull \u2193' + state.behind : 'Pull';
+        const pushLabel = state.ahead > 0 ? 'Push \u2191' + state.ahead : 'Push';
+        const actionBtns = [
+          { label: 'Fetch', action: 'git-fetch' },
+          { label: pullLabel, action: 'git-pull' },
+          { label: pushLabel, action: 'git-push' },
+          { label: 'Stash', action: 'git-stash' },
+        ];
+        for (let i = 0; i < actionBtns.length; i++) {
+          const btn = actionBtns[i];
+          const label = ' ' + btn.label + ' ';
+          const si = zoneIdx++;
+          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action });
+          const hasCount = (btn.action === 'git-pull' && state.behind > 0)
+            || (btn.action === 'git-push' && state.ahead > 0);
+          const style = si === ui.hoveredTitleZoneIndex
+            ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+            : hasCount ? colors.orange + ansi.bold : colors.dim;
+          row1 += style + label + ansi.reset;
+          col1 += visLen(label);
+        }
       }
     }
 
@@ -1105,6 +1138,139 @@ function buildDiffCommitPanel(w, h) {
 
   // Diff section
   if (diffH > 0) {
+    // Conflict resolution UI (Fork-style) for unmerged files
+    const selItem = selectedItem();
+    const isConflict = selItem && selItem.status === 'U' && state.operationState;
+    let mergeUILines = 0;
+    if (isConflict) {
+      // Track current conflict file for checkbox state reset
+      if (ui.mergeConflictFile !== selItem.file) {
+        ui.mergeConflictFile = selItem.file;
+        ui.mergeOurs = true;
+        ui.mergeTheirs = true;
+      }
+      ui.mergeClickZones = [];
+
+      const op = state.operationState;
+      const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
+      const oursBranch = isRebase ? (op.ontoHash ? 'HEAD (' + op.ontoHash + ')' : 'HEAD') : 'HEAD';
+      const theirsBranch = isRebase ? (op.headName || 'incoming') : 'incoming';
+      const fileName = selItem.file;
+
+      // Box drawing characters
+      const TL = '\u250C'; const TR = '\u2510'; const BL = '\u2514'; const BR = '\u2518';
+      const H = '\u2500'; const V = '\u2502'; const DASH = '\u2500';
+
+      // Line 1: Title
+      lines.push(colors.yellow + ansi.bold + ' \u26A0 Merge conflict' + ansi.reset
+        + colors.dim + '  Select the changes or merge them manually' + ansi.reset);
+      mergeUILines++;
+
+      // Line 2: File name
+      lines.push(' ' + colors.cyan + '\u25C9 ' + fileName + ansi.reset);
+      mergeUILines++;
+
+      // Line 3: blank
+      lines.push('');
+      mergeUILines++;
+
+      // Compute box widths
+      const boxW = Math.min(26, Math.floor((innerW - 7) / 2));
+      const gap = 5;
+
+      // Box content
+      const oursLabel = '\u2387 ' + truncate(oursBranch, boxW - 4);
+      const theirsLabel = '\u2387 ' + truncate(theirsBranch, boxW - 4);
+      const oursInfo = 'modified';
+      const theirsInfo = 'modified';
+
+      // Line 4: Top border
+      const topL = ' ' + colors.border + TL + H.repeat(boxW - 2) + TR + ansi.reset;
+      const topR = colors.border + TL + H.repeat(boxW - 2) + TR + ansi.reset;
+      lines.push(topL + ' '.repeat(gap) + topR);
+      mergeUILines++;
+
+      // Line 5: Branch names
+      const midL = ' ' + colors.border + V + ansi.reset + ' ' + colors.cyan + ansi.bold
+        + padRight(oursLabel, boxW - 4) + ansi.reset + ' ' + colors.border + V + ansi.reset;
+      const midConn = H.repeat(gap);
+      const midR = colors.border + V + ansi.reset + ' ' + colors.cyan + ansi.bold
+        + padRight(theirsLabel, boxW - 4) + ansi.reset + ' ' + colors.border + V + ansi.reset;
+      lines.push(midL + colors.border + midConn + ansi.reset + midR);
+      mergeUILines++;
+
+      // Line 6: Info
+      const infoL = ' ' + colors.border + V + ansi.reset + ' ' + colors.dim
+        + padRight(oursInfo, boxW - 4) + ansi.reset + ' ' + colors.border + V + ansi.reset;
+      const infoR = colors.border + V + ansi.reset + ' ' + colors.dim
+        + padRight(theirsInfo, boxW - 4) + ansi.reset + ' ' + colors.border + V + ansi.reset;
+      lines.push(infoL + ' '.repeat(gap) + infoR);
+      mergeUILines++;
+
+      // Line 7: Bottom border
+      const botL = ' ' + colors.border + BL + H.repeat(boxW - 2) + BR + ansi.reset;
+      const botR = colors.border + BL + H.repeat(boxW - 2) + BR + ansi.reset;
+      lines.push(botL + ' '.repeat(gap) + botR);
+      mergeUILines++;
+
+      // Line 8: Checkboxes (with click zones)
+      const oursCheck = ui.mergeOurs ? '\u2611' : '\u2610';
+      const theirsCheck = ui.mergeTheirs ? '\u2611' : '\u2610';
+      const oursStyle = ui.mergeOurs ? colors.cyan + ansi.bold : colors.dim;
+      const theirsStyle = ui.mergeTheirs ? colors.cyan + ansi.bold : colors.dim;
+      const cbPadL = Math.floor(boxW / 2) - 3;
+      const cbPadR = Math.floor(boxW / 2) - 3;
+      const oursColStart = 1 + cbPadL;
+      const oursColEnd = oursColStart + 11; // "[1] ☑ Ours" = ~11 chars
+      const theirsColStart = oursColEnd + Math.max(1, gap + (boxW - cbPadL - 12) + cbPadR - 5);
+      const theirsColEnd = theirsColStart + 13; // "[2] ☑ Theirs" = ~13 chars
+      const checkLine = ' ' + ' '.repeat(cbPadL)
+        + oursStyle + '[1] ' + oursCheck + ' Ours' + ansi.reset
+        + ' '.repeat(Math.max(1, gap + (boxW - cbPadL - 12) + cbPadR - 5))
+        + theirsStyle + '[2] ' + theirsCheck + ' Theirs' + ansi.reset;
+      const checkLineIdx = mergeUILines;
+      lines.push(checkLine);
+      mergeUILines++;
+
+      // Line 9: Merge/Choose button (with click zone)
+      const mergeEnabled = ui.mergeOurs || ui.mergeTheirs;
+      const mergeStyle = mergeEnabled ? colors.cyan + ansi.bold : colors.dim;
+      const bothChecked = ui.mergeOurs && ui.mergeTheirs;
+      const mergeLabel = bothChecked ? '[ Merge ]'
+        : ui.mergeOurs ? '[ Choose ' + truncate(oursBranch, 12) + ' ]'
+        : ui.mergeTheirs ? '[ Choose ' + truncate(theirsBranch, 12) + ' ]'
+        : '[ Merge ]';
+      const mergePad = Math.max(0, Math.floor((boxW * 2 + gap) / 2) - Math.floor(mergeLabel.length / 2));
+      const mergeColStart = 1 + mergePad;
+      const mergeColEnd = mergeColStart + mergeLabel.length;
+      const mergeLineIdx = mergeUILines;
+      lines.push(' ' + ' '.repeat(mergePad) + mergeStyle + mergeLabel + ansi.reset);
+      mergeUILines++;
+
+      // Store click zones (relative to right panel body top)
+      // Merge button: entire row is clickable for easier targeting
+      ui.mergeClickZones = [
+        { lineIdx: checkLineIdx, colStart: 0, colEnd: 1 + boxW, action: 'toggle-ours' },
+        { lineIdx: checkLineIdx, colStart: 1 + boxW, colEnd: innerW, action: 'toggle-theirs' },
+        { lineIdx: mergeLineIdx, colStart: 0, colEnd: innerW, action: 'merge' },
+        // Also allow clicking the left/right boxes (lines 3-6)
+        { lineIdx: 3, colStart: 0, colEnd: 1 + boxW, action: 'toggle-ours' },
+        { lineIdx: 4, colStart: 0, colEnd: 1 + boxW, action: 'toggle-ours' },
+        { lineIdx: 5, colStart: 0, colEnd: 1 + boxW, action: 'toggle-ours' },
+        { lineIdx: 6, colStart: 0, colEnd: 1 + boxW, action: 'toggle-ours' },
+        { lineIdx: 3, colStart: 1 + boxW, colEnd: innerW, action: 'toggle-theirs' },
+        { lineIdx: 4, colStart: 1 + boxW, colEnd: innerW, action: 'toggle-theirs' },
+        { lineIdx: 5, colStart: 1 + boxW, colEnd: innerW, action: 'toggle-theirs' },
+        { lineIdx: 6, colStart: 1 + boxW, colEnd: innerW, action: 'toggle-theirs' },
+      ];
+
+      // Line 10: separator
+      lines.push(colors.border + DASH.repeat(w) + ansi.reset);
+      mergeUILines++;
+
+      diffH -= mergeUILines;
+    }
+
     if (state.diffLines.length === 0) {
       lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < diffH; i++) lines.push('');

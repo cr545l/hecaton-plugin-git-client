@@ -451,7 +451,13 @@ async function refreshAsync() {
       const totalRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
       const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
       const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
-      state.operationState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
+      // Read source branch name and onto commit
+      const headNameRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'head-name' });
+      const ontoRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'onto' });
+      let headName = (headNameRes && headNameRes.content) ? headNameRes.content.trim() : '';
+      if (headName.startsWith('refs/heads/')) headName = headName.substring('refs/heads/'.length);
+      const ontoHash = (ontoRes && ontoRes.content) ? ontoRes.content.trim().substring(0, 7) : '';
+      state.operationState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total), headName, ontoHash };
     } else {
       const rebaseApply = base + sep + 'rebase-apply';
       const raStat = await hecaton.fs_stat({ path: rebaseApply });

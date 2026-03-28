@@ -4,7 +4,8 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
-  gitWriteRebaseMessage,
+  gitWriteRebaseMessage, gitCheckRebaseConflicts,
+  gitCheckoutOurs, gitCheckoutTheirs,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
@@ -43,6 +44,13 @@ function isStaleRebaseError(err) {
 
 function isRebaseConflictError(err) {
   return err && (err.includes('could not apply') || err.includes('Resolve all conflicts') || err.includes('CONFLICT') || err.includes('fix conflicts') || err.includes('needs merge'));
+}
+
+function switchToDiffViewForConflict() {
+  if (state.rightView !== 'diff') {
+    state.rightView = 'diff';
+    updateDiff();
+  }
 }
 
 async function handleKey(key) {
@@ -284,6 +292,65 @@ async function handleKey(key) {
       render();
       break;
     }
+    case '1':
+    case '2': {
+      // Toggle Ours (1) / Theirs (2) checkbox for conflict files
+      if (state.rightView !== 'diff' || !state.operationState) break;
+      const sel = selectedItem();
+      if (!sel || sel.status !== 'U') break;
+      if (key === '1') ui.mergeOurs = !ui.mergeOurs;
+      else ui.mergeTheirs = !ui.mergeTheirs;
+      render();
+      break;
+    }
+    case 'm': {
+      // Merge: apply selected conflict resolution
+      if (state.rightView !== 'diff' || !state.operationState) break;
+      const selM = selectedItem();
+      if (!selM || selM.status !== 'U') break;
+      if (!ui.mergeOurs && !ui.mergeTheirs) {
+        showErrorDialog('Select at least one side to merge');
+        render();
+        break;
+      }
+      const conflictFile = selM.file;
+      if (ui.mergeOurs && !ui.mergeTheirs) {
+        startSpinner('Accepting ours...');
+        (async () => {
+          const err = await gitCheckoutOurs(state.cwd, conflictFile);
+          if (err) { stopSpinner(); showErrorDialog(err); render(); return; }
+          await gitStageAsync(state.cwd, conflictFile);
+          await refreshAsync();
+          stopSpinner();
+          updateDiff();
+          render();
+        })();
+      } else if (!ui.mergeOurs && ui.mergeTheirs) {
+        startSpinner('Accepting theirs...');
+        (async () => {
+          const err = await gitCheckoutTheirs(state.cwd, conflictFile);
+          if (err) { stopSpinner(); showErrorDialog(err); render(); return; }
+          await gitStageAsync(state.cwd, conflictFile);
+          await refreshAsync();
+          stopSpinner();
+          updateDiff();
+          render();
+        })();
+      } else {
+        // Both checked: accept theirs (incoming changes take priority in rebase)
+        startSpinner('Merging (accept theirs)...');
+        (async () => {
+          const err = await gitCheckoutTheirs(state.cwd, conflictFile);
+          if (err) { stopSpinner(); showErrorDialog(err); render(); return; }
+          await gitStageAsync(state.cwd, conflictFile);
+          await refreshAsync();
+          stopSpinner();
+          updateDiff();
+          render();
+        })();
+      }
+      break;
+    }
     case 'b': {
       if (state.operationState) {
         const op = state.operationState;
@@ -321,6 +388,25 @@ async function handleKey(key) {
             ],
           });
         } else {
+          // Pre-check for conflicts before rebasing
+          const conflictCheck = await gitCheckRebaseConflicts(state.cwd, logItem.ref);
+          if (conflictCheck.willConflict) {
+            const fileList = conflictCheck.files.length > 0
+              ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
+              : '';
+            state.pendingRebaseRef = logItem.ref;
+            sendRpc('show_dialog', {
+              type: 'message',
+              title: 'Rebase',
+              message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
+              buttons: [
+                { id: 'rebase_proceed', label: 'Rebase', default: true },
+                { id: 'cancel', label: 'Cancel' },
+              ],
+            });
+            render();
+            break;
+          }
           startSpinner('Rebasing...');
           gitRebaseAsync(state.cwd, logItem.ref).then(async err => {
             await refreshAsync();
@@ -338,15 +424,13 @@ async function handleKey(key) {
                 ],
               });
             } else if (err && isRebaseConflictError(err)) {
-              state.pendingRebaseMenu = true;
+              switchToDiffViewForConflict();
               sendRpc('show_dialog', {
                 type: 'message',
                 title: 'Rebase Conflict',
-                message: err + '\n\nResolve conflicts and choose an action:',
+                message: err + '\n\nResolve conflicts, then use Continue Rebase button or [b] menu.',
                 buttons: [
-                  { id: 'continue', label: 'Continue', default: true },
-                  { id: 'skip', label: 'Skip Commit' },
-                  { id: 'abort', label: 'Abort Rebase' },
+                  { id: 'ok', label: 'OK', default: true },
                 ],
               });
               render();
@@ -457,15 +541,13 @@ function handleCommitInput(key) {
           if (state.rightView === 'log') refreshLog();
           stopSpinner();
           if (err && isRebaseConflictError(err)) {
-            state.pendingRebaseMenu = true;
+            switchToDiffViewForConflict();
             sendRpc('show_dialog', {
               type: 'message',
               title: 'Rebase Conflict',
-              message: err + '\n\nResolve conflicts and choose an action:',
+              message: err + '\n\nResolve conflicts, then use Continue Rebase button or [b] menu.',
               buttons: [
-                { id: 'continue', label: 'Continue', default: true },
-                { id: 'skip', label: 'Skip Commit' },
-                { id: 'abort', label: 'Abort Rebase' },
+                { id: 'ok', label: 'OK', default: true },
               ],
             });
             render();
@@ -1245,6 +1327,29 @@ async function handleMouseData(data) {
                 ],
               });
               handled = true;
+            } else if (zone.action === 'rebase-abort') {
+              startSpinner('Aborting rebase...');
+              gitRebaseAbortAsync(state.cwd).then(async err => {
+                await refreshAsync();
+                if (state.rightView === 'log') refreshLog();
+                stopSpinner();
+                if (err) showErrorDialog(err);
+                render();
+              });
+              handled = true;
+            } else if (zone.action === 'rebase-skip') {
+              startSpinner('Rebase skip...');
+              gitRebaseSkipAsync(state.cwd).then(async err => {
+                await refreshAsync();
+                if (state.rightView === 'log') refreshLog();
+                stopSpinner();
+                if (err && isRebaseConflictError(err)) {
+                  switchToDiffViewForConflict();
+                }
+                if (err) showErrorDialog(err);
+                render();
+              });
+              handled = true;
             } else if (zone.action === 'reset-committer-name') {
               const err = await gitUnsetConfigLocal(state.cwd, 'user.name');
               if (err) {
@@ -1493,6 +1598,33 @@ async function handleMouseData(data) {
             if (leftHandled) continue;
           }
         }
+      }
+
+      // Click on merge conflict UI zones
+      if (ui.mergeClickZones && ui.mergeClickZones.length > 0 && state.rightView === 'diff') {
+        const rpStartCol = L.startCol + L.leftW + L.divider1W + L.middleW + L.divider2W;
+        let mergeHandled = false;
+        for (const zone of ui.mergeClickZones) {
+          const zoneRow = bodyTop + zone.lineIdx;
+          const zoneColStart = rpStartCol + zone.colStart;
+          const zoneColEnd = rpStartCol + zone.colEnd;
+          if (cy === zoneRow && cx >= zoneColStart && cx <= zoneColEnd) {
+            if (zone.action === 'toggle-ours') {
+              ui.mergeOurs = !ui.mergeOurs;
+              render();
+              mergeHandled = true;
+            } else if (zone.action === 'toggle-theirs') {
+              ui.mergeTheirs = !ui.mergeTheirs;
+              render();
+              mergeHandled = true;
+            } else if (zone.action === 'merge') {
+              handleKey('m');
+              mergeHandled = true;
+            }
+            break;
+          }
+        }
+        if (mergeHandled) continue;
       }
 
       // Click on commit button zone
