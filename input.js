@@ -1,4 +1,4 @@
-const { ESC, CSI } = require('./ansi');
+const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
 const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
@@ -11,6 +11,14 @@ const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
+
+let currentMouseShape = 'default';
+function setMouseShape(shape) {
+  if (shape !== currentMouseShape) {
+    currentMouseShape = shape;
+    process.stdout.write(ansi.mouseShape(shape));
+  }
+}
 
 function actionToKey(action) {
   switch (action) {
@@ -1102,13 +1110,24 @@ async function handleMouseData(data) {
         ui.hoveredHScrollbarTarget = newHScrollbarHover;
         ui.hoveredMergeApplyButton = newMergeApplyHover;
         ui.hoveredMergeZoneIndex = newMergeZoneHover;
+        // Update mouse cursor shape for divider hover
+        if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
+          setMouseShape('ew-resize');
+        } else if (newDivHover === 'horizontal') {
+          setMouseShape('ns-resize');
+        } else if (!ui.dragging) {
+          setMouseShape('default');
+        }
         render();
       }
       continue;
     }
 
     if (isRelease) {
-      if (ui.dragging !== null) ui.dragging = null;
+      if (ui.dragging !== null) {
+        ui.dragging = null;
+        setMouseShape('default');
+      }
       continue;
     }
 
@@ -1465,12 +1484,14 @@ async function handleMouseData(data) {
       if (!ui.leftPanelCollapsed) {
         if (cx === div1Col && cy >= bodyTop && cy < bodyTop + L.bodyH) {
           ui.dragging = 'vertical';
+          setMouseShape('ew-resize');
           continue;
         }
       }
       // Divider drag start: second vertical divider (diff mode only)
       if (L.middleW > 0 && cx === div2Col && cy >= bodyTop && cy < bodyTop + L.bodyH) {
         ui.dragging = 'vertical2';
+        setMouseShape('ew-resize');
         continue;
       }
       // Horizontal divider drag start (log/fresh mode)
@@ -1480,6 +1501,7 @@ async function handleMouseData(data) {
           const hDivRow = bodyTop + hListH;
           if (cy === hDivRow && cx >= rightStart) {
             ui.dragging = 'horizontal';
+            setMouseShape('ns-resize');
             continue;
           }
         }
@@ -1947,7 +1969,7 @@ async function handleMouseData(data) {
 }
 
 function cleanup() {
-  process.stdout.write(CSI + '?7h' + require('./ansi').ansi.showCursor + require('./ansi').ansi.reset + require('./ansi').ansi.clear);
+  process.stdout.write(ansi.mouseShape('default') + CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);
 }
 
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }

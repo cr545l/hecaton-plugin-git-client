@@ -12,6 +12,7 @@ const ansi = {
   fg: (r, g, b) => `${CSI}38;2;${r};${g};${b}m`,
   bg: (r, g, b) => `${CSI}48;2;${r};${g};${b}m`,
   moveTo: (row, col) => `${CSI}${row};${col}H`,
+  mouseShape: (shape) => `\x1b]22;${shape}\x07`,
 };
 
 const colors = {
