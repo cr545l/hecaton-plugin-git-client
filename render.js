@@ -99,7 +99,7 @@ function render() {
       const localColor = localHighlight ? colors.orange + ansi.bold : colors.cyan;
       const localStyle = localIdx === ui.hoveredTitleZoneIndex
         ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-        : isLocal ? colors.cursorBg + localColor : localColor;
+        : isLocal ? localColor + ansi.inverse : localColor;
       row1 += localStyle + localLabel + ansi.reset;
       col1 += visLen(localLabel);
 
@@ -107,7 +107,7 @@ function render() {
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(commitsLabel) - 1, action: 'tab-commits' });
       const commitsStyle = commitsIdx === ui.hoveredTitleZoneIndex
         ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-        : isCommits ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
+        : isCommits ? colors.cyan + ansi.bold + ansi.inverse : colors.cyan;
       row1 += commitsStyle + commitsLabel + ansi.reset;
       col1 += visLen(commitsLabel);
 
@@ -115,7 +115,7 @@ function render() {
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(freshLabel) - 1, action: 'tab-fresh' });
       const freshStyle = freshIdx === ui.hoveredTitleZoneIndex
         ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-        : isFresh ? colors.cursorBg + colors.cyan + ansi.bold : colors.cyan;
+        : isFresh ? colors.cyan + ansi.bold + ansi.inverse : colors.cyan;
       row1 += freshStyle + freshLabel + ansi.reset;
       col1 += visLen(freshLabel);
     }
@@ -609,7 +609,7 @@ function render() {
     ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1 + mergeFooterOffset;
     const btnIsRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const btnIsMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    const btnLabelLen = btnIsRebase ? 18 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 15 : state.operationState.type === 'cherry-pick' ? 21 : 16) : 8; // [Continue Rebase]=18, [Commit]=8, etc
+    const btnLabelLen = btnIsRebase ? 16 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 13 : state.operationState.type === 'cherry-pick' ? 19 : 14) : 6; // Continue Rebase=16, Commit=6, etc
     ui.commitButtonZone = {
       row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset,
       colStart: rpStartCol + 1,
@@ -621,7 +621,7 @@ function render() {
         .filter(idx => idx >= 0);
       const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
       const canApply = conflictIndices.length > 0 && selectedCount === conflictIndices.length;
-      const applyLabel = canApply ? '[ Apply resolution ]' : '[ Select every conflict to apply ]';
+      const applyLabel = canApply ? ' Apply resolution ' : ' Select every conflict to apply ';
       ui.mergeApplyZone = {
         row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1,
         colStart: rpStartCol + 1,
@@ -979,16 +979,28 @@ function buildFileListPanel(w, h) {
   const unstagedCount = state.unstaged.length + state.untracked.length;
   {
     const headerLabel = ' Unstaged (' + unstagedCount + ')';
-    const btnLabel = '[Stage]';
+    const allBtnLabel = 'Stage All';
+    const btnLabel = 'Stage';
+    const totalBtnLen = allBtnLabel.length + 1 + btnLabel.length;
     const headerLabelLen = visLen(headerLabel);
-    const gap = Math.max(1, innerW - headerLabelLen - btnLabel.length - 1);
-    const zoneIdx = ui.fileHeaderZones.length;
+    const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
+
+    const allZoneIdx = ui.fileHeaderZones.length;
+    const allHovered = ui.hoveredFileHeaderIdx === allZoneIdx;
+    const allBtnStyle = allHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+
+    const zoneIdx = ui.fileHeaderZones.length + 1;
     const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
     const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+
+    const allBtnStart = headerLabelLen + gap;
+    const btnStart = allBtnStart + allBtnLabel.length + 1;
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
+      + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'stageSelected' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'stageAll' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'stageSelected' });
     pushFileLine(headerLine, -1);
   }
   for (let i = 0; i < state.unstaged.length; i++) {
@@ -1021,16 +1033,28 @@ function buildFileListPanel(w, h) {
   // Staged
   {
     const headerLabel = ' Staged (' + state.staged.length + ')';
-    const btnLabel = '[Unstage]';
+    const allBtnLabel = 'Unstage All';
+    const btnLabel = 'Unstage';
+    const totalBtnLen = allBtnLabel.length + 1 + btnLabel.length;
     const headerLabelLen = visLen(headerLabel);
-    const gap = Math.max(1, innerW - headerLabelLen - btnLabel.length - 1);
-    const zoneIdx = ui.fileHeaderZones.length;
+    const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
+
+    const allZoneIdx = ui.fileHeaderZones.length;
+    const allHovered = ui.hoveredFileHeaderIdx === allZoneIdx;
+    const allBtnStyle = allHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+
+    const zoneIdx = ui.fileHeaderZones.length + 1;
     const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
     const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+
+    const allBtnStart = headerLabelLen + gap;
+    const btnStart = allBtnStart + allBtnLabel.length + 1;
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
+      + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: headerLabelLen + gap, btnColEnd: headerLabelLen + gap + btnLabel.length - 1, action: 'unstageSelected' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'unstageAll' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'unstageSelected' });
     pushFileLine(headerLine, -1);
   }
   for (let i = 0; i < state.staged.length; i++) {
@@ -1220,7 +1244,7 @@ function buildDiffCommitPanel(w, h) {
         .filter(idx => idx >= 0);
       const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
       const canApply = conflictIndices.length > 0 && selectedCount === conflictIndices.length;
-      const applyLabel = canApply ? '[ Apply resolution ]' : '[ Select every conflict to apply ]';
+      const applyLabel = canApply ? ' Apply resolution ' : ' Select every conflict to apply ';
       const applyStyle = canApply
         ? (ui.hoveredMergeApplyButton ? colors.cursorBg + colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold)
         : (ui.hoveredMergeApplyButton ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m' : colors.dim);
@@ -1265,7 +1289,7 @@ function buildDiffCommitPanel(w, h) {
 
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    const commitLabel = isRebaseOp ? '[Continue Rebase]' : isMergeOp ? '[Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') + ']' : '[Commit]';
+    const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : 'Commit';
     const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0;
     const isHovered = ui.hoveredCommitButton;
     if (canCommit) {
@@ -1479,7 +1503,7 @@ function buildLogPanel(w, h) {
         const refsMaxW = innerW - collapseLabelLen - 1;
         let refsLine;
         if (refsRaw) {
-          refsLine = colors.cyan + ' \u2387 ' + truncate(refsRaw, refsMaxW - 4) + ansi.reset;
+          refsLine = colors.cyan + ' ' + truncate(refsRaw, refsMaxW - 2) + ansi.reset;
         } else {
           refsLine = colors.dim + ' (no refs)' + ansi.reset;
         }
@@ -1492,7 +1516,7 @@ function buildLogPanel(w, h) {
       } else {
         ui.detailCollapseAllZone = null;
         if (refsRaw) {
-          lines.push(colors.cyan + ' \u2387 ' + truncate(refsRaw, innerW - 4) + ansi.reset);
+          lines.push(colors.cyan + ' ' + truncate(refsRaw, innerW - 2) + ansi.reset);
         } else {
           lines.push(colors.dim + ' (no refs)' + ansi.reset);
         }
@@ -1796,7 +1820,7 @@ function buildFreshPanel(w, h) {
 
 function colorizeDecoration(plainDeco, currentBranch, isHead) {
   if (!plainDeco) return '';
-  const refs = plainDeco.split(', ');
+  const refs = plainDeco.split(', ').filter(r => !r.endsWith('/HEAD'));
   const parts = [];
   for (const ref of refs) {
     if (ref === 'HEAD') {

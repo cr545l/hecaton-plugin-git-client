@@ -547,6 +547,19 @@ function nextCharIndex(str, idx) {
 }
 
 function handleCommitInput(key) {
+  // Ctrl+V — Paste from clipboard
+  if (key === '\x16') {
+    (async () => {
+      const result = await sendRpc('read_clipboard');
+      if (result && result.text) {
+        const clean = result.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + clean + state.commitMsg.substring(state.commitCursor);
+        state.commitCursor += clean.length;
+        render();
+      }
+    })();
+    return;
+  }
   // IME 입력과 이스케이프 시퀀스가 하나의 청크로 합쳐진 경우 분리 처리
   // (예: "최적화\x1b[13;5u" → "최적화" + "\x1b[13;5u")
   const escIdx = key.indexOf('\x1b');
@@ -775,6 +788,17 @@ function handleRebaseMenuInput(key) {
 }
 
 async function handleNameInput(key) {
+  // Ctrl+V — Paste from clipboard
+  if (key === '\x16') {
+    (async () => {
+      const result = await sendRpc('read_clipboard');
+      if (result && result.text) {
+        state.inputBuffer += result.text.replace(/[\r\n]/g, '');
+        render();
+      }
+    })();
+    return;
+  }
   // IME 입력과 이스케이프 시퀀스가 하나의 청크로 합쳐진 경우 분리 처리
   const escIdx = key.indexOf('\x1b');
   if (escIdx > 0) {
@@ -1110,13 +1134,17 @@ async function handleMouseData(data) {
         ui.hoveredHScrollbarTarget = newHScrollbarHover;
         ui.hoveredMergeApplyButton = newMergeApplyHover;
         ui.hoveredMergeZoneIndex = newMergeZoneHover;
-        // Update mouse cursor shape for divider hover
-        if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
-          setMouseShape('ew-resize');
-        } else if (newDivHover === 'horizontal') {
-          setMouseShape('ns-resize');
-        } else if (!ui.dragging) {
-          setMouseShape('default');
+        // Update mouse cursor shape
+        if (!ui.dragging) {
+          if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
+            setMouseShape('ew-resize');
+          } else if (newDivHover === 'horizontal') {
+            setMouseShape('ns-resize');
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0) {
+            setMouseShape('pointer');
+          } else {
+            setMouseShape('default');
+          }
         }
         render();
       }
@@ -1809,6 +1837,30 @@ async function handleMouseData(data) {
                 if (zone.action === 'toggleIgnored') {
                   ui.collapsedSections.ignored = ui.collapsedSections.ignored === false ? true : false;
                   render();
+                  headerHandled = true;
+                  break;
+                }
+                if (zone.action === 'stageAll' || zone.action === 'unstageAll') {
+                  const fileList = buildFileList();
+                  const isStage = zone.action === 'stageAll';
+                  const files = fileList
+                    .filter(item => isStage ? item.type !== 'staged' : item.type === 'staged')
+                    .map(item => item.file);
+                  if (files.length > 0) {
+                    const label = isStage ? 'Staging all' : 'Unstaging all';
+                    startSpinner(`${label}...`);
+                    (async () => {
+                      if (isStage) {
+                        await gitStageMultiple(state.cwd, files);
+                      } else {
+                        await gitUnstageMultiple(state.cwd, files);
+                      }
+                      state.selectedFiles.clear();
+                      await refreshAsync();
+                      stopSpinner();
+                      render();
+                    })();
+                  }
                   headerHandled = true;
                   break;
                 }
