@@ -100,6 +100,8 @@ const ui = {
   hoveredCommitButton: false, // hover on [Commit] button
   hoveredMergeApplyButton: false,
   hoveredMergeZoneIndex: -1,
+  hoveredDetailCopyZone: null,
+  hoveredCollapseAllButton: false,
   hoveredDivider: null,
   contextMenuActive: false,
   contextMenuStashRef: null,

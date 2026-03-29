@@ -1089,6 +1089,33 @@ async function handleMouseData(data) {
         }
       }
 
+      // Hover: detail copy zones (log detail metadata)
+      let newDetailCopyZone = null;
+      if (state.rightView === 'log' && inBody && ui.detailCopyZones && ui.detailCopyZones.length > 0) {
+        const inRight = cx >= rightStart && cx < L.startCol + L.width;
+        if (inRight) {
+          const bodyRowIdx = cy - bodyTop;
+          const relCol = cx - rightStart;
+          for (const zone of ui.detailCopyZones) {
+            if (bodyRowIdx === zone.lineIdx && relCol >= zone.colStart && relCol <= zone.colEnd) {
+              newDetailCopyZone = zone;
+              break;
+            }
+          }
+        }
+      }
+      // Hover: detail Collapse All button
+      let newCollapseAllHover = false;
+      if (state.rightView === 'log' && inBody && ui.detailCollapseAllZone) {
+        const bodyRowIdx = cy - bodyTop;
+        if (bodyRowIdx === ui.detailCollapseAllZone.lineIdx) {
+          const relCol = cx - rightStart;
+          if (relCol >= ui.detailCollapseAllZone.colStart && relCol <= ui.detailCollapseAllZone.colEnd) {
+            newCollapseAllHover = true;
+          }
+        }
+      }
+
       // Hover: commit button
       let newCommitButtonHover = false;
       if (ui.commitButtonZone && state.rightView !== 'log' && state.rightView !== 'fresh') {
@@ -1119,7 +1146,7 @@ async function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex) {
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
@@ -1134,13 +1161,15 @@ async function handleMouseData(data) {
         ui.hoveredHScrollbarTarget = newHScrollbarHover;
         ui.hoveredMergeApplyButton = newMergeApplyHover;
         ui.hoveredMergeZoneIndex = newMergeZoneHover;
+        ui.hoveredDetailCopyZone = newDetailCopyZone;
+        ui.hoveredCollapseAllButton = newCollapseAllHover;
         // Update mouse cursor shape
         if (!ui.dragging) {
           if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
             setMouseShape('ew-resize');
           } else if (newDivHover === 'horizontal') {
             setMouseShape('ns-resize');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0) {
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newDetailCopyZone || newCollapseAllHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -1969,7 +1998,23 @@ async function handleMouseData(data) {
             }
             state.focusPanel = 'status';
           } else {
-            // Detail area: check for Collapse/Expand All button on refs line
+            // Detail area: check for copy zone click
+            let copyHandled = false;
+            if (ui.detailCopyZones && ui.detailCopyZones.length > 0) {
+              const relCol = cx - rightStart;
+              for (const zone of ui.detailCopyZones) {
+                if (bodyRowIdx === zone.lineIdx && relCol >= zone.colStart && relCol <= zone.colEnd) {
+                  sendRpc('write_clipboard', { text: zone.text });
+                  startSpinner('Copied: ' + zone.text);
+                  setTimeout(() => { stopSpinner(); render(); }, 1000);
+                  state.focusPanel = 'diff';
+                  copyHandled = true;
+                  break;
+                }
+              }
+            }
+            if (copyHandled) { render(); continue; }
+            // Check for Collapse/Expand All button on refs line
             const refsRowIdx = ui.lastLogListH + 1; // separator + refs line
             if (bodyRowIdx === refsRowIdx && ui.detailCollapseAllZone) {
               const relCol = cx - rightStart;

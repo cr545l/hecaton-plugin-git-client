@@ -609,7 +609,7 @@ function refreshLog() {
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
 
-    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%aI%x00%cn%x00%cI%x00%B'];
+    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B'];
     if (stashHashes.length > 0) args.push(...stashHashes);
     if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
     args.push('-2000');
@@ -624,23 +624,25 @@ function refreshLog() {
         const trimmed = record.trim();
         const parts = [];
         let pos = 0;
-        for (let i = 0; i < 7; i++) {
+        for (let i = 0; i < 9; i++) {
           const next = trimmed.indexOf('\x00', pos);
           if (next === -1) break;
           parts.push(trimmed.substring(pos, next));
           pos = next + 1;
         }
         parts.push(trimmed.substring(pos));
-        const fullBody = (parts[7] || '').trim();
+        const fullBody = (parts[9] || '').trim();
         const firstLine = fullBody.split('\n')[0];
         return {
           hash: parts[0] || '',
           parents: parts[1] ? parts[1].split(' ') : [],
           refs: parts[2] || '',
           authorName: parts[3] || '',
-          authorDate: parts[4] || '',
-          committerName: parts[5] || '',
-          committerDate: parts[6] || '',
+          authorEmail: parts[4] || '',
+          authorDate: parts[5] || '',
+          committerName: parts[6] || '',
+          committerEmail: parts[7] || '',
+          committerDate: parts[8] || '',
           subject: firstLine.replace(/[\r\n]/g, ''),
           body: fullBody,
           isRecovery: recoveryHashSet.has(parts[0] || ''),
@@ -738,12 +740,14 @@ function updateLogDetail() {
 
   lines.push('commit ' + item.hash);
   if (item.authorName || item.authorDate) {
+    const emailPart = item.authorEmail ? ' <' + item.authorEmail + '>' : '';
     const dateStr = item.authorDate ? formatDateTime(item.authorDate) : '';
-    lines.push('Author: ' + (item.authorName || '') + (dateStr ? '  ' + dateStr : ''));
+    lines.push('Author: ' + (item.authorName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
   }
   if (item.committerName || item.committerDate) {
+    const emailPart = item.committerEmail ? ' <' + item.committerEmail + '>' : '';
     const dateStr = item.committerDate ? formatDateTime(item.committerDate) : '';
-    lines.push('Commit: ' + (item.committerName || '') + (dateStr ? '  ' + dateStr : ''));
+    lines.push('Commit: ' + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
   }
 
   lines.push('\u2500'.repeat(40));

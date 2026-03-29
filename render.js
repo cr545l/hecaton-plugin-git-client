@@ -1482,6 +1482,7 @@ function buildLogPanel(w, h) {
 
   // -- Detail --
   ui.detailFileHeaderMap = [];
+  ui.detailCopyZones = [];
   if (detailH > 0) {
     const selItem = selectedLogRef();
     if (state.logDetailLines.length === 0) {
@@ -1499,27 +1500,52 @@ function buildLogPanel(w, h) {
       const allCollapsed = hasFiles && allDetailFiles.every(f => ui.collapsedDetailFiles.has(f));
       const collapseLabel = hasFiles ? (allCollapsed ? ' Expand All ' : ' Collapse All ') : '';
       const collapseLabelLen = visLen(collapseLabel);
+      function buildRefsLine(refsRaw, maxW, lineIdx) {
+        if (!refsRaw) return colors.dim + ' (no refs)' + ansi.reset;
+        // Register copy zones and build with hover underline
+        let col = 1;
+        const refs = refsRaw.split(', ');
+        for (const ref of refs) {
+          if (col + ref.length > maxW - 1) break;
+          const cleanRef = ref.replace(/^HEAD -> /, '');
+          ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + ref.length - 1, text: cleanRef });
+          col += ref.length + 2;
+        }
+        // Render with hover underline on hovered ref
+        const hoveredZone = ui.hoveredDetailCopyZone;
+        if (hoveredZone && hoveredZone.lineIdx === lineIdx) {
+          let result = ' ';
+          let pos = 1;
+          for (const ref of refs) {
+            if (pos + ref.length > maxW - 1) break;
+            if (pos === hoveredZone.colStart) {
+              result += CSI + '4m' + ref + CSI + '24m';
+            } else {
+              result += ref;
+            }
+            pos += ref.length;
+            if (pos < maxW - 1) { result += ', '; pos += 2; }
+          }
+          return colors.cyan + result + ansi.reset;
+        }
+        return colors.cyan + ' ' + truncate(refsRaw, maxW - 2) + ansi.reset;
+      }
       if (hasFiles) {
         const refsMaxW = innerW - collapseLabelLen - 1;
-        let refsLine;
-        if (refsRaw) {
-          refsLine = colors.cyan + ' ' + truncate(refsRaw, refsMaxW - 2) + ansi.reset;
-        } else {
-          refsLine = colors.dim + ' (no refs)' + ansi.reset;
-        }
+        const refsLineIdx = lines.length;
+        const refsLine = buildRefsLine(refsRaw, refsMaxW, refsLineIdx);
         const refsVisW = visLen(refsLine);
         const gap = Math.max(1, innerW - refsVisW - collapseLabelLen);
         const btnColStart = refsVisW + gap;
-        ui.detailCollapseAllZone = { colStart: btnColStart, colEnd: btnColStart + collapseLabelLen - 1 };
-        const btnStyle = allCollapsed ? colors.cyan : colors.dim;
+        ui.detailCollapseAllZone = { colStart: btnColStart, colEnd: btnColStart + collapseLabelLen - 1, lineIdx: refsLineIdx };
+        const btnStyle = ui.hoveredCollapseAllButton
+          ? colors.value + ansi.bold + CSI + '4m'
+          : allCollapsed ? colors.cyan : colors.dim;
         lines.push(refsLine + ' '.repeat(gap) + btnStyle + collapseLabel + ansi.reset);
       } else {
         ui.detailCollapseAllZone = null;
-        if (refsRaw) {
-          lines.push(colors.cyan + ' ' + truncate(refsRaw, innerW - 2) + ansi.reset);
-        } else {
-          lines.push(colors.dim + ' (no refs)' + ansi.reset);
-        }
+        const refsLineIdx = lines.length;
+        lines.push(buildRefsLine(refsRaw, innerW, refsLineIdx));
       }
       let cH = detailH - 1;
 
@@ -1586,7 +1612,50 @@ function buildLogPanel(w, h) {
           lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file, state.diffScrollX));
           ui.detailFileHeaderMap.push(null);
         } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file, state.diffScrollX));
+          const rawText = (entry.text || '').replace(/[\r\n]/g, '');
+          const lineIdx = lines.length;
+          // Register copy zones for metadata lines
+          if (rawText.startsWith('commit ')) {
+            const hash = rawText.substring(7);
+            ui.detailCopyZones.push({ lineIdx, colStart: 8, colEnd: 8 + hash.length - 1, text: hash });
+          } else if (rawText.startsWith('Author: ') || rawText.startsWith('Commit: ')) {
+            const prefix = rawText.startsWith('Author: ') ? 'Author: ' : 'Commit: ';
+            const rest = rawText.substring(prefix.length);
+            // Parse: name <email>  date or name  date
+            const emailMatch = rest.match(/^(.+?) <(.+?)>(  .+)?$/);
+            const noEmailMatch = rest.match(/^(.+?)(  \d{4}-.+)?$/);
+            let col = prefix.length + 1; // +1 for leading space
+            if (emailMatch) {
+              const name = emailMatch[1];
+              const email = emailMatch[2];
+              const dateStr = emailMatch[3] ? emailMatch[3].substring(2) : '';
+              ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + name.length - 1, text: name });
+              const emailStart = col + name.length + 2; // ' <'
+              ui.detailCopyZones.push({ lineIdx, colStart: emailStart, colEnd: emailStart + email.length - 1, text: email });
+              if (dateStr) {
+                const dateStart = emailStart + email.length + 3; // '>  '
+                ui.detailCopyZones.push({ lineIdx, colStart: dateStart, colEnd: dateStart + dateStr.length - 1, text: dateStr });
+              }
+            } else if (noEmailMatch) {
+              const name = noEmailMatch[1];
+              const dateStr = noEmailMatch[2] ? noEmailMatch[2].substring(2) : '';
+              ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + name.length - 1, text: name });
+              if (dateStr) {
+                const dateStart = col + name.length + 2;
+                ui.detailCopyZones.push({ lineIdx, colStart: dateStart, colEnd: dateStart + dateStr.length - 1, text: dateStr });
+              }
+            }
+          }
+          // Render with hover underline
+          const hz = ui.hoveredDetailCopyZone;
+          const hoveredZone = hz && hz.lineIdx === lineIdx
+            ? ui.detailCopyZones.find(z => z.lineIdx === lineIdx && z.colStart === hz.colStart && z.colEnd === hz.colEnd)
+            : null;
+          if (hoveredZone) {
+            lines.push(' ' + colorizeDiffLineWithUnderline(rawText, innerW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1));
+          } else {
+            lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file, state.diffScrollX));
+          }
           ui.detailFileHeaderMap.push(null);
         }
       }
@@ -2023,6 +2092,18 @@ function isDiffMetaLine(rawLine) {
     rawLine.startsWith('diff ') || rawLine.startsWith('index ') || rawLine.startsWith('commit ') ||
     rawLine.startsWith('Author: ') || rawLine.startsWith('Commit: ') ||
     /^\u2500{3,}$/.test(rawLine);
+}
+
+function colorizeDiffLineWithUnderline(rawLine, w, ulStart, ulEnd) {
+  // Render a metadata line with underline on [ulStart, ulEnd] range (0-based within rawLine)
+  const fgColor = rawLine.startsWith('commit ') ? colors.dim : colors.cyan;
+  let result = '';
+  for (let i = 0; i < Math.min(rawLine.length, w); i++) {
+    if (i === ulStart) result += CSI + '4m';
+    result += rawLine[i];
+    if (i === ulEnd) result += CSI + '24m';
+  }
+  return fgColor + result + ansi.reset;
 }
 
 function colorizeDiffLine(rawLine, w, filePath, scrollX) {
