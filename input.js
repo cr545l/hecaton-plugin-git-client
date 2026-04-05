@@ -803,7 +803,7 @@ async function handleNameInput(key) {
   const escIdx = key.indexOf('\x1b');
   if (escIdx > 0) {
     handleNameInput(key.substring(0, escIdx));
-    if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash' || state.mode === 'new-remote') {
+    if (state.mode === 'new-branch' || state.mode === 'new-tag' || state.mode === 'rename-stash' || state.mode === 'new-remote' || state.mode === 'new-remote-url') {
       handleNameInput(key.substring(escIdx));
     }
     return;
@@ -826,15 +826,13 @@ async function handleNameInput(key) {
     if (state.mode === 'rename-stash') {
       err = await gitStashRename(state.cwd, state.inputTarget, name);
     } else if (state.mode === 'new-remote') {
-      const parts = name.split(/\s+/).filter(Boolean);
-      if (parts.length < 2) {
-        showErrorDialog('Use: <remote-name> <remote-url>');
-        render();
-        return;
-      }
-      const remoteName = parts.shift();
-      const remoteUrl = parts.join(' ');
-      err = await gitRemoteAdd(state.cwd, remoteName, remoteUrl);
+      state.mode = 'new-remote-url';
+      state.inputTarget = name;
+      state.inputBuffer = '';
+      render();
+      return;
+    } else if (state.mode === 'new-remote-url') {
+      err = await gitRemoteAdd(state.cwd, state.inputTarget, name);
     } else if (state.mode === 'new-branch') {
       err = await gitCreateBranch(state.cwd, name, state.inputTarget);
     } else {
@@ -842,7 +840,7 @@ async function handleNameInput(key) {
     }
     const opName = state.mode === 'rename-stash'
       ? 'Rename stash'
-      : state.mode === 'new-remote'
+      : state.mode === 'new-remote-url'
         ? 'Remote'
         : state.mode === 'new-branch'
           ? 'Branch'

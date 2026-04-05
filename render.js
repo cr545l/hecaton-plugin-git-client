@@ -419,9 +419,13 @@ function render() {
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
       + colors.dim + '[Enter]rename' + ansi.reset;
   } else if (state.mode === 'new-remote') {
-    hintContent = colors.yellow + ' New Remote: ' + ansi.reset
+    hintContent = colors.yellow + ' Remote Name: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create (name url)' + ansi.reset;
+      + colors.dim + '[Enter]next' + ansi.reset;
+  } else if (state.mode === 'new-remote-url') {
+    hintContent = colors.yellow + ' Remote URL (' + state.inputTarget + '): ' + ansi.reset
+      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
+      + colors.dim + '[Enter]create' + ansi.reset;
   } else if (state.freshTimeWindowMode) {
     const tw = FRESH_TIME_WINDOWS;
     let windowHint = colors.yellow + ' Time Window: ' + ansi.reset;
@@ -795,10 +799,10 @@ function buildLeftPanel(w, h) {
   }
 
   // Remotes
-  if (state.remoteBranches.length > 0) {
+  {
     const collapsed = !!ui.collapsedSections.remotes;
     pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Remotes' + ansi.reset, { action: 'toggle-section', section: 'remotes' });
-    if (!collapsed) {
+    if (!collapsed && state.remoteBranches.length > 0) {
       const remoteGroups = new Map();
       for (const rb of state.remoteBranches) {
         const slashIdx = rb.indexOf('/');

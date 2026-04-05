@@ -306,11 +306,11 @@ async function handleContextMenuAction(actionId) {
         sendRpc('show_dialog', {
           type: 'input',
           title: 'Add Remote',
-          message: 'Enter remote name and URL (e.g. origin https://...):',
-          defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          message: 'Enter remote name:',
+          defaultValue: 'origin',
+          buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
         });
-        state.pendingDialogAction = 'new-remote';
+        state.pendingDialogAction = 'new-remote-name';
         break;
       case 'remote_sort_alpha':
         ui.remoteSortMode = 'alpha';
@@ -1078,6 +1078,38 @@ async function handleDialogResult(params) {
       return;
     }
 
+    // Step 1 of add remote: got the name, now ask for URL
+    if (action === 'new-remote-name' && buttonId === 'ok' && params.value != null) {
+      const remoteName = params.value.trim();
+      if (!remoteName) {
+        showError('Remote name cannot be empty');
+        return;
+      }
+      sendRpc('show_dialog', {
+        type: 'input',
+        title: 'Add Remote',
+        message: 'Enter URL for \'' + remoteName + '\':',
+        defaultValue: '',
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+      });
+      state.pendingDialogAction = 'new-remote-url';
+      state.pendingDialogTarget = remoteName;
+      return;
+    }
+
+    // Step 2 of add remote: got the URL, execute
+    if (action === 'new-remote-url' && buttonId === 'ok' && params.value != null) {
+      const remoteUrl = params.value.trim();
+      if (!remoteUrl) {
+        showError('Remote URL cannot be empty');
+        return;
+      }
+      startSpinner('Adding remote...');
+      const err = await gitRemoteAdd(state.cwd, target, remoteUrl);
+      await afterGitOp(err, 'Remote');
+      return;
+    }
+
     if (buttonId === 'ok' && params.value != null) {
       const name = params.value.trim();
       if (!name) {
@@ -1086,7 +1118,6 @@ async function handleDialogResult(params) {
       }
       const opName = action === 'rename-branch' ? 'Rename branch'
         : action === 'rename-stash' ? 'Rename stash'
-        : action === 'new-remote' ? 'Remote'
         : action === 'new-branch' ? 'Branch'
         : 'Tag';
       startSpinner(opName + '...');
@@ -1095,15 +1126,6 @@ async function handleDialogResult(params) {
         err = await gitRenameBranch(state.cwd, target, name);
       } else if (action === 'rename-stash') {
         err = await gitStashRename(state.cwd, target, name);
-      } else if (action === 'new-remote') {
-        const parts = name.split(/\s+/).filter(Boolean);
-        if (parts.length < 2) {
-          showError('Use: <remote-name> <remote-url>');
-          return;
-        }
-        const remoteName = parts.shift();
-        const remoteUrl = parts.join(' ');
-        err = await gitRemoteAdd(state.cwd, remoteName, remoteUrl);
       } else if (action === 'new-branch') {
         err = await gitCreateBranch(state.cwd, name, target);
       } else if (action === 'new-tag') {
