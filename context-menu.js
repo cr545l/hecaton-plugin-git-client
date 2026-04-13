@@ -419,8 +419,8 @@ async function handleContextMenuAction(actionId) {
           title: 'Discard Changes',
           message: 'Discard changes in ' + count + ' file(s)?\n\nThis cannot be undone.',
           buttons: [
-            { id: 'discard', label: 'Discard' },
-            { id: 'cancel', label: 'Cancel', default: true },
+            { id: 'discard', label: 'Discard', default: true, style: 'danger' },
+            { id: 'cancel', label: 'Cancel' },
           ],
         });
         state.pendingDialogAction = 'discard-confirm';
@@ -674,7 +674,7 @@ async function handleContextMenuAction(actionId) {
           type: 'message',
           title: 'Delete Branch',
           message: "Delete branch '" + branchName + "'?",
-          buttons: [{ id: 'delete', label: 'Delete', default: true }, { id: 'force', label: 'Force Delete' }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'force', label: 'Force Delete', style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'delete-branch';
         state.pendingDialogTarget = branchName;
@@ -766,8 +766,8 @@ async function handleContextMenuAction(actionId) {
           title: 'Delete Stash',
           message: 'Delete ' + ref + (stashMessage ? ' (' + stashMessage + ')' : '') + '?\n\nThis cannot be undone.',
           buttons: [
-            { id: 'drop', label: 'Delete' },
-            { id: 'cancel', label: 'Cancel', default: true },
+            { id: 'drop', label: 'Delete', default: true, style: 'danger' },
+            { id: 'cancel', label: 'Cancel' },
           ],
         });
         state.pendingDialogAction = 'stash-drop-confirm';
@@ -936,8 +936,8 @@ async function handleContextMenuAction(actionId) {
         title: 'Reset',
         message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\nThis will discard commits. This cannot be undone.",
         buttons: [
-          { id: 'reset', label: 'Reset' },
-          { id: 'cancel', label: 'Cancel', default: true },
+          { id: 'reset', label: 'Reset', default: true, style: 'danger' },
+          { id: 'cancel', label: 'Cancel' },
         ],
       });
       state.pendingDialogAction = 'reset-confirm';

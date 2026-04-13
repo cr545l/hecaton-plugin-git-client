@@ -8,7 +8,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, applyStageToState, applyUnstageToState } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
 
@@ -614,18 +614,18 @@ function handleCommitInput(key) {
       })();
     } else {
       startSpinner('Committing...');
-      gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
+      gitCommitAsync(state.cwd, state.commitMsg).then(err => {
+        stopSpinner();
         if (err) {
-          stopSpinner();
           showErrorDialog(err);
-          render();
         } else {
           state.commitMsg = '';
           state.commitCursor = 0;
-          await refreshAsync({ statusOnly: true });
-          stopSpinner();
-          render();
+          // commit 성공 → staged 전부 비움 (git status 호출 없이)
+          touchUserRefreshTime();
+          state.staged = [];
         }
+        render();
       });
     }
     return;

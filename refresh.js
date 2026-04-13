@@ -390,6 +390,7 @@ let _guiConfigLoaded = false;
 // 마지막 사용자 refresh 시간 — 폴링 억제용으로 외부에서 참조
 let _lastUserRefreshTime = 0;
 function getLastUserRefreshTime() { return _lastUserRefreshTime; }
+function touchUserRefreshTime() { _lastUserRefreshTime = Date.now(); }
 
 async function refreshAsync(options = {}) {
   if (!state.cwd) return;
@@ -1093,5 +1094,5 @@ module.exports = {
   buildFileList, selectedItem, clampCursor,
   refresh, refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
-  getLastUserRefreshTime, applyStageToState, applyUnstageToState,
+  getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
 };
