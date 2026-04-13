@@ -8,7 +8,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { sendRpc, sendRpcNotify } = require('./rpc');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, applyStageToState, applyUnstageToState } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
 
@@ -315,14 +315,11 @@ async function handleKey(key) {
           .filter(item => item && item.type !== 'staged')
           .map(item => item.file);
         if (filesToStage.length > 0) {
-          startSpinner('Staging...');
-          (async () => {
-            await gitStageMultiple(state.cwd, filesToStage);
-            state.selectedFiles.clear();
-            await refreshAsync();
-            stopSpinner();
-            render();
-          })();
+          // 즉시 state 업데이트 후 백그라운드로 git add 실행
+          state.selectedFiles.clear();
+          applyStageToState(filesToStage);
+          render();
+          gitStageMultiple(state.cwd, filesToStage);
         }
       }
       break;
@@ -339,14 +336,11 @@ async function handleKey(key) {
           .filter(item => item && item.type === 'staged')
           .map(item => item.file);
         if (filesToUnstage.length > 0) {
-          startSpinner('Unstaging...');
-          (async () => {
-            await gitUnstageMultiple(state.cwd, filesToUnstage);
-            state.selectedFiles.clear();
-            await refreshAsync();
-            stopSpinner();
-            render();
-          })();
+          // 즉시 state 업데이트 후 백그라운드로 git restore --staged 실행
+          state.selectedFiles.clear();
+          applyUnstageToState(filesToUnstage);
+          render();
+          gitUnstageMultiple(state.cwd, filesToUnstage);
         }
       }
       break;
@@ -628,7 +622,7 @@ function handleCommitInput(key) {
         } else {
           state.commitMsg = '';
           state.commitCursor = 0;
-          await refreshAsync();
+          await refreshAsync({ statusOnly: true });
           stopSpinner();
           render();
         }

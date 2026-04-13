@@ -20,7 +20,7 @@ const {
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
   gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs,
 } = require('./git');
-const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff } = require('./refresh');
+const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, applyStageToState, applyUnstageToState } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
@@ -394,22 +394,22 @@ async function handleContextMenuAction(actionId) {
       }
       case 'file_stage':
         if (fileItems.length > 0) {
-          startSpinner('Staging...');
-          (async () => {
-            const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
-            if (files.length > 0) await gitStageMultiple(state.cwd, files);
-            await afterGitOp(null);
-          })();
+          const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
+          if (files.length > 0) {
+            applyStageToState(files);
+            render();
+            gitStageMultiple(state.cwd, files);
+          }
         }
         break;
       case 'file_unstage':
         if (fileItems.length > 0) {
-          startSpinner('Unstaging...');
-          (async () => {
-            const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
-            if (files.length > 0) await gitUnstageMultiple(state.cwd, files);
-            await afterGitOp(null);
-          })();
+          const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
+          if (files.length > 0) {
+            applyUnstageToState(files);
+            render();
+            gitUnstageMultiple(state.cwd, files);
+          }
         }
         break;
       case 'file_discard': {
@@ -453,11 +453,15 @@ async function handleContextMenuAction(actionId) {
         })();
         break;
       }
-      case 'file_stage_all':
-        startSpinner('Staging all...');
-        await gitStageAll(state.cwd);
-        await afterGitOp(null);
+      case 'file_stage_all': {
+        const allFiles = [...state.unstaged.map(f => f.file), ...state.untracked.map(f => f.file)];
+        if (allFiles.length > 0) {
+          applyStageToState(allFiles);
+          render();
+        }
+        gitStageAll(state.cwd);
         break;
+      }
       case 'file_ignore_name': {
         startSpinner('Ignoring...');
         let err = null;
@@ -1329,10 +1333,12 @@ async function handleDialogResult(params) {
   }
 }
 
-async function afterGitOp(err, opName) {
+async function afterGitOp(err, opName, refreshOpts = {}) {
   if (!state.spinnerActive) state.error = null;
-  await refreshAsync();
-  if (state.rightView === 'log') refreshLog();
+  await refreshAsync(refreshOpts);
+  if (!refreshOpts.statusOnly) {
+    if (state.rightView === 'log') refreshLog();
+  }
   stopSpinner();
   if (err) {
     showError(opName + ' failed:\n' + err);

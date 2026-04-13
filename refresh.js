@@ -239,6 +239,65 @@ function clampCursor() {
   else state.cursor = Math.min(state.cursor, list.length - 1);
 }
 
+// ── 즉시 state 업데이트 (git status 호출 없이 로컬 state만 조작) ──
+
+function applyStageToState(filePaths) {
+  _lastUserRefreshTime = Date.now();
+  const fileSet = new Set(filePaths);
+  state._prevFileList = buildFileList();
+  // unstaged → staged 이동
+  const remainUnstaged = [];
+  for (const f of state.unstaged) {
+    if (fileSet.has(f.file)) {
+      // unstaged에서 제거하고 staged에 추가 (status 유지)
+      state.staged.push({ status: f.status, file: f.file });
+    } else {
+      remainUnstaged.push(f);
+    }
+  }
+  state.unstaged = remainUnstaged;
+  // untracked → staged 이동 (status는 'A')
+  const remainUntracked = [];
+  for (const f of state.untracked) {
+    if (fileSet.has(f.file)) {
+      state.staged.push({ status: 'A', file: f.file });
+    } else {
+      remainUntracked.push(f);
+    }
+  }
+  state.untracked = remainUntracked;
+  sendRpcNotify('set_title', { title: formatWindowTitle() });
+  remapSelectedFiles();
+  clampCursor();
+  updateDiff();
+}
+
+function applyUnstageToState(filePaths) {
+  _lastUserRefreshTime = Date.now();
+  const fileSet = new Set(filePaths);
+  state._prevFileList = buildFileList();
+  // staged → unstaged/untracked 이동
+  const remainStaged = [];
+  for (const f of state.staged) {
+    if (fileSet.has(f.file)) {
+      if (f.status === 'A') {
+        // 새 파일은 untracked으로 되돌림
+        state.untracked.push({ file: f.file });
+      } else {
+        // 수정된 파일은 unstaged로 이동
+        state.unstaged.push({ status: f.status, file: f.file });
+      }
+    } else {
+      remainStaged.push(f);
+    }
+  }
+  state.staged = remainStaged;
+  sendRpcNotify('set_title', { title: formatWindowTitle() });
+  remapSelectedFiles();
+  clampCursor();
+  updateDiff();
+}
+
 function remapSelectedFiles() {
   if (state.selectedFiles.size === 0) return;
   const oldList = state._prevFileList || [];
@@ -321,17 +380,38 @@ async function refresh() {
 
 let _refreshRunning = false;
 let _refreshQueued = false;
+let _refreshQueuedOpts = {};
 
-async function refreshAsync() {
+// 캐싱된 gui config — 전체 refresh 시에만 갱신
+let _cachedUntrackedFlag = '-unormal';
+let _cachedMaxFilesDisplayed = 5000;
+let _guiConfigLoaded = false;
+
+// 마지막 사용자 refresh 시간 — 폴링 억제용으로 외부에서 참조
+let _lastUserRefreshTime = 0;
+function getLastUserRefreshTime() { return _lastUserRefreshTime; }
+
+async function refreshAsync(options = {}) {
   if (!state.cwd) return;
+
+  const statusOnly = !!options.statusOnly;
 
   // 동시 실행 방지 — 이미 실행 중이면 대기열에 넣고 리턴
   if (_refreshRunning) {
+    // 대기 중인 요청이 statusOnly인데 전체 refresh가 요청되면 전체로 승격
+    if (_refreshQueued && _refreshQueuedOpts.statusOnly && !statusOnly) {
+      _refreshQueuedOpts = {};
+    } else if (!_refreshQueued) {
+      _refreshQueuedOpts = options;
+    }
     _refreshQueued = true;
     return;
   }
   _refreshRunning = true;
   _refreshQueued = false;
+  _refreshQueuedOpts = {};
+
+  _lastUserRefreshTime = Date.now();
 
   refreshCount++;
   if (refreshCount === 1) {
@@ -340,61 +420,104 @@ async function refreshAsync() {
 
   try {
 
-  // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
-  try {
-    const sep = (process.platform === 'win32') ? '\\' : '/';
-    const lockPath = state.cwd + sep + '.git' + sep + 'index.lock';
-    const lockStat = await hecaton.fs_stat({ path: lockPath });
-    if (lockStat && lockStat.exists) {
-      // 5초 이상 된 lock 파일은 stale로 판단 (git timeout이 5초이므로)
-      const age = Date.now() - (lockStat.modifiedTime || 0);
-      if (age > 5000) {
-        await hecaton.exec_process({ program: 'rm', args: ['-f', lockPath], cwd: state.cwd, timeout: 2000 });
+  if (!statusOnly) {
+    // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
+    try {
+      const sep = (process.platform === 'win32') ? '\\' : '/';
+      const lockPath = state.cwd + sep + '.git' + sep + 'index.lock';
+      const lockStat = await hecaton.fs_stat({ path: lockPath });
+      if (lockStat && lockStat.exists) {
+        // 5초 이상 된 lock 파일은 stale로 판단 (git timeout이 5초이므로)
+        const age = Date.now() - (lockStat.modifiedTime || 0);
+        if (age > 5000) {
+          await hecaton.exec_process({ program: 'rm', args: ['-f', lockPath], cwd: state.cwd, timeout: 2000 });
+        }
       }
-    }
-  } catch { /* ignore — lock cleanup is best-effort */ }
+    } catch { /* ignore — lock cleanup is best-effort */ }
+  }
 
-  // Pre-check: can git run at all? (with diagnostic on failure)
-  // Also verify stdout content — host may return ok:true even on timeout/cancellation
-  const preCheck = await hecaton.exec_process({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
-  console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
-  const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
-  if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
-    state.isGitRepo = false;
-    const parts = [];
-    if (preCheck && preCheck.ok && preCheckStdout !== 'true') {
-      parts.push('Not a git repository');
-    } else if (!preCheck) {
-      parts.push('exec_process returned null');
-    } else {
-      parts.push(preCheck.error || 'git failed');
+  // Pre-check: statusOnly이고 이미 git repo 확인된 상태면 skip
+  if (!statusOnly || !state.isGitRepo) {
+    // Pre-check: can git run at all? (with diagnostic on failure)
+    // Also verify stdout content — host may return ok:true even on timeout/cancellation
+    const preCheck = await hecaton.exec_process({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
+    console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
+    const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
+    if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
+      state.isGitRepo = false;
+      const parts = [];
+      if (preCheck && preCheck.ok && preCheckStdout !== 'true') {
+        parts.push('Not a git repository');
+      } else if (!preCheck) {
+        parts.push('exec_process returned null');
+      } else {
+        parts.push(preCheck.error || 'git failed');
+      }
+      parts.push('cwd: ' + state.cwd);
+      if (preCheck) {
+        if (preCheck.error) parts.push('error: ' + preCheck.error);
+        if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
+        if (preCheck.exitCode !== undefined && preCheck.exitCode !== 0) parts.push('exit: ' + preCheck.exitCode);
+        parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
+      }
+      state.error = parts.join(' | ');
+      state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
+      return;
     }
-    parts.push('cwd: ' + state.cwd);
-    if (preCheck) {
-      if (preCheck.error) parts.push('error: ' + preCheck.error);
-      if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
-      if (preCheck.exitCode !== undefined && preCheck.exitCode !== 0) parts.push('exit: ' + preCheck.exitCode);
-      parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
-    }
-    state.error = parts.join(' | ');
-    state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
-    return;
   }
 
   // preCheck를 통과했으므로 git 저장소 확정
   state.isGitRepo = true;
   if (!state.spinnerActive) state.error = null;
 
-  // gui 설정 읽기 (git-gui 호환)
-  const duRaw = await gitExec(['--no-optional-locks', 'config', 'gui.displayuntracked'], state.cwd);
-  const mfRaw = await gitExec(['--no-optional-locks', 'config', 'gui.maxfilesdisplayed'], state.cwd);
-  // gui.displayuntracked (기본: true) — false면 untracked 스캔 건너뜀
-  const duVal = duRaw.trim().toLowerCase();
-  const showUntracked = !duVal || duVal === 'true' || duVal === '1' || duVal === 'yes' || duVal === 'on';
-  const untrackedFlag = showUntracked ? '-unormal' : '-uno';
-  // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
-  const maxFilesDisplayed = parseInt(mfRaw.trim()) || 5000;
+  // gui 설정 읽기 — 전체 refresh 시에만 갱신 (거의 변경되지 않으므로 캐싱)
+  if (!statusOnly || !_guiConfigLoaded) {
+    const duRaw = await gitExec(['--no-optional-locks', 'config', 'gui.displayuntracked'], state.cwd);
+    const mfRaw = await gitExec(['--no-optional-locks', 'config', 'gui.maxfilesdisplayed'], state.cwd);
+    // gui.displayuntracked (기본: true) — false면 untracked 스캔 건너뜀
+    const duVal = duRaw.trim().toLowerCase();
+    const showUntracked = !duVal || duVal === 'true' || duVal === '1' || duVal === 'yes' || duVal === 'on';
+    _cachedUntrackedFlag = showUntracked ? '-unormal' : '-uno';
+    // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
+    _cachedMaxFilesDisplayed = parseInt(mfRaw.trim()) || 5000;
+    _guiConfigLoaded = true;
+  }
+  const untrackedFlag = _cachedUntrackedFlag;
+  const maxFilesDisplayed = _cachedMaxFilesDisplayed;
 
+  if (statusOnly) {
+    // ── 경량 refresh: git status만 실행 ──
+    const statusRaw = await gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000);
+    if (!state.spinnerActive) state.error = null;
+
+    // status 파싱
+    const staged = [], unstaged = [], untracked = [], ignored = [];
+    for (const line of statusRaw.split('\n')) {
+      if (!line) continue;
+      const x = line[0], y = line[1], file = unquoteGitPath(line.substring(3));
+      if (x === '!' && y === '!') { ignored.push({ file }); }
+      else if (x === '?') { untracked.push({ file }); }
+      else {
+        if (x !== ' ' && x !== '?') staged.push({ status: x, file });
+        if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
+      }
+    }
+    const trackedCount = staged.length + unstaged.length;
+    const untrackedLimit = Math.max(0, maxFilesDisplayed - trackedCount);
+    if (untracked.length > untrackedLimit) {
+      untracked.length = untrackedLimit;
+    }
+
+    state._prevFileList = buildFileList();
+    state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
+    sendRpcNotify('set_title', { title: formatWindowTitle() });
+    remapSelectedFiles();
+    clampCursor();
+    updateDiff();
+    return; // 경량 refresh 완료 — 나머지 skip
+  }
+
+  // ── 전체 refresh ──
   const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, worktrees, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
@@ -462,7 +585,7 @@ async function refreshAsync() {
 
   state.worktrees = worktrees;
 
-  // operationState — detect rebase/merge/cherry-pick/revert in progress
+  // operationState — detect rebase/merge/cherry-pick/revert in progress (병렬화)
   state.operationState = null;
   const gitDir = gitDirRaw.trim();
   if (gitDir) {
@@ -471,48 +594,47 @@ async function refreshAsync() {
     const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
     const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
     const rebaseMerge = base + sep + 'rebase-merge';
-    const rmStat = await hecaton.fs_stat({ path: rebaseMerge });
+    const rebaseApply = base + sep + 'rebase-apply';
+    const mergeHead = base + sep + 'MERGE_HEAD';
+    const cherryHead = base + sep + 'CHERRY_PICK_HEAD';
+    const revertHead = base + sep + 'REVERT_HEAD';
+
+    // 모든 상태 파일을 병렬로 확인
+    const [rmStat, raStat, mhStat, chStat, rvStat] = await Promise.all([
+      hecaton.fs_stat({ path: rebaseMerge }),
+      hecaton.fs_stat({ path: rebaseApply }),
+      hecaton.fs_stat({ path: mergeHead }),
+      hecaton.fs_stat({ path: cherryHead }),
+      hecaton.fs_stat({ path: revertHead }),
+    ]);
+
     if (rmStat && rmStat.exists && rmStat.isDir) {
-      const stepRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' });
-      const totalRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
+      const [stepRes, totalRes, headNameRes, ontoRes] = await Promise.all([
+        hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' }),
+        hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' }),
+        hecaton.fs_read_file({ path: rebaseMerge + sep + 'head-name' }),
+        hecaton.fs_read_file({ path: rebaseMerge + sep + 'onto' }),
+      ]);
       const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
       const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
-      // Read source branch name and onto commit
-      const headNameRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'head-name' });
-      const ontoRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'onto' });
       let headName = (headNameRes && headNameRes.content) ? headNameRes.content.trim() : '';
       if (headName.startsWith('refs/heads/')) headName = headName.substring('refs/heads/'.length);
       const ontoHash = (ontoRes && ontoRes.content) ? ontoRes.content.trim().substring(0, 7) : '';
       state.operationState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total), headName, ontoHash };
-    } else {
-      const rebaseApply = base + sep + 'rebase-apply';
-      const raStat = await hecaton.fs_stat({ path: rebaseApply });
-      if (raStat && raStat.exists && raStat.isDir) {
-        const stepRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'next' });
-        const totalRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
-        const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
-        const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
-        state.operationState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
-      } else {
-        // Check merge/cherry-pick/revert
-        const mergeHead = base + sep + 'MERGE_HEAD';
-        const mhStat = await hecaton.fs_stat({ path: mergeHead });
-        if (mhStat && mhStat.exists) {
-          state.operationState = { type: 'merge' };
-        } else {
-          const cherryHead = base + sep + 'CHERRY_PICK_HEAD';
-          const chStat = await hecaton.fs_stat({ path: cherryHead });
-          if (chStat && chStat.exists) {
-            state.operationState = { type: 'cherry-pick' };
-          } else {
-            const revertHead = base + sep + 'REVERT_HEAD';
-            const rvStat = await hecaton.fs_stat({ path: revertHead });
-            if (rvStat && rvStat.exists) {
-              state.operationState = { type: 'revert' };
-            }
-          }
-        }
-      }
+    } else if (raStat && raStat.exists && raStat.isDir) {
+      const [stepRes, totalRes] = await Promise.all([
+        hecaton.fs_read_file({ path: rebaseApply + sep + 'next' }),
+        hecaton.fs_read_file({ path: rebaseApply + sep + 'last' }),
+      ]);
+      const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
+      const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
+      state.operationState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
+    } else if (mhStat && mhStat.exists) {
+      state.operationState = { type: 'merge' };
+    } else if (chStat && chStat.exists) {
+      state.operationState = { type: 'cherry-pick' };
+    } else if (rvStat && rvStat.exists) {
+      state.operationState = { type: 'revert' };
     }
   }
 
@@ -576,8 +698,10 @@ async function refreshAsync() {
     _refreshRunning = false;
     // 대기 중인 refresh가 있으면 다시 실행
     if (_refreshQueued) {
+      const queuedOpts = _refreshQueuedOpts;
       _refreshQueued = false;
-      refreshAsync();
+      _refreshQueuedOpts = {};
+      refreshAsync(queuedOpts);
     }
   }
 }
@@ -969,4 +1093,5 @@ module.exports = {
   buildFileList, selectedItem, clampCursor,
   refresh, refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
+  getLastUserRefreshTime, applyStageToState, applyUnstageToState,
 };

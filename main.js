@@ -22,7 +22,7 @@
 const { state, ui, init: initState } = require('./state');
 const { sendRpc } = require('./rpc');
 const { handleRpcResponse } = require('./rpc');
-const { refreshAsync, refreshLog, refreshFresh } = require('./refresh');
+const { refreshAsync, refreshLog, refreshFresh, getLastUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
@@ -179,6 +179,8 @@ async function setupGitWatcher() {
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
 
   function triggerRefresh() {
+    // 사용자 작업 직후 2초간은 폴링에 의한 중복 refresh 억제
+    if (Date.now() - getLastUserRefreshTime() < 2000) return;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       if (state.loading || state.minimized) return;
@@ -187,7 +189,7 @@ async function setupGitWatcher() {
       if (state.rightView === 'log') refreshLog();
       if (state.rightView === 'fresh') refreshFresh();
       render();
-    }, 300);
+    }, 150);
   }
 
   // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
@@ -232,7 +234,7 @@ async function setupGitWatcher() {
       lastMtimes = current;
       triggerRefresh();
     }
-  }, 1000);
+  }, 2000);
 
   // 워킹 디렉토리 변경 감지 (diff-files로 변경 여부만 확인 — 가볍고 빠름)
   let lastStatusSnapshot = '';
@@ -253,7 +255,7 @@ async function setupGitWatcher() {
       }
     } catch { /* ignore */ }
     statusPolling = false;
-  }, 2000);
+  }, 3000);
 
   _gitWatcherCleanup = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
