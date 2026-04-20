@@ -38,78 +38,37 @@ async function main() {
   process.stdin.resume();
   process.stdin.setEncoding('utf-8');
 
-  function processRpcMessage(msg) {
-    try {
-      const json = JSON.parse(msg);
-
-      // Batch RPC response (array)
-      if (Array.isArray(json)) {
-        handleRpcResponse(json);
-        for (const item of json) {
-          if (item && item.result && item.result.buttonId != null) {
-            handleDialogResult(item.result);
-          }
-        }
-        return;
-      }
-
-      // RPC response
-      if (json.id != null && (json.result || json.error)) {
-        handleRpcResponse(json);
-        if (json.result && json.result.buttonId != null) {
-          handleDialogResult(json.result);
-        }
-        return;
-      }
-
-      // Host notifications
-      if (json.method === 'resize' && json.params) {
-        ui.termCols = json.params.cols || ui.termCols;
-        ui.termRows = json.params.rows || ui.termRows;
-        const newCellW = json.params.cellWidth ? Math.round(json.params.cellWidth) : ui.cellW;
-        const newCellH = json.params.cellHeight ? Math.round(json.params.cellHeight) : ui.cellH;
-        if (newCellW !== ui.cellW || newCellH !== ui.cellH) {
-          ui.cellW = newCellW;
-          ui.cellH = newCellH;
-          ui.logSixelOverlay = null;
-        }
-        render();
-      }
-      if (json.method === 'minimize') {
-        state.minimized = true;
-        render();
-      }
-      if (json.method === 'restore') {
-        state.minimized = false;
-        refreshAsync().then(() => render());
-      }
-      if (json.method === 'maximize') {
-        // Host handles sizing; plugin just re-renders on resize
-      }
-      if (json.method === 'context_menu_request' && json.params) {
-        handleContextMenuRequest(json.params.col, json.params.row);
-      }
-      if (json.method === 'context_menu_action' && json.params) {
-        handleContextMenuAction(json.params.id);
-      }
-      if (json.method === 'dialog_result' && json.params) {
-        handleDialogResult(json.params);
-      }
-    } catch { /* ignore parse errors */ }
-  }
+  hecaton.on('resize', (params) => {
+    ui.termCols = params.cols || ui.termCols;
+    ui.termRows = params.rows || ui.termRows;
+    const newCellW = params.cellWidth ? Math.round(params.cellWidth) : ui.cellW;
+    const newCellH = params.cellHeight ? Math.round(params.cellHeight) : ui.cellH;
+    if (newCellW !== ui.cellW || newCellH !== ui.cellH) {
+      ui.cellW = newCellW;
+      ui.cellH = newCellH;
+      ui.logSixelOverlay = null;
+    }
+    render();
+  });
+  hecaton.on('minimize', () => {
+    state.minimized = true;
+    render();
+  });
+  hecaton.on('restore', () => {
+    state.minimized = false;
+    refreshAsync().then(() => render());
+  });
+  hecaton.on('context_menu_request', (params) => {
+    handleContextMenuRequest(params.col, params.row);
+  });
+  hecaton.on('context_menu_action', (params) => {
+    handleContextMenuAction(params.id);
+  });
+  hecaton.on('dialog_result', (params) => {
+    handleDialogResult(params);
+  });
 
   process.stdin.on('data', async (data) => {
-    // Host RPC messages
-    if (data.indexOf('__HECA_RPC__') !== -1) {
-      const segments = data.split('__HECA_RPC__');
-      for (const seg of segments) {
-        const trimmed = seg.trim();
-        if (!trimmed) continue;
-        processRpcMessage(trimmed);
-      }
-      return;
-    }
-
     // Ignore input while loading or spinner active
     if (state.loading || state.spinnerActive) return;
 
