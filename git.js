@@ -2,7 +2,7 @@
 // No direct child_process or fs usage — all operations go through host permission system.
 
 async function gitExec(args, cwd, timeout) {
-  const result = await hecaton.exec_process({ program: 'git', args, cwd, timeout: timeout || 5000 });
+  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (result && result.ok) {
     return (result.stdout || '').replace(/\r\n/g, '\n');
   } else {
@@ -11,7 +11,7 @@ async function gitExec(args, cwd, timeout) {
 }
 
 async function git(args, cwd, timeout) {
-  const result = await hecaton.exec_process({ program: 'git', args, cwd, timeout: timeout || 5000 });
+  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (!result || !result.ok) {
     const err = new Error(result ? result.error || 'git failed' : 'exec_process failed');
     err.stderr = result ? (result.stderr || '') : '';
@@ -23,7 +23,7 @@ async function git(args, cwd, timeout) {
 }
 
 async function gitResult(args, cwd, timeout) {
-  return await hecaton.exec_process({ program: 'git', args, cwd, timeout: timeout || 5000 });
+  return await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
 }
 
 function unquoteGitPath(p) {
@@ -70,7 +70,7 @@ function unquoteGitPath(p) {
 }
 
 async function gitIsRepo(cwd) {
-  const result = await hecaton.exec_process({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout: 5000 });
+  const result = await hecaton.process.exec({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout_ms: 5000 });
   if (result && result.ok) return true;
   // Provide diagnostic detail for troubleshooting
   const detail = {};
@@ -81,7 +81,7 @@ async function gitIsRepo(cwd) {
   } else if (result) {
     if (result.error) detail.error = result.error;
     if (result.stderr) detail.stderr = result.stderr;
-    if (result.exitCode !== undefined) detail.exitCode = result.exitCode;
+    if (result.exit_code !== undefined) detail.exit_code = result.exit_code;
   } else {
     detail.error = 'exec_process returned null';
   }
@@ -284,35 +284,35 @@ async function gitOperationState(cwd) {
     const base = cwd + sep + gitDir;
     // Check rebase-merge via fs_stat
     const rebaseMerge = base + sep + 'rebase-merge';
-    const rmStat = await hecaton.fs_stat({ path: rebaseMerge });
-    if (rmStat && rmStat.exists && rmStat.isDir) {
-      const stepRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' });
-      const totalRes = await hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' });
+    const rmStat = await hecaton.fs.stat({ path: rebaseMerge });
+    if (rmStat && rmStat.exists && rmStat.is_dir) {
+      const stepRes = await hecaton.fs.read_file({ path: rebaseMerge + sep + 'msgnum' });
+      const totalRes = await hecaton.fs.read_file({ path: rebaseMerge + sep + 'end' });
       const step = stepRes && stepRes.content ? stepRes.content.trim() : '0';
       const total = totalRes && totalRes.content ? totalRes.content.trim() : '0';
       return { type: 'rebase-merge', step: parseInt(step), total: parseInt(total) };
     }
     // Check rebase-apply
     const rebaseApply = base + sep + 'rebase-apply';
-    const raStat = await hecaton.fs_stat({ path: rebaseApply });
-    if (raStat && raStat.exists && raStat.isDir) {
-      const stepRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'next' });
-      const totalRes = await hecaton.fs_read_file({ path: rebaseApply + sep + 'last' });
+    const raStat = await hecaton.fs.stat({ path: rebaseApply });
+    if (raStat && raStat.exists && raStat.is_dir) {
+      const stepRes = await hecaton.fs.read_file({ path: rebaseApply + sep + 'next' });
+      const totalRes = await hecaton.fs.read_file({ path: rebaseApply + sep + 'last' });
       const step = stepRes && stepRes.content ? stepRes.content.trim() : '0';
       const total = totalRes && totalRes.content ? totalRes.content.trim() : '0';
       return { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
     }
     // Check merge
     const mergeHead = base + sep + 'MERGE_HEAD';
-    const mhStat = await hecaton.fs_stat({ path: mergeHead });
+    const mhStat = await hecaton.fs.stat({ path: mergeHead });
     if (mhStat && mhStat.exists) return { type: 'merge' };
     // Check cherry-pick
     const cherryHead = base + sep + 'CHERRY_PICK_HEAD';
-    const chStat = await hecaton.fs_stat({ path: cherryHead });
+    const chStat = await hecaton.fs.stat({ path: cherryHead });
     if (chStat && chStat.exists) return { type: 'cherry-pick' };
     // Check revert
     const revertHead = base + sep + 'REVERT_HEAD';
-    const rvStat = await hecaton.fs_stat({ path: revertHead });
+    const rvStat = await hecaton.fs.stat({ path: revertHead });
     if (rvStat && rvStat.exists) return { type: 'revert' };
   } catch { /* not in operation */ }
   return null;
@@ -321,7 +321,7 @@ const gitRebaseState = gitOperationState; // backward compat
 
 async function gitRunOrError(args, cwd, timeout, errorMsg) {
   const r = await gitResult(args, cwd, timeout || 30000);
-  if (r && r.ok && r.exitCode === 0) return null;
+  if (r && r.ok && r.exit_code === 0) return null;
   const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';
   const stdout = r && r.stdout ? r.stdout.replace(/\r\n/g, '\n').trim() : '';
   return stderr || stdout || errorMsg;
@@ -555,7 +555,7 @@ async function gitPush(cwd) { return await gitRunOrError(['push'], cwd, 30000, '
 // but we wrap in Promise to keep the same API for spinner-compatible callers.
 async function gitAsyncWrap(args, cwd, timeout) {
   const r = await gitResult(args, cwd, timeout || 30000);
-  if (r && r.ok && r.exitCode === 0) return null;
+  if (r && r.ok && r.exit_code === 0) return null;
   return (r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '') || 'Operation failed';
 }
 
@@ -564,7 +564,7 @@ async function gitCheckRebaseConflicts(cwd, targetRef) {
   // merge-tree --write-tree HEAD targetRef returns exit code 1 if there are conflicts
   const r = await gitResult(['merge-tree', '--write-tree', 'HEAD', targetRef], cwd, 10000);
   if (!r || !r.ok) return { willConflict: false };
-  if (r.exitCode === 0) return { willConflict: false };
+  if (r.exit_code === 0) return { willConflict: false };
   // Parse conflict info from stdout
   const stdout = (r.stdout || '').replace(/\r\n/g, '\n');
   const conflictFiles = [];
@@ -594,11 +594,11 @@ async function gitCommitAsync(cwd, message) { return await gitAsyncWrap(['commit
 async function gitStashPopAsync(cwd) { return await gitAsyncWrap(['stash', 'pop'], cwd, 10000); }
 async function gitStageAsync(cwd, file) {
   const r = await gitResult(['add', '-f', '--', file], cwd, 5000);
-  return r && r.ok && r.exitCode === 0;
+  return r && r.ok && r.exit_code === 0;
 }
 async function gitUnstageAsync(cwd, file) {
   const r = await gitResult(['restore', '--staged', '--', file], cwd, 5000);
-  return r && r.ok && r.exitCode === 0;
+  return r && r.ok && r.exit_code === 0;
 }
 async function gitStageMultiple(cwd, files) {
   if (files.length === 0) return true;
@@ -655,7 +655,7 @@ async function gitWriteRebaseMessage(cwd, message, opType) {
     const msgPath = opType === 'rebase-merge'
       ? base + sep + 'rebase-merge' + sep + 'message'
       : base + sep + 'rebase-apply' + sep + 'final-commit';
-    await hecaton.fs_write_file({ path: msgPath, content: message + '\n' });
+    await hecaton.fs.write_file({ path: msgPath, content: message + '\n' });
     return null;
   } catch (e) {
     return e.message || 'Failed to write rebase message';
@@ -704,13 +704,13 @@ async function gitIgnorePattern(cwd, pattern) {
     const ignorePath = cwd + sep + '.gitignore';
     const normalized = pattern.replace(/\\/g, '/');
     let lines = [];
-    const readRes = await hecaton.fs_read_file({ path: ignorePath });
+    const readRes = await hecaton.fs.read_file({ path: ignorePath });
     if (readRes && readRes.content) {
       lines = readRes.content.replace(/\r\n/g, '\n').split('\n');
     }
     if (lines.some(line => line.trim() === normalized)) return null;
     const content = (lines.length > 0 ? lines.join('\n').replace(/\n*$/, '\n') : '') + normalized + '\n';
-    const writeRes = await hecaton.fs_write_file({ path: ignorePath, content });
+    const writeRes = await hecaton.fs.write_file({ path: ignorePath, content });
     if (!writeRes || !writeRes.ok) return 'Failed to write .gitignore';
     return null;
   } catch (e) {
@@ -891,7 +891,7 @@ async function gitReadConflictFile(cwd, file) {
 
   let worktree = '';
   try {
-    const res = await hecaton.fs_read_file({ path: repoFilePath(cwd, file) });
+    const res = await hecaton.fs.read_file({ path: repoFilePath(cwd, file) });
     worktree = typeof res === 'string' ? res : (res && res.content) ? res.content : '';
   } catch {
     worktree = '';
@@ -926,7 +926,7 @@ async function gitReadConflictFile(cwd, file) {
 
 async function gitWriteConflictResolution(cwd, file, content) {
   try {
-    await hecaton.fs_write_file({ path: repoFilePath(cwd, file), content });
+    await hecaton.fs.write_file({ path: repoFilePath(cwd, file), content });
     return null;
   } catch (e) {
     return e && e.message ? e.message : 'Failed to write conflict resolution';

@@ -37,7 +37,7 @@ function updateTitle() {
   const { sendRpcNotify } = require('./rpc');
   const title = formatWindowTitle();
   if (!title) return;
-  sendRpcNotify('set_title', { title });
+  sendRpcNotify('window.set_title', { title });
 }
 
 function isSpinning() {

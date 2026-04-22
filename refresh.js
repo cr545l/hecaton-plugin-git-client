@@ -266,7 +266,7 @@ function applyStageToState(filePaths) {
     }
   }
   state.untracked = remainUntracked;
-  sendRpcNotify('set_title', { title: formatWindowTitle() });
+  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -292,7 +292,7 @@ function applyUnstageToState(filePaths) {
     }
   }
   state.staged = remainStaged;
-  sendRpcNotify('set_title', { title: formatWindowTitle() });
+  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -336,7 +336,7 @@ async function refresh() {
     parts.push('cwd: ' + state.cwd);
     if (diag.error) parts.push('error: ' + diag.error);
     if (diag.stderr) parts.push('stderr: ' + diag.stderr.trim());
-    if (diag.exitCode !== undefined) parts.push('exit: ' + diag.exitCode);
+    if (diag.exit_code !== undefined) parts.push('exit: ' + diag.exit_code);
     state.error = parts.join(' | ');
   }
   if (!state.isGitRepo) {
@@ -374,7 +374,7 @@ async function refresh() {
   state.ignored = status.ignored;
   remapSelectedFiles();
   clampCursor();
-  sendRpcNotify('set_title', { title: formatWindowTitle() });
+  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
   updateDiff();
 }
 
@@ -426,22 +426,23 @@ async function refreshAsync(options = {}) {
     try {
       const sep = (process.platform === 'win32') ? '\\' : '/';
       const lockPath = state.cwd + sep + '.git' + sep + 'index.lock';
-      const lockStat = await hecaton.fs_stat({ path: lockPath });
+      const lockStat = await hecaton.fs.stat({ path: lockPath });
       if (lockStat && lockStat.exists) {
         // 5초 이상 된 lock 파일은 stale로 판단 (git timeout이 5초이므로)
-        const age = Date.now() - (lockStat.modifiedTime || 0);
+        const age = Date.now() - (lockStat.mtime_ms || 0);
         if (age > 5000) {
-          await hecaton.exec_process({ program: 'rm', args: ['-f', lockPath], cwd: state.cwd, timeout: 2000 });
+          await hecaton.process.exec({ program: 'rm', args: ['-f', lockPath], cwd: state.cwd, timeout_ms: 2000 });
         }
       }
     } catch { /* ignore — lock cleanup is best-effort */ }
   }
 
-  // Pre-check: statusOnly이고 이미 git repo 확인된 상태면 skip
-  if (!statusOnly || !state.isGitRepo) {
+  // Pre-check: 이미 git repo로 확인된 상태면 skip (cwd가 바뀌는 경우 isGitRepo를 false로 리셋하는 쪽이 책임짐).
+  // 첫 refresh나 repo 미확인 상태에서만 rev-parse 수행 — status/diff 결과로 실제 repo 여부가 다시 검증됨.
+  if (!state.isGitRepo) {
     // Pre-check: can git run at all? (with diagnostic on failure)
     // Also verify stdout content — host may return ok:true even on timeout/cancellation
-    const preCheck = await hecaton.exec_process({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout: 5000 });
+    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout_ms: 5000 });
     console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
     const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
     if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
@@ -458,7 +459,7 @@ async function refreshAsync(options = {}) {
       if (preCheck) {
         if (preCheck.error) parts.push('error: ' + preCheck.error);
         if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
-        if (preCheck.exitCode !== undefined && preCheck.exitCode !== 0) parts.push('exit: ' + preCheck.exitCode);
+        if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);
         parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
       }
       state.error = parts.join(' | ');
@@ -511,7 +512,7 @@ async function refreshAsync(options = {}) {
 
     state._prevFileList = buildFileList();
     state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
-    sendRpcNotify('set_title', { title: formatWindowTitle() });
+    sendRpcNotify('window.set_title', { title: formatWindowTitle() });
     remapSelectedFiles();
     clampCursor();
     updateDiff();
@@ -519,27 +520,49 @@ async function refreshAsync(options = {}) {
   }
 
   // ── 전체 refresh ──
-  const [branchRaw, statusRaw, stashRaw, branchesRaw, remotesRaw, remoteNamesRaw, worktrees, gitDirRaw, nameRaw, emailRaw, localNameRaw, localEmailRaw, aheadBehindRaw] =
+  // 13 → 9개로 통합:
+  // - branch --show-current + branch --format + branch -r → for-each-ref 하나
+  // - config user.name/email + --local user.name/email → --get-regexp 2개
+  const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)';
+  const [statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, gitDirRaw, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
     await Promise.all([
-      gitExec(['--no-optional-locks', 'branch', '--show-current'], state.cwd),
       gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
       gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
-      gitExec(['--no-optional-locks', 'branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], state.cwd),
-      gitExec(['--no-optional-locks', 'branch', '-r', '--format=%(refname:short)'], state.cwd),
+      gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
       gitExec(['--no-optional-locks', 'remote'], state.cwd),
       gitWorktrees(state.cwd),
       gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', 'user.name'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', 'user.email'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', '--local', 'user.name'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', '--local', 'user.email'], state.cwd),
+      gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
+      gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
       gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
     ]);
 
   if (!state.spinnerActive) state.error = null;
 
-  // branch
-  state.branch = branchRaw.trim() || 'HEAD (detached)';
+  // refs 파싱: branches + remoteBranches + 현재 브랜치 한 번에
+  let currentBranch = '';
+  const branches = [];
+  const remoteBranches = [];
+  if (refsRaw.trim()) {
+    for (const line of refsRaw.split('\n')) {
+      if (!line) continue;
+      const parts = line.split('\t');
+      const headMark = parts[0] || '';
+      const refname = parts[1] || '';
+      const upstream = parts[2] || '';
+      if (refname.startsWith('refs/heads/')) {
+        const name = refname.substring('refs/heads/'.length);
+        const isCurrent = headMark === '*';
+        if (isCurrent) currentBranch = name;
+        branches.push({ name, isCurrent, upstream });
+      } else if (refname.startsWith('refs/remotes/')) {
+        const name = refname.substring('refs/remotes/'.length);
+        if (name.includes('/HEAD')) continue;
+        remoteBranches.push(name);
+      }
+    }
+  }
+  state.branch = currentBranch || 'HEAD (detached)';
 
   // status 파싱
   const staged = [], unstaged = [], untracked = [], ignored = [];
@@ -562,7 +585,7 @@ async function refreshAsync(options = {}) {
 
   state._prevFileList = buildFileList();
   state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
-  sendRpcNotify('set_title', { title: formatWindowTitle() });
+  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
 
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
@@ -570,19 +593,12 @@ async function refreshAsync(options = {}) {
     return { hash: parts[0], shortHash: parts[1], ref: parts[2], message: parts[3] || '' };
   }) : [];
 
-  // branches
-  state.branches = branchesRaw.trim() ? branchesRaw.trim().split('\n').map(line => {
-    const parts = line.split('\t');
-    return { name: parts[0], isCurrent: parts[1] === '*', upstream: parts[2] || '' };
-  }) : [];
+  // branches / remoteBranches — refs 파싱 결과 사용
+  state.branches = branches;
+  state.remoteBranches = remoteBranches;
 
-  // remotes
+  // remotes (remote 이름 목록 — 브랜치 없이 remote만 있을 수 있어 별도 조회)
   state.remotes = remoteNamesRaw.trim() ? remoteNamesRaw.trim().split('\n').filter(Boolean) : [];
-
-  // remoteBranches
-  state.remoteBranches = remotesRaw.trim()
-    ? remotesRaw.trim().split('\n').filter(b => !b.includes('/HEAD'))
-    : [];
 
   state.worktrees = worktrees;
 
@@ -602,19 +618,19 @@ async function refreshAsync(options = {}) {
 
     // 모든 상태 파일을 병렬로 확인
     const [rmStat, raStat, mhStat, chStat, rvStat] = await Promise.all([
-      hecaton.fs_stat({ path: rebaseMerge }),
-      hecaton.fs_stat({ path: rebaseApply }),
-      hecaton.fs_stat({ path: mergeHead }),
-      hecaton.fs_stat({ path: cherryHead }),
-      hecaton.fs_stat({ path: revertHead }),
+      hecaton.fs.stat({ path: rebaseMerge }),
+      hecaton.fs.stat({ path: rebaseApply }),
+      hecaton.fs.stat({ path: mergeHead }),
+      hecaton.fs.stat({ path: cherryHead }),
+      hecaton.fs.stat({ path: revertHead }),
     ]);
 
-    if (rmStat && rmStat.exists && rmStat.isDir) {
+    if (rmStat && rmStat.exists && rmStat.is_dir) {
       const [stepRes, totalRes, headNameRes, ontoRes] = await Promise.all([
-        hecaton.fs_read_file({ path: rebaseMerge + sep + 'msgnum' }),
-        hecaton.fs_read_file({ path: rebaseMerge + sep + 'end' }),
-        hecaton.fs_read_file({ path: rebaseMerge + sep + 'head-name' }),
-        hecaton.fs_read_file({ path: rebaseMerge + sep + 'onto' }),
+        hecaton.fs.read_file({ path: rebaseMerge + sep + 'msgnum' }),
+        hecaton.fs.read_file({ path: rebaseMerge + sep + 'end' }),
+        hecaton.fs.read_file({ path: rebaseMerge + sep + 'head-name' }),
+        hecaton.fs.read_file({ path: rebaseMerge + sep + 'onto' }),
       ]);
       const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
       const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
@@ -622,10 +638,10 @@ async function refreshAsync(options = {}) {
       if (headName.startsWith('refs/heads/')) headName = headName.substring('refs/heads/'.length);
       const ontoHash = (ontoRes && ontoRes.content) ? ontoRes.content.trim().substring(0, 7) : '';
       state.operationState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total), headName, ontoHash };
-    } else if (raStat && raStat.exists && raStat.isDir) {
+    } else if (raStat && raStat.exists && raStat.is_dir) {
       const [stepRes, totalRes] = await Promise.all([
-        hecaton.fs_read_file({ path: rebaseApply + sep + 'next' }),
-        hecaton.fs_read_file({ path: rebaseApply + sep + 'last' }),
+        hecaton.fs.read_file({ path: rebaseApply + sep + 'next' }),
+        hecaton.fs.read_file({ path: rebaseApply + sep + 'last' }),
       ]);
       const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
       const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
@@ -660,7 +676,7 @@ async function refreshAsync(options = {}) {
     msgPaths.push(base + sep + 'COMMIT_EDITMSG');
     for (const p of msgPaths) {
       try {
-        const res = await hecaton.fs_read_file({ path: p });
+        const res = await hecaton.fs.read_file({ path: p });
         if (res && res.content && res.content.trim()) {
           state.rebaseMessage = res.content.replace(/\r\n/g, '\n').trim();
           break;
@@ -677,10 +693,27 @@ async function refreshAsync(options = {}) {
     }
   }
 
-  state.committerName = nameRaw.trim();
-  state.committerEmail = emailRaw.trim();
-  state.committerNameIsLocal = !!localNameRaw.trim();
-  state.committerEmailIsLocal = !!localEmailRaw.trim();
+  // config --get-regexp 출력: "user.name VALUE\nuser.email VALUE\n..."
+  const parseUserCfg = (raw) => {
+    const out = { name: '', email: '' };
+    if (!raw) return out;
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      const sp = line.indexOf(' ');
+      if (sp === -1) continue;
+      const key = line.substring(0, sp);
+      const val = line.substring(sp + 1);
+      if (key === 'user.name') out.name = val.trim();
+      else if (key === 'user.email') out.email = val.trim();
+    }
+    return out;
+  };
+  const userCfg = parseUserCfg(userCfgRaw);
+  const localUserCfg = parseUserCfg(localUserCfgRaw);
+  state.committerName = userCfg.name;
+  state.committerEmail = userCfg.email;
+  state.committerNameIsLocal = !!localUserCfg.name;
+  state.committerEmailIsLocal = !!localUserCfg.email;
 
   // ahead/behind
   const abParts = aheadBehindRaw.trim().split(/\s+/);

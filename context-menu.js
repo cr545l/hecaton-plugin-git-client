@@ -269,7 +269,7 @@ async function handleContextMenuAction(actionId) {
   if (actionId === 'tab_change_repo') {
     // 기존 워처 정지 (폴링 RPC가 pick_folder 중 큐를 채우는 것 방지)
     if (ui.stopGitWatcher) ui.stopGitWatcher();
-    const result = await hecaton.pick_folder({ title: 'Select Git Repository', defaultPath: state.cwd || '' });
+    const result = await hecaton.picker.folder({ title: 'Select Git Repository', default_path: state.cwd || '' });
     if (result && result.path) {
       state.cwd = result.path;
       state.isGitRepo = false;
@@ -303,7 +303,7 @@ async function handleContextMenuAction(actionId) {
   if (actionId.startsWith('remote_')) {
     switch (actionId) {
       case 'remote_add':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'input',
           title: 'Add Remote',
           message: 'Enter remote name:',
@@ -315,17 +315,17 @@ async function handleContextMenuAction(actionId) {
       case 'remote_sort_alpha':
         ui.remoteSortMode = 'alpha';
         render();
-        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
+        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
         break;
       case 'remote_sort_alpha_desc':
         ui.remoteSortMode = 'alpha_desc';
         render();
-        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
+        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
         break;
       case 'remote_sort_recent':
         ui.remoteSortMode = 'recent';
         render();
-        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
+        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
         break;
     }
     return;
@@ -396,9 +396,17 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
           if (files.length > 0) {
-            applyStageToState(files);
-            render();
-            gitStageMultiple(state.cwd, files);
+            startSpinner('Staging...');
+            const ok = await gitStageMultiple(state.cwd, files);
+            if (!ok) {
+              stopSpinner();
+              showError('Stage failed');
+              render();
+            } else {
+              await refreshAsync({ statusOnly: true });
+              stopSpinner();
+              render();
+            }
           }
         }
         break;
@@ -406,15 +414,23 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
           if (files.length > 0) {
-            applyUnstageToState(files);
-            render();
-            gitUnstageMultiple(state.cwd, files);
+            startSpinner('Unstaging...');
+            const ok = await gitUnstageMultiple(state.cwd, files);
+            if (!ok) {
+              stopSpinner();
+              showError('Unstage failed');
+              render();
+            } else {
+              await refreshAsync({ statusOnly: true });
+              stopSpinner();
+              render();
+            }
           }
         }
         break;
       case 'file_discard': {
         const count = fileItems.length;
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: 'Discard Changes',
           message: 'Discard changes in ' + count + ' file(s)?\n\nThis cannot be undone.',
@@ -455,11 +471,18 @@ async function handleContextMenuAction(actionId) {
       }
       case 'file_stage_all': {
         const allFiles = [...state.unstaged.map(f => f.file), ...state.untracked.map(f => f.file)];
-        if (allFiles.length > 0) {
-          applyStageToState(allFiles);
+        if (allFiles.length === 0) break;
+        startSpinner('Staging all...');
+        const ok = await gitStageAll(state.cwd);
+        if (!ok) {
+          stopSpinner();
+          showError('Stage all failed');
+          render();
+        } else {
+          await refreshAsync({ statusOnly: true });
+          stopSpinner();
           render();
         }
-        gitStageAll(state.cwd);
         break;
       }
       case 'file_ignore_name': {
@@ -550,7 +573,7 @@ async function handleContextMenuAction(actionId) {
       }
       case 'file_open_explorer': {
         const dir = fullPath.substring(0, fullPath.replace(/\\/g, '/').lastIndexOf('/')) || state.cwd;
-        sendRpc('open_plugin_overlay', { plugin_id: 'explorer', params: { path: dir } });
+        sendRpc('overlay.open', { plugin_id: 'explorer', params: { path: dir } });
         break;
       }
     }
@@ -576,7 +599,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'remotebranch_new_branch':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'input',
           title: 'New Branch',
           message: 'Enter branch name:',
@@ -637,7 +660,7 @@ async function handleContextMenuAction(actionId) {
         });
         break;
       case 'branch_new_branch':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'input',
           title: 'New Branch',
           message: 'Enter branch name:',
@@ -648,7 +671,7 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_new_tag':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'input',
           title: 'New Tag',
           message: 'Enter tag name:',
@@ -659,7 +682,7 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_rename':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'input',
           title: 'Rename Branch',
           message: 'Enter new name:',
@@ -670,7 +693,7 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_delete':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: 'Delete Branch',
           message: "Delete branch '" + branchName + "'?",
@@ -695,7 +718,7 @@ async function handleContextMenuAction(actionId) {
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = branchName;
-          sendRpc('show_dialog', {
+          sendRpc('dialog.show', {
             type: 'message',
             title: 'Rebase',
             message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
@@ -746,7 +769,7 @@ async function handleContextMenuAction(actionId) {
     switch (actionId) {
       case 'stash_apply': {
         const displayRef = ref + (stashMessage ? '  ' + stashMessage : '');
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: 'Apply Stash',
           message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
@@ -761,7 +784,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'stash_drop': {
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: 'Delete Stash',
           message: 'Delete ' + ref + (stashMessage ? ' (' + stashMessage + ')' : '') + '?\n\nThis cannot be undone.',
@@ -775,7 +798,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'stash_rename':
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'input',
           title: 'Rename Stash',
           message: 'Enter new name for stash:',
@@ -841,7 +864,7 @@ async function handleContextMenuAction(actionId) {
 
   switch (actionId) {
     case 'new_branch':
-      sendRpc('show_dialog', {
+      sendRpc('dialog.show', {
         type: 'input',
         title: 'New Branch',
         message: 'Enter branch name:',
@@ -852,7 +875,7 @@ async function handleContextMenuAction(actionId) {
       state.pendingDialogTarget = hash;
       break;
     case 'new_tag':
-      sendRpc('show_dialog', {
+      sendRpc('dialog.show', {
         type: 'input',
         title: 'New Tag',
         message: 'Enter tag name:',
@@ -870,7 +893,7 @@ async function handleContextMenuAction(actionId) {
     case 'rebase': {
       if (state.staged.length > 0 || state.unstaged.length > 0) {
         state.pendingRebaseRef = hash;
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: 'Rebase',
           message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
@@ -887,7 +910,7 @@ async function handleContextMenuAction(actionId) {
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = hash;
-          sendRpc('show_dialog', {
+          sendRpc('dialog.show', {
             type: 'message',
             title: 'Rebase',
             message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
@@ -906,7 +929,7 @@ async function handleContextMenuAction(actionId) {
           if (state.rightView === 'log') refreshLog();
           if (err && isStaleRebaseError(err)) {
             state.pendingRebaseRef = hash;
-            sendRpc('show_dialog', {
+            sendRpc('dialog.show', {
               type: 'message',
               title: 'Rebase',
               message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
@@ -931,7 +954,7 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'reset': {
-      sendRpc('show_dialog', {
+      sendRpc('dialog.show', {
         type: 'message',
         title: 'Reset',
         message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\nThis will discard commits. This cannot be undone.",
@@ -945,7 +968,7 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'checkout': {
-      sendRpc('show_dialog', {
+      sendRpc('dialog.show', {
         type: 'message',
         title: 'Checkout Commit',
         message: 'Checkout ' + hash.substring(0, 8) + "?\n\nThis will put you in 'detached HEAD' state.",
@@ -994,7 +1017,7 @@ async function handleContextMenuAction(actionId) {
 }
 
 async function handleDialogResult(params) {
-  const buttonId = params && params.buttonId;
+  const buttonId = params && params.button_id;
 
   // Name input dialog results (new-branch, new-tag, rename-stash, rename-branch, new-remote, delete-branch)
   if (state.pendingDialogAction) {
@@ -1089,7 +1112,7 @@ async function handleDialogResult(params) {
         showError('Remote name cannot be empty');
         return;
       }
-      sendRpc('show_dialog', {
+      sendRpc('dialog.show', {
         type: 'input',
         title: 'Add Remote',
         message: 'Enter URL for \'' + remoteName + '\':',
@@ -1231,7 +1254,7 @@ async function handleDialogResult(params) {
       if (state.rightView === 'log') refreshLog();
       if (err && isStaleRebaseError(err)) {
         state.pendingRebaseRef = ref;
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: 'Rebase',
           message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
@@ -1349,7 +1372,7 @@ async function afterGitOp(err, opName, refreshOpts = {}) {
 
 function showError(msg) {
   state.error = null;
-  sendRpc('show_dialog', {
+  sendRpc('dialog.show', {
     type: 'message',
     title: 'Error',
     message: msg,
@@ -1371,7 +1394,7 @@ function isBranchNotFullyMergedError(err) {
 }
 
 function showForceDeleteBranchDialog(branchName, err) {
-  sendRpc('show_dialog', {
+  sendRpc('dialog.show', {
     type: 'message',
     title: 'Delete Branch',
     message: "Branch '" + branchName + "' is not fully merged into the current branch.\n\nForce delete it anyway?\n\n" + err,
@@ -1386,7 +1409,7 @@ function showForceDeleteBranchDialog(branchName, err) {
 }
 
 function copyToClipboard(text) {
-  sendRpcNotify('write_clipboard', { text });
+  sendRpcNotify('clipboard.write', { text });
 }
 
 async function openExternal(fullPath) {
@@ -1399,7 +1422,7 @@ async function openExternal(fullPath) {
     } else {
       program = 'xdg-open'; args = [fullPath];
     }
-    const r = await hecaton.exec_process({ program, args, timeout: 5000 });
+    const r = await hecaton.process.exec({ program, args, timeout_ms: 5000 });
     if (r && r.ok) return null;
     return (r && r.error) || 'Failed to open file';
   } catch (e) {
@@ -1408,7 +1431,7 @@ async function openExternal(fullPath) {
 }
 
 async function showInExplorer(fullPath) {
-  const result = await sendRpc('show_in_explorer', { path: fullPath });
+  const result = await sendRpc('fs.reveal', { path: fullPath });
   if (!result || !result.success) {
     return 'Failed to show file';
   }

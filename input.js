@@ -37,7 +37,7 @@ function actionToKey(action) {
 
 function showErrorDialog(msg) {
   state.error = null;
-  sendRpc('show_dialog', {
+  sendRpc('dialog.show', {
     type: 'message',
     title: 'Error',
     message: msg,
@@ -315,11 +315,18 @@ async function handleKey(key) {
           .filter(item => item && item.type !== 'staged')
           .map(item => item.file);
         if (filesToStage.length > 0) {
-          // 즉시 state 업데이트 후 백그라운드로 git add 실행
           state.selectedFiles.clear();
-          applyStageToState(filesToStage);
-          render();
-          gitStageMultiple(state.cwd, filesToStage);
+          startSpinner('Staging...');
+          const ok = await gitStageMultiple(state.cwd, filesToStage);
+          if (!ok) {
+            stopSpinner();
+            showErrorDialog('Stage failed');
+            render();
+          } else {
+            await refreshAsync({ statusOnly: true });
+            stopSpinner();
+            render();
+          }
         }
       }
       break;
@@ -336,11 +343,18 @@ async function handleKey(key) {
           .filter(item => item && item.type === 'staged')
           .map(item => item.file);
         if (filesToUnstage.length > 0) {
-          // 즉시 state 업데이트 후 백그라운드로 git restore --staged 실행
           state.selectedFiles.clear();
-          applyUnstageToState(filesToUnstage);
-          render();
-          gitUnstageMultiple(state.cwd, filesToUnstage);
+          startSpinner('Unstaging...');
+          const ok = await gitUnstageMultiple(state.cwd, filesToUnstage);
+          if (!ok) {
+            stopSpinner();
+            showErrorDialog('Unstage failed');
+            render();
+          } else {
+            await refreshAsync({ statusOnly: true });
+            stopSpinner();
+            render();
+          }
         }
       }
       break;
@@ -415,7 +429,7 @@ async function handleKey(key) {
         ];
         if (op.type !== 'merge') buttons.push({ id: 'skip', label: 'Skip' });
         buttons.push({ id: 'cancel', label: 'Cancel' });
-        sendRpc('show_dialog', {
+        sendRpc('dialog.show', {
           type: 'message',
           title: typeLabel,
           message: 'Choose action:',
@@ -431,7 +445,7 @@ async function handleKey(key) {
         }
         if (state.staged.length > 0 || state.unstaged.length > 0) {
           state.pendingRebaseRef = logItem.ref;
-          sendRpc('show_dialog', {
+          sendRpc('dialog.show', {
             type: 'message',
             title: 'Rebase',
             message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
@@ -448,7 +462,7 @@ async function handleKey(key) {
               ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
               : '';
             state.pendingRebaseRef = logItem.ref;
-            sendRpc('show_dialog', {
+            sendRpc('dialog.show', {
               type: 'message',
               title: 'Rebase',
               message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
@@ -467,7 +481,7 @@ async function handleKey(key) {
             if (state.rightView === 'log') refreshLog();
             if (err && isStaleRebaseError(err)) {
               state.pendingRebaseRef = logItem.ref;
-              sendRpc('show_dialog', {
+              sendRpc('dialog.show', {
                 type: 'message',
                 title: 'Rebase',
                 message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
@@ -517,7 +531,7 @@ async function handleKey(key) {
     case 'q':
     case 'Q': {
       cleanup();
-      sendRpcNotify('close');
+      sendRpcNotify('window.close');
       break;
     }
   }
@@ -544,7 +558,7 @@ function handleCommitInput(key) {
   // Ctrl+V — Paste from clipboard
   if (key === '\x16') {
     (async () => {
-      const result = await sendRpc('read_clipboard');
+      const result = await sendRpc('clipboard.read');
       if (result && result.text) {
         const clean = result.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + clean + state.commitMsg.substring(state.commitCursor);
@@ -614,17 +628,18 @@ function handleCommitInput(key) {
       })();
     } else {
       startSpinner('Committing...');
-      gitCommitAsync(state.cwd, state.commitMsg).then(err => {
-        stopSpinner();
+      gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
         if (err) {
+          stopSpinner();
           showErrorDialog(err);
-        } else {
-          state.commitMsg = '';
-          state.commitCursor = 0;
-          // commit 성공 → staged 전부 비움 (git status 호출 없이)
-          touchUserRefreshTime();
-          state.staged = [];
+          render();
+          return;
         }
+        state.commitMsg = '';
+        state.commitCursor = 0;
+        // commit 성공 후 실제 state는 refreshAsync로만 반영 — 낙관적 업데이트 금지
+        await refreshAsync();
+        stopSpinner();
         render();
       });
     }
@@ -785,7 +800,7 @@ async function handleNameInput(key) {
   // Ctrl+V — Paste from clipboard
   if (key === '\x16') {
     (async () => {
-      const result = await sendRpc('read_clipboard');
+      const result = await sendRpc('clipboard.read');
       if (result && result.text) {
         state.inputBuffer += result.text.replace(/[\r\n]/g, '');
         render();
@@ -1445,7 +1460,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'git-stash') {
               state.pendingStash = true;
-              sendRpc('show_dialog', {
+              sendRpc('dialog.show', {
                 type: 'message',
                 title: 'Stash',
                 message: 'Stash changes?',
@@ -1498,7 +1513,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'committer-name') {
               state.pendingCommitterEdit = 'name';
-              sendRpc('show_dialog', {
+              sendRpc('dialog.show', {
                 type: 'input',
                 title: 'Committer Name',
                 message: 'Enter name for local git commits:',
@@ -1511,7 +1526,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'committer-email') {
               state.pendingCommitterEdit = 'email';
-              sendRpc('show_dialog', {
+              sendRpc('dialog.show', {
                 type: 'input',
                 title: 'Committer Email',
                 message: 'Enter email for local git commits:',
@@ -1706,7 +1721,7 @@ async function handleMouseData(data) {
                 const stashEntry = state.stashes.find(s => s.ref === entry.ref);
                 const stashMessage = stashEntry ? stashEntry.message : '';
                 const displayRef = entry.ref + (stashMessage ? '  ' + stashMessage : '');
-                sendRpc('show_dialog', {
+                sendRpc('dialog.show', {
                   type: 'message',
                   title: 'Apply Stash',
                   message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
@@ -1871,15 +1886,19 @@ async function handleMouseData(data) {
                     const label = isStage ? 'Staging all' : 'Unstaging all';
                     startSpinner(`${label}...`);
                     (async () => {
-                      if (isStage) {
-                        await gitStageMultiple(state.cwd, files);
-                      } else {
-                        await gitUnstageMultiple(state.cwd, files);
-                      }
+                      const ok = isStage
+                        ? await gitStageMultiple(state.cwd, files)
+                        : await gitUnstageMultiple(state.cwd, files);
                       state.selectedFiles.clear();
-                      await refreshAsync();
-                      stopSpinner();
-                      render();
+                      if (!ok) {
+                        stopSpinner();
+                        showErrorDialog(label + ' failed');
+                        render();
+                      } else {
+                        await refreshAsync({ statusOnly: true });
+                        stopSpinner();
+                        render();
+                      }
                     })();
                   }
                   headerHandled = true;
@@ -1996,7 +2015,7 @@ async function handleMouseData(data) {
               const relCol = cx - rightStart;
               for (const zone of ui.detailCopyZones) {
                 if (bodyRowIdx === zone.lineIdx && relCol >= zone.colStart && relCol <= zone.colEnd) {
-                  sendRpc('write_clipboard', { text: zone.text });
+                  sendRpc('clipboard.write', { text: zone.text });
                   startSpinner('Copied: ' + zone.text);
                   setTimeout(() => { stopSpinner(); render(); }, 1000);
                   state.focusPanel = 'diff';
@@ -2085,7 +2104,7 @@ function handleContextMenuRequest(col, row) {
           ui.contextMenuFileItem = null;
           ui.contextMenuFileItems = [];
           ui.contextMenuFilePath = '';
-          sendRpc('show_context_menu', { items: buildTabContextMenuItems() });
+          sendRpc('menu.show', { items: buildTabContextMenuItems() });
           render();
           return;
         }
@@ -2102,7 +2121,7 @@ function handleContextMenuRequest(col, row) {
       if (entry && entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) {
         ui.leftPanelActiveBranch = entry.branch;
         ui.contextMenuRemoteBranch = entry.branch;
-        sendRpc('show_context_menu', { items: buildRemoteBranchContextMenuItems(entry.branch) });
+        sendRpc('menu.show', { items: buildRemoteBranchContextMenuItems(entry.branch) });
         render();
         return;
       }
@@ -2111,7 +2130,7 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuFileItem = null;
         ui.contextMenuFileItems = [];
         ui.contextMenuFilePath = '';
-        sendRpc('show_context_menu', { items: buildRemotesContextMenuItems() });
+        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
         render();
         return;
       }
@@ -2120,14 +2139,14 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuStashRef = entry.ref;
         const stashEntry = state.stashes.find(s => s.ref === entry.ref);
         const stashMessage = stashEntry ? stashEntry.message : '';
-        sendRpc('show_context_menu', { items: buildStashContextMenuItems(entry.ref, stashMessage) });
+        sendRpc('menu.show', { items: buildStashContextMenuItems(entry.ref, stashMessage) });
         render();
         return;
       }
       if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
         ui.leftPanelActiveBranch = entry.branch;
         ui.contextMenuBranch = entry.branch;
-        sendRpc('show_context_menu', { items: buildBranchContextMenuItems(entry.branch) });
+        sendRpc('menu.show', { items: buildBranchContextMenuItems(entry.branch) });
         render();
         return;
       }
@@ -2156,9 +2175,9 @@ function handleContextMenuRequest(col, row) {
       ui.contextMenuStashRef = stashRef;
       const stashEntry = state.stashes.find(s => s.ref === stashRef);
       const stashMessage = stashEntry ? stashEntry.message : '';
-      sendRpc('show_context_menu', { items: buildStashContextMenuItems(stashRef, stashMessage) });
+      sendRpc('menu.show', { items: buildStashContextMenuItems(stashRef, stashMessage) });
     } else {
-      sendRpc('show_context_menu', { items: buildHistoryContextMenuItems() });
+      sendRpc('menu.show', { items: buildHistoryContextMenuItems() });
     }
     render();
     return;
@@ -2188,7 +2207,7 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuFileItem = item;
         ui.contextMenuFileItems = targets;
         ui.contextMenuFilePath = joinPath(state.cwd, item.file);
-        sendRpc('show_context_menu', { items: buildFileContextMenuItems(item, targets) });
+        sendRpc('menu.show', { items: buildFileContextMenuItems(item, targets) });
       }
       render();
       return;

@@ -38,11 +38,11 @@ async function main() {
   process.stdin.resume();
   process.stdin.setEncoding('utf-8');
 
-  hecaton.on('resize', (params) => {
+  hecaton.on('window_resized', (params) => {
     ui.termCols = params.cols || ui.termCols;
     ui.termRows = params.rows || ui.termRows;
-    const newCellW = params.cellWidth ? Math.round(params.cellWidth) : ui.cellW;
-    const newCellH = params.cellHeight ? Math.round(params.cellHeight) : ui.cellH;
+    const newCellW = params.cell_width ? Math.round(params.cell_width) : ui.cellW;
+    const newCellH = params.cell_height ? Math.round(params.cell_height) : ui.cellH;
     if (newCellW !== ui.cellW || newCellH !== ui.cellH) {
       ui.cellW = newCellW;
       ui.cellH = newCellH;
@@ -50,21 +50,21 @@ async function main() {
     }
     render();
   });
-  hecaton.on('minimize', () => {
+  hecaton.on('window_minimized', () => {
     state.minimized = true;
     render();
   });
-  hecaton.on('restore', () => {
+  hecaton.on('window_restored', () => {
     state.minimized = false;
     refreshAsync().then(() => render());
   });
-  hecaton.on('context_menu_request', (params) => {
+  hecaton.on('menu_requested', (params) => {
     handleContextMenuRequest(params.col, params.row);
   });
-  hecaton.on('context_menu_action', (params) => {
+  hecaton.on('menu_activated', (params) => {
     handleContextMenuAction(params.id);
   });
-  hecaton.on('dialog_result', (params) => {
+  hecaton.on('dialog_resolved', (params) => {
     handleDialogResult(params);
   });
 
@@ -90,7 +90,7 @@ async function main() {
   if (params && params.path) {
     state.cwd = params.path;
   } else {
-    const cwdResult = await sendRpc('get_cwd');
+    const cwdResult = await sendRpc('terminal.get_cwd');
     if (cwdResult && cwdResult.cwd) {
       state.cwd = cwdResult.cwd;
     } else {
@@ -100,10 +100,10 @@ async function main() {
 
   // Get initial cell size from host
   try {
-    const cellSizeResult = await sendRpc('get_cell_size');
-    if (cellSizeResult && cellSizeResult.cellWidth && cellSizeResult.cellHeight) {
-      ui.cellW = Math.round(cellSizeResult.cellWidth);
-      ui.cellH = Math.round(cellSizeResult.cellHeight);
+    const cellSizeResult = await sendRpc('window.get_cell_size');
+    if (cellSizeResult && cellSizeResult.cell_width && cellSizeResult.cell_height) {
+      ui.cellW = Math.round(cellSizeResult.cell_width);
+      ui.cellH = Math.round(cellSizeResult.cell_height);
     }
   } catch { /* ignore — use defaults */ }
 
@@ -155,8 +155,8 @@ async function setupGitWatcher() {
   // Worktree인 경우 .git은 파일이므로 실제 git 디렉토리를 찾아야 함
   let gitDir = state.cwd + sep + '.git';
   try {
-    const gitDirResult = await hecaton.exec_process({
-      program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout: 3000
+    const gitDirResult = await hecaton.process.exec({
+      program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout_ms: 3000
     });
     if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
       const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
@@ -177,8 +177,8 @@ async function setupGitWatcher() {
 
   async function statMtime(filePath) {
     try {
-      const r = await hecaton.fs_stat({ path: filePath });
-      return (r && r.exists && r.modifiedTime) ? r.modifiedTime : 0;
+      const r = await hecaton.fs.stat({ path: filePath });
+      return (r && r.exists && r.mtime_ms) ? r.mtime_ms : 0;
     } catch { return 0; }
   }
 
@@ -204,8 +204,8 @@ async function setupGitWatcher() {
     if (state.mode !== 'normal') return;
     statusPolling = true;
     try {
-      const result = await hecaton.exec_process({
-        program: 'git', args: ['--no-optional-locks', 'diff-files', '--name-only'], cwd: state.cwd, timeout: 5000
+      const result = await hecaton.process.exec({
+        program: 'git', args: ['--no-optional-locks', 'diff-files', '--name-only'], cwd: state.cwd, timeout_ms: 5000
       });
       const snapshot = (result && result.ok) ? (result.stdout || '') : '';
       if (snapshot !== lastStatusSnapshot) {

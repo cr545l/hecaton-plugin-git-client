@@ -1,5 +1,20 @@
+function resolveHecatonMethod(method) {
+  const parts = method.split('.');
+  let ctx = hecaton;
+  let parent = hecaton;
+  for (let i = 0; i < parts.length; i++) {
+    parent = ctx;
+    ctx = ctx ? ctx[parts[i]] : undefined;
+    if (ctx === undefined) return null;
+  }
+  if (typeof ctx !== 'function') return null;
+  return ctx.bind(parent);
+}
+
 function sendRpc(method, params = {}) {
-  return hecaton[method](params).then(r => r || null).catch(() => null);
+  const fn = resolveHecatonMethod(method);
+  if (!fn) return Promise.resolve(null);
+  return fn(params).then(r => r || null).catch(() => null);
 }
 
 function sendRpcBatch(calls, timeout) {
@@ -12,7 +27,9 @@ function sendRpcBatch(calls, timeout) {
 }
 
 function sendRpcNotify(method, params = {}) {
-  hecaton[method](params).catch(() => {});
+  const fn = resolveHecatonMethod(method);
+  if (!fn) return;
+  fn(params).catch(() => {});
 }
 
 function handleRpcResponse() {

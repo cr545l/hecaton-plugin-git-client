@@ -5,7 +5,6 @@
   "version": "1.0.0",
   "entry": "main.js",
   "apiVersion": { "major": 1, "minor": 0 },
-  "shortcut": { "key": "G", "mod": "ctrl+shift" },
   "overlay": {
     "mode": "floating",
     "width": "70%",
