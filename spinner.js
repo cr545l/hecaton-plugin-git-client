@@ -34,10 +34,9 @@ function releaseSpinner() {
 }
 
 function updateTitle() {
-  const { sendRpcNotify } = require('./rpc');
   const title = formatWindowTitle();
   if (!title) return;
-  sendRpcNotify('window.set_title', { title });
+  hecaton.window.set_title({ title }).catch(() => null);
 }
 
 function isSpinning() {

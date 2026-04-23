@@ -7,7 +7,6 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
-const { sendRpc, sendRpcNotify } = require('./rpc');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
@@ -37,7 +36,7 @@ function actionToKey(action) {
 
 function showErrorDialog(msg) {
   state.error = null;
-  sendRpc('dialog.show', {
+  hecaton.dialog.show({
     type: 'message',
     title: 'Error',
     message: msg,
@@ -429,7 +428,7 @@ async function handleKey(key) {
         ];
         if (op.type !== 'merge') buttons.push({ id: 'skip', label: 'Skip' });
         buttons.push({ id: 'cancel', label: 'Cancel' });
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: typeLabel,
           message: 'Choose action:',
@@ -445,7 +444,7 @@ async function handleKey(key) {
         }
         if (state.staged.length > 0 || state.unstaged.length > 0) {
           state.pendingRebaseRef = logItem.ref;
-          sendRpc('dialog.show', {
+          hecaton.dialog.show({
             type: 'message',
             title: 'Rebase',
             message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
@@ -462,7 +461,7 @@ async function handleKey(key) {
               ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
               : '';
             state.pendingRebaseRef = logItem.ref;
-            sendRpc('dialog.show', {
+            hecaton.dialog.show({
               type: 'message',
               title: 'Rebase',
               message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
@@ -481,7 +480,7 @@ async function handleKey(key) {
             if (state.rightView === 'log') refreshLog();
             if (err && isStaleRebaseError(err)) {
               state.pendingRebaseRef = logItem.ref;
-              sendRpc('dialog.show', {
+              hecaton.dialog.show({
                 type: 'message',
                 title: 'Rebase',
                 message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
@@ -531,7 +530,7 @@ async function handleKey(key) {
     case 'q':
     case 'Q': {
       cleanup();
-      sendRpcNotify('window.close');
+      hecaton.window.close().catch(() => null);
       break;
     }
   }
@@ -558,7 +557,7 @@ function handleCommitInput(key) {
   // Ctrl+V — Paste from clipboard
   if (key === '\x16') {
     (async () => {
-      const result = await sendRpc('clipboard.read');
+      const result = await hecaton.clipboard.read().catch(() => null);
       if (result && result.text) {
         const clean = result.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + clean + state.commitMsg.substring(state.commitCursor);
@@ -800,7 +799,7 @@ async function handleNameInput(key) {
   // Ctrl+V — Paste from clipboard
   if (key === '\x16') {
     (async () => {
-      const result = await sendRpc('clipboard.read');
+      const result = await hecaton.clipboard.read().catch(() => null);
       if (result && result.text) {
         state.inputBuffer += result.text.replace(/[\r\n]/g, '');
         render();
@@ -1460,7 +1459,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'git-stash') {
               state.pendingStash = true;
-              sendRpc('dialog.show', {
+              hecaton.dialog.show({
                 type: 'message',
                 title: 'Stash',
                 message: 'Stash changes?',
@@ -1513,7 +1512,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'committer-name') {
               state.pendingCommitterEdit = 'name';
-              sendRpc('dialog.show', {
+              hecaton.dialog.show({
                 type: 'input',
                 title: 'Committer Name',
                 message: 'Enter name for local git commits:',
@@ -1526,7 +1525,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'committer-email') {
               state.pendingCommitterEdit = 'email';
-              sendRpc('dialog.show', {
+              hecaton.dialog.show({
                 type: 'input',
                 title: 'Committer Email',
                 message: 'Enter email for local git commits:',
@@ -1721,7 +1720,7 @@ async function handleMouseData(data) {
                 const stashEntry = state.stashes.find(s => s.ref === entry.ref);
                 const stashMessage = stashEntry ? stashEntry.message : '';
                 const displayRef = entry.ref + (stashMessage ? '  ' + stashMessage : '');
-                sendRpc('dialog.show', {
+                hecaton.dialog.show({
                   type: 'message',
                   title: 'Apply Stash',
                   message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
@@ -2015,7 +2014,7 @@ async function handleMouseData(data) {
               const relCol = cx - rightStart;
               for (const zone of ui.detailCopyZones) {
                 if (bodyRowIdx === zone.lineIdx && relCol >= zone.colStart && relCol <= zone.colEnd) {
-                  sendRpc('clipboard.write', { text: zone.text });
+                  hecaton.clipboard.write({ text: zone.text }).catch(() => null);
                   startSpinner('Copied: ' + zone.text);
                   setTimeout(() => { stopSpinner(); render(); }, 1000);
                   state.focusPanel = 'diff';
@@ -2104,7 +2103,7 @@ function handleContextMenuRequest(col, row) {
           ui.contextMenuFileItem = null;
           ui.contextMenuFileItems = [];
           ui.contextMenuFilePath = '';
-          sendRpc('menu.show', { items: buildTabContextMenuItems() });
+          hecaton.menu.show({ items: buildTabContextMenuItems() }).catch(() => null);
           render();
           return;
         }
@@ -2121,7 +2120,7 @@ function handleContextMenuRequest(col, row) {
       if (entry && entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) {
         ui.leftPanelActiveBranch = entry.branch;
         ui.contextMenuRemoteBranch = entry.branch;
-        sendRpc('menu.show', { items: buildRemoteBranchContextMenuItems(entry.branch) });
+        hecaton.menu.show({ items: buildRemoteBranchContextMenuItems(entry.branch) }).catch(() => null);
         render();
         return;
       }
@@ -2130,7 +2129,7 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuFileItem = null;
         ui.contextMenuFileItems = [];
         ui.contextMenuFilePath = '';
-        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
+        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
         render();
         return;
       }
@@ -2139,14 +2138,14 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuStashRef = entry.ref;
         const stashEntry = state.stashes.find(s => s.ref === entry.ref);
         const stashMessage = stashEntry ? stashEntry.message : '';
-        sendRpc('menu.show', { items: buildStashContextMenuItems(entry.ref, stashMessage) });
+        hecaton.menu.show({ items: buildStashContextMenuItems(entry.ref, stashMessage) }).catch(() => null);
         render();
         return;
       }
       if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
         ui.leftPanelActiveBranch = entry.branch;
         ui.contextMenuBranch = entry.branch;
-        sendRpc('menu.show', { items: buildBranchContextMenuItems(entry.branch) });
+        hecaton.menu.show({ items: buildBranchContextMenuItems(entry.branch) }).catch(() => null);
         render();
         return;
       }
@@ -2175,9 +2174,9 @@ function handleContextMenuRequest(col, row) {
       ui.contextMenuStashRef = stashRef;
       const stashEntry = state.stashes.find(s => s.ref === stashRef);
       const stashMessage = stashEntry ? stashEntry.message : '';
-      sendRpc('menu.show', { items: buildStashContextMenuItems(stashRef, stashMessage) });
+      hecaton.menu.show({ items: buildStashContextMenuItems(stashRef, stashMessage) }).catch(() => null);
     } else {
-      sendRpc('menu.show', { items: buildHistoryContextMenuItems() });
+      hecaton.menu.show({ items: buildHistoryContextMenuItems() }).catch(() => null);
     }
     render();
     return;
@@ -2207,7 +2206,7 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuFileItem = item;
         ui.contextMenuFileItems = targets;
         ui.contextMenuFilePath = joinPath(state.cwd, item.file);
-        sendRpc('menu.show', { items: buildFileContextMenuItems(item, targets) });
+        hecaton.menu.show({ items: buildFileContextMenuItems(item, targets) }).catch(() => null);
       }
       render();
       return;

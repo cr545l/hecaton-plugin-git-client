@@ -1,5 +1,4 @@
 const { state, ui } = require('./state');
-const { sendRpc, sendRpcNotify } = require('./rpc');
 function baseName(p) { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return s.substring(s.lastIndexOf('/') + 1); }
 function extName(p) { const b = baseName(p); const i = b.lastIndexOf('.'); return i <= 0 ? '' : b.substring(i); }
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
@@ -303,7 +302,7 @@ async function handleContextMenuAction(actionId) {
   if (actionId.startsWith('remote_')) {
     switch (actionId) {
       case 'remote_add':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'input',
           title: 'Add Remote',
           message: 'Enter remote name:',
@@ -315,17 +314,17 @@ async function handleContextMenuAction(actionId) {
       case 'remote_sort_alpha':
         ui.remoteSortMode = 'alpha';
         render();
-        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
+        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
         break;
       case 'remote_sort_alpha_desc':
         ui.remoteSortMode = 'alpha_desc';
         render();
-        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
+        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
         break;
       case 'remote_sort_recent':
         ui.remoteSortMode = 'recent';
         render();
-        sendRpc('menu.show', { items: buildRemotesContextMenuItems() });
+        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
         break;
     }
     return;
@@ -430,7 +429,7 @@ async function handleContextMenuAction(actionId) {
         break;
       case 'file_discard': {
         const count = fileItems.length;
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: 'Discard Changes',
           message: 'Discard changes in ' + count + ' file(s)?\n\nThis cannot be undone.',
@@ -573,7 +572,7 @@ async function handleContextMenuAction(actionId) {
       }
       case 'file_open_explorer': {
         const dir = fullPath.substring(0, fullPath.replace(/\\/g, '/').lastIndexOf('/')) || state.cwd;
-        sendRpc('overlay.open', { plugin_id: 'explorer', params: { path: dir } });
+        hecaton.overlay.open({ plugin_id: 'explorer', params: { path: dir } }).catch(() => null);
         break;
       }
     }
@@ -599,7 +598,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'remotebranch_new_branch':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'input',
           title: 'New Branch',
           message: 'Enter branch name:',
@@ -660,7 +659,7 @@ async function handleContextMenuAction(actionId) {
         });
         break;
       case 'branch_new_branch':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'input',
           title: 'New Branch',
           message: 'Enter branch name:',
@@ -671,7 +670,7 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_new_tag':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'input',
           title: 'New Tag',
           message: 'Enter tag name:',
@@ -682,7 +681,7 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_rename':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'input',
           title: 'Rename Branch',
           message: 'Enter new name:',
@@ -693,7 +692,7 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_delete':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: 'Delete Branch',
           message: "Delete branch '" + branchName + "'?",
@@ -718,7 +717,7 @@ async function handleContextMenuAction(actionId) {
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = branchName;
-          sendRpc('dialog.show', {
+          hecaton.dialog.show({
             type: 'message',
             title: 'Rebase',
             message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
@@ -769,7 +768,7 @@ async function handleContextMenuAction(actionId) {
     switch (actionId) {
       case 'stash_apply': {
         const displayRef = ref + (stashMessage ? '  ' + stashMessage : '');
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: 'Apply Stash',
           message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
@@ -784,7 +783,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'stash_drop': {
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: 'Delete Stash',
           message: 'Delete ' + ref + (stashMessage ? ' (' + stashMessage + ')' : '') + '?\n\nThis cannot be undone.',
@@ -798,7 +797,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'stash_rename':
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'input',
           title: 'Rename Stash',
           message: 'Enter new name for stash:',
@@ -864,7 +863,7 @@ async function handleContextMenuAction(actionId) {
 
   switch (actionId) {
     case 'new_branch':
-      sendRpc('dialog.show', {
+      hecaton.dialog.show({
         type: 'input',
         title: 'New Branch',
         message: 'Enter branch name:',
@@ -875,7 +874,7 @@ async function handleContextMenuAction(actionId) {
       state.pendingDialogTarget = hash;
       break;
     case 'new_tag':
-      sendRpc('dialog.show', {
+      hecaton.dialog.show({
         type: 'input',
         title: 'New Tag',
         message: 'Enter tag name:',
@@ -893,7 +892,7 @@ async function handleContextMenuAction(actionId) {
     case 'rebase': {
       if (state.staged.length > 0 || state.unstaged.length > 0) {
         state.pendingRebaseRef = hash;
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: 'Rebase',
           message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
@@ -910,7 +909,7 @@ async function handleContextMenuAction(actionId) {
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = hash;
-          sendRpc('dialog.show', {
+          hecaton.dialog.show({
             type: 'message',
             title: 'Rebase',
             message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
@@ -929,7 +928,7 @@ async function handleContextMenuAction(actionId) {
           if (state.rightView === 'log') refreshLog();
           if (err && isStaleRebaseError(err)) {
             state.pendingRebaseRef = hash;
-            sendRpc('dialog.show', {
+            hecaton.dialog.show({
               type: 'message',
               title: 'Rebase',
               message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
@@ -954,7 +953,7 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'reset': {
-      sendRpc('dialog.show', {
+      hecaton.dialog.show({
         type: 'message',
         title: 'Reset',
         message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\nThis will discard commits. This cannot be undone.",
@@ -968,7 +967,7 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'checkout': {
-      sendRpc('dialog.show', {
+      hecaton.dialog.show({
         type: 'message',
         title: 'Checkout Commit',
         message: 'Checkout ' + hash.substring(0, 8) + "?\n\nThis will put you in 'detached HEAD' state.",
@@ -1112,7 +1111,7 @@ async function handleDialogResult(params) {
         showError('Remote name cannot be empty');
         return;
       }
-      sendRpc('dialog.show', {
+      hecaton.dialog.show({
         type: 'input',
         title: 'Add Remote',
         message: 'Enter URL for \'' + remoteName + '\':',
@@ -1254,7 +1253,7 @@ async function handleDialogResult(params) {
       if (state.rightView === 'log') refreshLog();
       if (err && isStaleRebaseError(err)) {
         state.pendingRebaseRef = ref;
-        sendRpc('dialog.show', {
+        hecaton.dialog.show({
           type: 'message',
           title: 'Rebase',
           message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
@@ -1372,7 +1371,7 @@ async function afterGitOp(err, opName, refreshOpts = {}) {
 
 function showError(msg) {
   state.error = null;
-  sendRpc('dialog.show', {
+  hecaton.dialog.show({
     type: 'message',
     title: 'Error',
     message: msg,
@@ -1394,7 +1393,7 @@ function isBranchNotFullyMergedError(err) {
 }
 
 function showForceDeleteBranchDialog(branchName, err) {
-  sendRpc('dialog.show', {
+  hecaton.dialog.show({
     type: 'message',
     title: 'Delete Branch',
     message: "Branch '" + branchName + "' is not fully merged into the current branch.\n\nForce delete it anyway?\n\n" + err,
@@ -1409,7 +1408,7 @@ function showForceDeleteBranchDialog(branchName, err) {
 }
 
 function copyToClipboard(text) {
-  sendRpcNotify('clipboard.write', { text });
+  hecaton.clipboard.write({ text }).catch(() => null);
 }
 
 async function openExternal(fullPath) {
@@ -1431,7 +1430,7 @@ async function openExternal(fullPath) {
 }
 
 async function showInExplorer(fullPath) {
-  const result = await sendRpc('fs.reveal', { path: fullPath });
+  const result = await hecaton.fs.reveal({ path: fullPath }).catch(() => null);
   if (!result || !result.success) {
     return 'Failed to show file';
   }

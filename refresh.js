@@ -10,7 +10,6 @@ const FRESH_TIME_WINDOWS = [
   { label: '90 days', days: 90 },
 ];
 const { calcGraphRows } = require('./graph');
-const { sendRpcNotify } = require('./rpc');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
 const { formatWindowTitle } = require('./title');
 
@@ -266,7 +265,7 @@ function applyStageToState(filePaths) {
     }
   }
   state.untracked = remainUntracked;
-  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
+  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -292,7 +291,7 @@ function applyUnstageToState(filePaths) {
     }
   }
   state.staged = remainStaged;
-  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
+  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -374,7 +373,7 @@ async function refresh() {
   state.ignored = status.ignored;
   remapSelectedFiles();
   clampCursor();
-  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
+  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
   updateDiff();
 }
 
@@ -512,7 +511,7 @@ async function refreshAsync(options = {}) {
 
     state._prevFileList = buildFileList();
     state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
-    sendRpcNotify('window.set_title', { title: formatWindowTitle() });
+    hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
     remapSelectedFiles();
     clampCursor();
     updateDiff();
@@ -585,7 +584,7 @@ async function refreshAsync(options = {}) {
 
   state._prevFileList = buildFileList();
   state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
-  sendRpcNotify('window.set_title', { title: formatWindowTitle() });
+  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
 
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {

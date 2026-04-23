@@ -20,8 +20,6 @@
  */
 
 const { state, ui, init: initState } = require('./state');
-const { sendRpc } = require('./rpc');
-const { handleRpcResponse } = require('./rpc');
 const { refreshAsync, refreshLog, refreshFresh, getLastUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
@@ -90,7 +88,7 @@ async function main() {
   if (params && params.path) {
     state.cwd = params.path;
   } else {
-    const cwdResult = await sendRpc('terminal.get_cwd');
+    const cwdResult = await hecaton.terminal.get_cwd().catch(() => null);
     if (cwdResult && cwdResult.cwd) {
       state.cwd = cwdResult.cwd;
     } else {
@@ -100,7 +98,7 @@ async function main() {
 
   // Get initial cell size from host
   try {
-    const cellSizeResult = await sendRpc('window.get_cell_size');
+    const cellSizeResult = await hecaton.window.get_cell_size().catch(() => null);
     if (cellSizeResult && cellSizeResult.cell_width && cellSizeResult.cell_height) {
       ui.cellW = Math.round(cellSizeResult.cell_width);
       ui.cellH = Math.round(cellSizeResult.cell_height);
