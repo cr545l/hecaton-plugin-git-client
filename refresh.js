@@ -327,6 +327,40 @@ let _cachedUntrackedFlag = '-unormal';
 let _cachedMaxFilesDisplayed = 5000;
 let _guiConfigLoaded = false;
 
+// 메타 데이터 캐시 — .git 내부 mtime fingerprint가 동일하면 재호출 생략.
+// 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees, user.* config(글로벌+로컬), ahead/behind.
+// status는 워킹트리 변경을 잡아야 하므로 항상 새로 호출한다.
+let _metaCache = null;
+let _metaFingerprint = '';
+let _metaCacheCwd = '';
+
+async function computeMetaFingerprint(cwd, gitDir) {
+  if (!gitDir) return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const targets = [
+    gitDir + sep + 'HEAD',
+    gitDir + sep + 'config',
+    gitDir + sep + 'packed-refs',
+    gitDir + sep + 'FETCH_HEAD',
+    gitDir + sep + 'refs',
+    gitDir + sep + 'worktrees',
+    gitDir + sep + 'logs' + sep + 'HEAD',
+  ];
+  const stats = await Promise.all(targets.map(async p => {
+    try {
+      const r = await hecaton.fs.stat({ path: p });
+      return (r && r.exists) ? (r.mtime_ms || 0) : -1;
+    } catch { return -1; }
+  }));
+  return stats.join('|');
+}
+
+function invalidateMetaCache() {
+  _metaCache = null;
+  _metaFingerprint = '';
+  _metaCacheCwd = '';
+}
+
 // 마지막 사용자 refresh 시간 — 폴링 억제용으로 외부에서 참조
 let _lastUserRefreshTime = 0;
 function getLastUserRefreshTime() { return _lastUserRefreshTime; }
@@ -478,10 +512,11 @@ async function refreshAsync(options = {}) {
   }
 
   // ── 전체 refresh ──
-  // 13 → 8~9개로 통합:
-  // - branch --show-current + branch --format + branch -r → for-each-ref 1개
-  // - config user.name/email + --local user.name/email → --get-regexp 2개
-  // - git-dir은 state.gitDir에 캐시되어 있으면 spawn 생략 (preCheck/setupGitWatcher가 채움) → 캐시 시 8개
+  // 평상시 spawn 수:
+  // - status는 항상 호출 (워킹트리 변경 추적)
+  // - 메타(stash/for-each-ref/remote/worktrees/user 2종/ahead-behind) 7개는 fingerprint 캐시 적중 시 재호출 생략
+  // - git-dir은 state.gitDir 캐시 우선 (preCheck/setupGitWatcher가 채움)
+  // → 캐시 적중: 1 spawn (status), 미스: 8 spawn
   const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)';
   const sepLocal = (process.platform === 'win32') ? '\\' : '/';
   const gitDirPromise = state.gitDir
@@ -494,18 +529,41 @@ async function refreshAsync(options = {}) {
         state.gitDir = resolved;
         return resolved;
       });
-  const [statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, gitDir, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
-    await Promise.all([
-      gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
-      gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
-      gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
-      gitExec(['--no-optional-locks', 'remote'], state.cwd),
-      gitWorktrees(state.cwd),
-      gitDirPromise,
-      gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
-      gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
-    ]);
+
+  // git-dir과 fingerprint를 먼저 확정 (메타 캐시 적중 여부 결정)
+  const gitDir = await gitDirPromise;
+  if (_metaCacheCwd && _metaCacheCwd !== state.cwd) invalidateMetaCache();
+  const fingerprint = await computeMetaFingerprint(state.cwd, gitDir);
+  const metaHit = !!_metaCache && fingerprint && fingerprint === _metaFingerprint;
+
+  let statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw;
+  if (metaHit) {
+    statusRaw = await gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000);
+    stashRaw = _metaCache.stashRaw;
+    refsRaw = _metaCache.refsRaw;
+    remoteNamesRaw = _metaCache.remoteNamesRaw;
+    worktrees = _metaCache.worktrees;
+    userCfgRaw = _metaCache.userCfgRaw;
+    localUserCfgRaw = _metaCache.localUserCfgRaw;
+    aheadBehindRaw = _metaCache.aheadBehindRaw;
+  } else {
+    [statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
+      await Promise.all([
+        gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
+        gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
+        gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
+        gitExec(['--no-optional-locks', 'remote'], state.cwd),
+        gitWorktrees(state.cwd),
+        gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
+        gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
+        gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
+      ]);
+    if (fingerprint) {
+      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw };
+      _metaFingerprint = fingerprint;
+      _metaCacheCwd = state.cwd;
+    }
+  }
 
   if (!state.spinnerActive) state.error = null;
 
@@ -928,9 +986,15 @@ function formatDateTime(isoStr) {
   }
 }
 
+// 빠른 커서 이동 시 spawn 큐 누적을 막기 위해 실제 fetch는 80ms debounce.
+// 헤더/스크롤 reset은 즉시 처리해 시각적 즉응을 유지하고, _diffSeq로 out-of-order 결과를 가드한다.
+const DIFF_DEBOUNCE_MS = 80;
+let _diffDebounceTimer = null;
+
 function updateDiff() {
   const item = selectedItem();
   if (!item) {
+    if (_diffDebounceTimer) { clearTimeout(_diffDebounceTimer); _diffDebounceTimer = null; }
     state.diffLines = [];
     state.conflictView = null;
     state.currentDiffFile = null;
@@ -948,37 +1012,43 @@ function updateDiff() {
   }
 
   const seq = ++_diffSeq;
-  if (item.status === 'U') {
-    gitReadConflictFile(state.cwd, item.file).then(conflictView => {
+  if (_diffDebounceTimer) clearTimeout(_diffDebounceTimer);
+  _diffDebounceTimer = setTimeout(() => {
+    _diffDebounceTimer = null;
+    if (_diffSeq !== seq) return;
+
+    if (item.status === 'U') {
+      gitReadConflictFile(state.cwd, item.file).then(conflictView => {
+        if (_diffSeq !== seq) return;
+        state.conflictView = conflictView;
+        state.diffLines = [];
+        if (ui.mergeConflictFile !== item.file) {
+          ui.mergeConflictFile = item.file;
+          ui.mergeChunkCursor = 0;
+          ui.mergeChunkSelections = {};
+        }
+        ensureConflictSelections(conflictView);
+        require('./render').render();
+      });
+      return;
+    }
+
+    state.conflictView = null;
+    let args;
+    if (item.type === 'staged') {
+      args = ['diff', '--cached', '--', item.file];
+    } else if (item.type === 'unstaged') {
+      args = ['diff', '--', item.file];
+    } else {
+      args = ['diff', '--no-index', '--', '/dev/null', item.file];
+    }
+    gitExec(args, state.cwd).then(raw => {
       if (_diffSeq !== seq) return;
-      state.conflictView = conflictView;
-      state.diffLines = [];
-      if (ui.mergeConflictFile !== item.file) {
-        ui.mergeConflictFile = item.file;
-        ui.mergeChunkCursor = 0;
-        ui.mergeChunkSelections = {};
-      }
-      ensureConflictSelections(conflictView);
+      state.conflictView = null;
+      state.diffLines = raw.split('\n');
       require('./render').render();
     });
-    return;
-  }
-
-  state.conflictView = null;
-  let args;
-  if (item.type === 'staged') {
-    args = ['diff', '--cached', '--', item.file];
-  } else if (item.type === 'unstaged') {
-    args = ['diff', '--', item.file];
-  } else {
-    args = ['diff', '--no-index', '--', '/dev/null', item.file];
-  }
-  gitExec(args, state.cwd).then(raw => {
-    if (_diffSeq !== seq) return;
-    state.conflictView = null;
-    state.diffLines = raw.split('\n');
-    require('./render').render();
-  });
+  }, DIFF_DEBOUNCE_MS);
 }
 
 function refreshFresh() {
