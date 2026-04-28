@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal, gitReadConflictFile } = require('./git');
+const { gitExec, unquoteGitPath, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -318,65 +318,6 @@ function remapSelectedFiles() {
   }
 }
 
-async function refresh() {
-  if (!state.cwd) return;
-  // Set pending message before exec_process (may hang)
-  state.error = 'Checking git... cwd: ' + state.cwd;
-  const repoCheck = await gitIsRepo(state.cwd);
-  if (repoCheck === true) {
-    state.isGitRepo = true;
-    state.gitNotFound = false;
-    state.error = null;
-  } else {
-    state.isGitRepo = false;
-    const diag = repoCheck || {};
-    state.gitNotFound = !!diag.notFound;
-    const parts = [state.gitNotFound ? 'git not found' : 'Not a git repository'];
-    parts.push('cwd: ' + state.cwd);
-    if (diag.error) parts.push('error: ' + diag.error);
-    if (diag.stderr) parts.push('stderr: ' + diag.stderr.trim());
-    if (diag.exit_code !== undefined) parts.push('exit: ' + diag.exit_code);
-    state.error = parts.join(' | ');
-  }
-  if (!state.isGitRepo) {
-    state.branch = '';
-    state.worktrees = [];
-    state.staged = [];
-    state.unstaged = [];
-    state.untracked = [];
-    state.ignored = [];
-    state.diffLines = [];
-    state.conflictView = null;
-    state.currentDiffFile = null;
-    return;
-  }
-  if (!state.spinnerActive) state.error = null;
-  state.branch = await gitBranch(state.cwd);
-  state.operationState = await gitOperationState(state.cwd);
-  state.branches = await gitBranches(state.cwd);
-  state.remoteBranches = await gitRemoteBranches(state.cwd);
-  state.remotes = await gitRemotes(state.cwd);
-  state.worktrees = await gitWorktrees(state.cwd);
-  state.stashes = await gitStashRefs(state.cwd);
-  state.committerName = await gitGetConfig(state.cwd, 'user.name');
-  state.committerEmail = await gitGetConfig(state.cwd, 'user.email');
-  state.committerNameIsLocal = !!(await gitGetConfigLocal(state.cwd, 'user.name'));
-  state.committerEmailIsLocal = !!(await gitGetConfigLocal(state.cwd, 'user.email'));
-  const ab = await gitAheadBehind(state.cwd);
-  state.ahead = ab.ahead;
-  state.behind = ab.behind;
-  state._prevFileList = buildFileList();
-  const status = await gitStatus(state.cwd);
-  state.staged = status.staged;
-  state.unstaged = status.unstaged;
-  state.untracked = status.untracked;
-  state.ignored = status.ignored;
-  remapSelectedFiles();
-  clampCursor();
-  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
-  updateDiff();
-}
-
 let _refreshRunning = false;
 let _refreshQueued = false;
 let _refreshQueuedOpts = {};
@@ -438,16 +379,17 @@ async function refreshAsync(options = {}) {
 
   // Pre-check: 이미 git repo로 확인된 상태면 skip (cwd가 바뀌는 경우 isGitRepo를 false로 리셋하는 쪽이 책임짐).
   // 첫 refresh나 repo 미확인 상태에서만 rev-parse 수행 — status/diff 결과로 실제 repo 여부가 다시 검증됨.
+  // is-inside-work-tree와 git-dir을 한 번에 가져와 이후 Promise.all에서 git-dir 호출을 생략한다.
   if (!state.isGitRepo) {
-    // Pre-check: can git run at all? (with diagnostic on failure)
-    // Also verify stdout content — host may return ok:true even on timeout/cancellation
-    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout_ms: 5000 });
+    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir'], cwd: state.cwd, timeout_ms: 5000 });
     console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
-    const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
-    if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
+    const preLines = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').split('\n') : [];
+    const insideWorkTree = (preLines[0] || '').trim();
+    const preGitDir = (preLines[1] || '').trim();
+    if (!preCheck || !preCheck.ok || insideWorkTree !== 'true') {
       state.isGitRepo = false;
       const parts = [];
-      if (preCheck && preCheck.ok && preCheckStdout !== 'true') {
+      if (preCheck && preCheck.ok && insideWorkTree !== 'true') {
         parts.push('Not a git repository');
       } else if (!preCheck) {
         parts.push('exec_process returned null');
@@ -459,11 +401,16 @@ async function refreshAsync(options = {}) {
         if (preCheck.error) parts.push('error: ' + preCheck.error);
         if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
         if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);
-        parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
+        parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');
       }
       state.error = parts.join(' | ');
       state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
       return;
+    }
+    if (preGitDir && !state.gitDir) {
+      const sep = (process.platform === 'win32') ? '\\' : '/';
+      const isAbsolute = preGitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(preGitDir);
+      state.gitDir = isAbsolute ? preGitDir : (state.cwd + sep + preGitDir);
     }
   }
 
@@ -472,15 +419,27 @@ async function refreshAsync(options = {}) {
   if (!state.spinnerActive) state.error = null;
 
   // gui 설정 읽기 — 전체 refresh 시에만 갱신 (거의 변경되지 않으므로 캐싱)
+  // 두 키를 --get-regexp '^gui\.' 한 번의 spawn으로 가져온다
   if (!statusOnly || !_guiConfigLoaded) {
-    const duRaw = await gitExec(['--no-optional-locks', 'config', 'gui.displayuntracked'], state.cwd);
-    const mfRaw = await gitExec(['--no-optional-locks', 'config', 'gui.maxfilesdisplayed'], state.cwd);
+    const guiRaw = await gitExec(['--no-optional-locks', 'config', '--get-regexp', '^gui\\.'], state.cwd);
+    let duVal = '';
+    let mfVal = '';
+    if (guiRaw) {
+      for (const line of guiRaw.split('\n')) {
+        if (!line) continue;
+        const sp = line.indexOf(' ');
+        if (sp === -1) continue;
+        const key = line.substring(0, sp);
+        const val = line.substring(sp + 1).trim();
+        if (key === 'gui.displayuntracked') duVal = val.toLowerCase();
+        else if (key === 'gui.maxfilesdisplayed') mfVal = val;
+      }
+    }
     // gui.displayuntracked (기본: true) — false면 untracked 스캔 건너뜀
-    const duVal = duRaw.trim().toLowerCase();
     const showUntracked = !duVal || duVal === 'true' || duVal === '1' || duVal === 'yes' || duVal === 'on';
     _cachedUntrackedFlag = showUntracked ? '-unormal' : '-uno';
     // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
-    _cachedMaxFilesDisplayed = parseInt(mfRaw.trim()) || 5000;
+    _cachedMaxFilesDisplayed = parseInt(mfVal) || 5000;
     _guiConfigLoaded = true;
   }
   const untrackedFlag = _cachedUntrackedFlag;
@@ -519,18 +478,30 @@ async function refreshAsync(options = {}) {
   }
 
   // ── 전체 refresh ──
-  // 13 → 9개로 통합:
-  // - branch --show-current + branch --format + branch -r → for-each-ref 하나
+  // 13 → 8~9개로 통합:
+  // - branch --show-current + branch --format + branch -r → for-each-ref 1개
   // - config user.name/email + --local user.name/email → --get-regexp 2개
+  // - git-dir은 state.gitDir에 캐시되어 있으면 spawn 생략 (preCheck/setupGitWatcher가 채움) → 캐시 시 8개
   const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)';
-  const [statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, gitDirRaw, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
+  const sepLocal = (process.platform === 'win32') ? '\\' : '/';
+  const gitDirPromise = state.gitDir
+    ? Promise.resolve(state.gitDir)
+    : gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd).then(raw => {
+        const trimmed = raw.trim();
+        if (!trimmed) return '';
+        const isAbsolute = trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed);
+        const resolved = isAbsolute ? trimmed : (state.cwd + sepLocal + trimmed);
+        state.gitDir = resolved;
+        return resolved;
+      });
+  const [statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, gitDir, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
     await Promise.all([
       gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
       gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
       gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
       gitExec(['--no-optional-locks', 'remote'], state.cwd),
       gitWorktrees(state.cwd),
-      gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd),
+      gitDirPromise,
       gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
       gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
       gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
@@ -603,12 +574,10 @@ async function refreshAsync(options = {}) {
 
   // operationState — detect rebase/merge/cherry-pick/revert in progress (병렬화)
   state.operationState = null;
-  const gitDir = gitDirRaw.trim();
   if (gitDir) {
-    const sep = (process.platform === 'win32') ? '\\' : '/';
-    // gitDir may be absolute (worktrees) or relative (.git)
-    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
-    const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
+    const sep = sepLocal;
+    // gitDir is already resolved to an absolute path (cached or by gitDirPromise)
+    const base = gitDir;
     const rebaseMerge = base + sep + 'rebase-merge';
     const rebaseApply = base + sep + 'rebase-apply';
     const mergeHead = base + sep + 'MERGE_HEAD';
@@ -660,9 +629,8 @@ async function refreshAsync(options = {}) {
   const prevRebaseMessage = state.rebaseMessage || '';
   state.rebaseMessage = '';
   if (state.operationState && gitDir) {
-    const sep = (process.platform === 'win32') ? '\\' : '/';
-    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
-    const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
+    const sep = sepLocal;
+    const base = gitDir;
     // Try multiple message sources in priority order
     const msgPaths = [];
     if (state.operationState.type === 'rebase-merge') {
@@ -1124,7 +1092,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  refresh, refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
 };

@@ -1,6 +1,7 @@
 const state = {
   cwd: '',
   isGitRepo: false,
+  gitDir: '',           // cached resolved git-dir absolute path (invalidated on cwd change)
   branch: '',
   staged: [],
   unstaged: [],

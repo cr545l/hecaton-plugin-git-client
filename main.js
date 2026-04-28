@@ -152,18 +152,24 @@ async function setupGitWatcher() {
   // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
   // Worktree인 경우 .git은 파일이므로 실제 git 디렉토리를 찾아야 함
   let gitDir = state.cwd + sep + '.git';
-  try {
-    const gitDirResult = await hecaton.process.exec({
-      program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout_ms: 3000
-    });
-    if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
-      const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
-      if (resolved) {
-        const isAbsolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolved);
-        gitDir = isAbsolute ? resolved : (state.cwd + sep + resolved);
+  // state.gitDir이 이미 캐시되어 있으면 재사용 — refreshAsync가 먼저 채웠을 수 있음
+  if (state.gitDir) {
+    gitDir = state.gitDir;
+  } else {
+    try {
+      const gitDirResult = await hecaton.process.exec({
+        program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout_ms: 3000
+      });
+      if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
+        const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
+        if (resolved) {
+          const isAbsolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolved);
+          gitDir = isAbsolute ? resolved : (state.cwd + sep + resolved);
+          state.gitDir = gitDir;
+        }
       }
-    }
-  } catch { /* fallback to .git */ }
+    } catch { /* fallback to .git */ }
+  }
   const pollTargets = [
     gitDir + sep + 'index',
     gitDir + sep + 'HEAD',
