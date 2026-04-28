@@ -8,9 +8,28 @@ const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
+// Layout 전환 감지 — sixel은 텍스트 redraw로 지워지지 않아 잔상이 남는다.
+// rightView/minimize/패널 collapse/터미널 크기 변화 시점에 한 번 화면을 erase해서
+// 이전 sixel(그래프, 스크롤바)을 강제로 제거한다. 일반 redraw는 그대로 둬 깜빡임을 피한다.
+let _lastLayoutSig = '';
+function computeLayoutSig() {
+  return [
+    state.minimized ? 'mini' : 'norm',
+    state.rightView || 'diff',
+    ui.leftPanelCollapsed ? '1' : '0',
+    ui.middlePanelCollapsed ? '1' : '0',
+    ui.rightPanelCollapsed ? '1' : '0',
+    ui.rightTopCollapsed ? '1' : '0',
+    ui.rightBottomCollapsed ? '1' : '0',
+    ui.termCols,
+    ui.termRows,
+  ].join('|');
+}
+
 function render() {
   if (state.minimized) {
     renderMinimized();
+    _lastLayoutSig = computeLayoutSig();
     return;
   }
 
@@ -23,6 +42,13 @@ function render() {
 
   const buf = [];
   buf.push(ansi.hideCursor + CSI + '?7l');
+
+  // Layout 전환 시 화면 강제 erase — sixel 잔상 제거
+  const layoutSig = computeLayoutSig();
+  if (layoutSig !== _lastLayoutSig) {
+    buf.push(CSI + '2J');
+    _lastLayoutSig = layoutSig;
+  }
 
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
 
