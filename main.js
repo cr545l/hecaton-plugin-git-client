@@ -128,16 +128,78 @@ function stopGitWatcher() {
 ui.stopGitWatcher = stopGitWatcher;
 ui.setupGitWatcher = () => setupGitWatcher();
 
+// cwd당 1회만 시도하기 위한 메모. 같은 저장소를 다시 열어도 추가 spawn은 발생하지 않는다.
+const _gitOptimizationsAppliedFor = new Set();
+
+// status 가속을 위해 core.untrackedCache, core.fsmonitor를 자동 활성화한다.
+// - 이미 사용자가 true/false로 명시한 경우는 건드리지 않는다 (의도 존중).
+// - fsmonitor는 git 2.37+에서만 활성화 (그 이하에서는 동작이 다르다).
+// - 모든 호출은 best-effort. 실패해도 silent.
+async function applyGitOptimizations(cwd) {
+  if (_gitOptimizationsAppliedFor.has(cwd)) return;
+  _gitOptimizationsAppliedFor.add(cwd);
+
+  // core.untrackedCache
+  try {
+    const cur = await hecaton.process.exec({
+      program: 'git', args: ['config', '--local', '--get', 'core.untrackedCache'],
+      cwd, timeout_ms: 3000,
+    });
+    const val = cur && cur.ok ? (cur.stdout || '').replace(/\r\n/g, '\n').trim().toLowerCase() : '';
+    // exit_code != 0 이거나 stdout 비어있으면 미설정 → 자동 활성화
+    if (val !== 'true' && val !== 'false') {
+      await hecaton.process.exec({
+        program: 'git', args: ['config', '--local', 'core.untrackedCache', 'true'],
+        cwd, timeout_ms: 3000,
+      });
+      console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');
+    }
+  } catch { /* ignore */ }
+
+  // core.fsmonitor — git 2.37+ 필요
+  try {
+    const ver = await hecaton.process.exec({
+      program: 'git', args: ['--version'],
+      cwd, timeout_ms: 3000,
+    });
+    const verStr = ver && ver.ok ? (ver.stdout || '').replace(/\r\n/g, '\n').trim() : '';
+    const m = verStr.match(/git version (\d+)\.(\d+)/);
+    if (!m) return;
+    const major = parseInt(m[1], 10);
+    const minor = parseInt(m[2], 10);
+    const supportsFsmonitor = (major > 2) || (major === 2 && minor >= 37);
+    if (!supportsFsmonitor) return;
+
+    const cur = await hecaton.process.exec({
+      program: 'git', args: ['config', '--local', '--get', 'core.fsmonitor'],
+      cwd, timeout_ms: 3000,
+    });
+    const val = cur && cur.ok ? (cur.stdout || '').replace(/\r\n/g, '\n').trim().toLowerCase() : '';
+    // 미설정만 자동 활성화. true/false/외부 hook 경로가 잡혀 있으면 그대로 둔다.
+    if (val !== '' && val !== 'true' && val !== 'false') return;
+    if (val === '') {
+      await hecaton.process.exec({
+        program: 'git', args: ['config', '--local', 'core.fsmonitor', 'true'],
+        cwd, timeout_ms: 3000,
+      });
+      console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');
+    }
+  } catch { /* ignore */ }
+}
+
 async function setupGitWatcher() {
   stopGitWatcher(); // 기존 워처 정리
   if (!state.cwd || !state.isGitRepo) return;
+
+  // 저장소별 1회 자동 활성화 (status 가속). state.isGitRepo 확인 후라 안전.
+  applyGitOptimizations(state.cwd);
 
   let debounceTimer = null;
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
 
   function triggerRefresh() {
-    // 사용자 작업 직후 2초간은 폴링에 의한 중복 refresh 억제
-    if (Date.now() - getLastUserRefreshTime() < 2000) return;
+    // 사용자 작업 직후 5초간은 폴링에 의한 중복 refresh 억제 (액션 연타 시 폴러와의 경합 방지)
+    if (Date.now() - getLastUserRefreshTime() < 5000) return;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       if (state.loading || state.minimized) return;
@@ -199,13 +261,16 @@ async function setupGitWatcher() {
     }
   }, 2000);
 
-  // 워킹 디렉토리 변경 감지 (diff-files로 변경 여부만 확인 — 가볍고 빠름)
+  // 워킹 디렉토리 변경 감지 — 외부 도구의 워킹트리 수정은 .git/index mtime을 안 건드리므로
+  // mtime 폴러로 잡을 수 없다. diff-files로만 감지 가능. spawn이 발생하므로 주기는 idle 부담을 고려해 5초.
   let lastStatusSnapshot = '';
   let statusPolling = false;
   const statusPollInterval = setInterval(async () => {
     if (statusPolling) return;
     if (state.loading || state.minimized) return;
     if (state.mode !== 'normal') return;
+    // 사용자 액션 직후 5초간은 polling spawn도 회피
+    if (Date.now() - getLastUserRefreshTime() < 5000) return;
     statusPolling = true;
     try {
       const result = await hecaton.process.exec({
@@ -218,7 +283,7 @@ async function setupGitWatcher() {
       }
     } catch { /* ignore */ }
     statusPolling = false;
-  }, 3000);
+  }, 5000);
 
   _gitWatcherCleanup = () => {
     if (debounceTimer) clearTimeout(debounceTimer);

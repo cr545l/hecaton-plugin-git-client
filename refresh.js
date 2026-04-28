@@ -765,6 +765,112 @@ async function refreshAsync(options = {}) {
   }
 }
 
+// 로그 fetch 한도. 첫 paint는 LOG_FAST_LIMIT으로 빨리 띄우고,
+// 백그라운드에서 LOG_FULL_LIMIT으로 받아 그래프를 보강한다.
+const LOG_FAST_LIMIT = 200;
+const LOG_FULL_LIMIT = 2000;
+
+function parseLogRaw(raw, recovery, recoveryHashSet) {
+  raw = (raw || '').replace(/\r/g, '').trim();
+  if (!raw) return [];
+  return raw.split('\x01').filter(r => r.trim()).map(record => {
+    const trimmed = record.trim();
+    const parts = [];
+    let pos = 0;
+    for (let i = 0; i < 9; i++) {
+      const next = trimmed.indexOf('\x00', pos);
+      if (next === -1) break;
+      parts.push(trimmed.substring(pos, next));
+      pos = next + 1;
+    }
+    parts.push(trimmed.substring(pos));
+    const fullBody = (parts[9] || '').trim();
+    const firstLine = fullBody.split('\n')[0];
+    return {
+      hash: parts[0] || '',
+      parents: parts[1] ? parts[1].split(' ') : [],
+      refs: parts[2] || '',
+      authorName: parts[3] || '',
+      authorEmail: parts[4] || '',
+      authorDate: parts[5] || '',
+      committerName: parts[6] || '',
+      committerEmail: parts[7] || '',
+      committerDate: parts[8] || '',
+      subject: firstLine.replace(/[\r\n]/g, ''),
+      body: fullBody,
+      isRecovery: recoveryHashSet.has(parts[0] || ''),
+      recoveryRef: recovery.refsByHash ? recovery.refsByHash[parts[0] || ''] || null : null,
+    };
+  });
+}
+
+function buildLogGraphRows(rawCommits, stashFullHashes) {
+  // Filter stash sub-commits (index, untracked) to keep graph clean.
+  const stashSubHashes = new Set();
+  for (const c of rawCommits) {
+    if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
+      for (let i = 1; i < c.parents.length; i++) {
+        stashSubHashes.add(c.parents[i]);
+      }
+    }
+  }
+  let commits = stashSubHashes.size > 0
+    ? rawCommits
+        .filter(c => !stashSubHashes.has(c.hash))
+        .map(c => {
+          const fp = c.parents.filter(p => !stashSubHashes.has(p));
+          return fp.length === c.parents.length ? c : { ...c, parents: fp };
+        })
+    : rawCommits;
+
+  // Reorder stash commits: place them right BEFORE their parent commit
+  if (stashFullHashes.size > 0) {
+    const hashIdx = new Map();
+    for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
+
+    const stashByParent = new Map();
+    const stashSet = new Set();
+    for (const c of commits) {
+      if (!stashFullHashes.has(c.hash)) continue;
+      const parentHash = c.parents[0];
+      if (!parentHash || !hashIdx.has(parentHash)) continue;
+      if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
+      stashByParent.get(parentHash).push(c);
+      stashSet.add(c.hash);
+    }
+
+    if (stashByParent.size > 0) {
+      const reordered = [];
+      for (const c of commits) {
+        if (stashSet.has(c.hash)) continue;
+        const stashes = stashByParent.get(c.hash);
+        if (stashes) {
+          for (const s of stashes) reordered.push(s);
+        }
+        reordered.push(c);
+      }
+      commits = reordered;
+    }
+  }
+
+  commits = reorderForkStyle(commits);
+  return calcGraphRows(commits, stashFullHashes, ui.stashMap);
+}
+
+function applyLogGraphRows(graphRows) {
+  state.logItems = [];
+  state.logSelectables = [];
+  for (const row of graphRows) {
+    if (row.type === 'commit') {
+      state.logSelectables.push(state.logItems.length);
+    }
+    state.logItems.push(row);
+  }
+  if (state.logCursor >= state.logSelectables.length) {
+    state.logCursor = Math.max(0, state.logSelectables.length - 1);
+  }
+}
+
 function refreshLog() {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
@@ -792,115 +898,29 @@ function refreshLog() {
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
 
-    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B'];
-    if (stashHashes.length > 0) args.push(...stashHashes);
-    if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
-    args.push('-2000');
+    const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B';
+    const buildArgs = (limit) => {
+      const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
+      if (stashHashes.length > 0) args.push(...stashHashes);
+      if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
+      args.push('-' + limit);
+      return args;
+    };
 
-    let raw = await gitExec(args, state.cwd, 30000);
+    // 1차: 빠른 첫 paint (작은 한도). graph는 부분 데이터 기준이라 정확도가 약간 떨어질 수 있으나
+    // 즉시 화면이 뜨므로 체감 속도 우선. _logSeq로 out-of-order 가드.
+    const fastRaw = await gitExec(buildArgs(LOG_FAST_LIMIT), state.cwd, 30000);
     if (_logSeq !== seq) return;
+    const fastCommits = parseLogRaw(fastRaw, recovery, recoveryHashSet);
+    applyLogGraphRows(buildLogGraphRows(fastCommits, stashFullHashes));
+    require('./render').render();
 
-    raw = raw.replace(/\r/g, '').trim();
-    let rawCommits = [];
-    if (raw) {
-      rawCommits = raw.split('\x01').filter(r => r.trim()).map(record => {
-        const trimmed = record.trim();
-        const parts = [];
-        let pos = 0;
-        for (let i = 0; i < 9; i++) {
-          const next = trimmed.indexOf('\x00', pos);
-          if (next === -1) break;
-          parts.push(trimmed.substring(pos, next));
-          pos = next + 1;
-        }
-        parts.push(trimmed.substring(pos));
-        const fullBody = (parts[9] || '').trim();
-        const firstLine = fullBody.split('\n')[0];
-        return {
-          hash: parts[0] || '',
-          parents: parts[1] ? parts[1].split(' ') : [],
-          refs: parts[2] || '',
-          authorName: parts[3] || '',
-          authorEmail: parts[4] || '',
-          authorDate: parts[5] || '',
-          committerName: parts[6] || '',
-          committerEmail: parts[7] || '',
-          committerDate: parts[8] || '',
-          subject: firstLine.replace(/[\r\n]/g, ''),
-          body: fullBody,
-          isRecovery: recoveryHashSet.has(parts[0] || ''),
-          recoveryRef: recovery.refsByHash ? recovery.refsByHash[parts[0] || ''] || null : null,
-        };
-      });
-    }
-
-    // Filter stash sub-commits (index, untracked) to keep graph clean.
-    const stashSubHashes = new Set();
-    for (const c of rawCommits) {
-      if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
-        for (let i = 1; i < c.parents.length; i++) {
-          stashSubHashes.add(c.parents[i]);
-        }
-      }
-    }
-    let commits = stashSubHashes.size > 0
-      ? rawCommits
-          .filter(c => !stashSubHashes.has(c.hash))
-          .map(c => {
-            const fp = c.parents.filter(p => !stashSubHashes.has(p));
-            return fp.length === c.parents.length ? c : { ...c, parents: fp };
-          })
-      : rawCommits;
-
-    // Reorder stash commits: place them right BEFORE their parent commit
-    if (stashFullHashes.size > 0) {
-      const hashIdx = new Map();
-      for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
-
-      const stashByParent = new Map();
-      const stashSet = new Set();
-      for (const c of commits) {
-        if (!stashFullHashes.has(c.hash)) continue;
-        const parentHash = c.parents[0];
-        if (!parentHash || !hashIdx.has(parentHash)) continue;
-        if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
-        stashByParent.get(parentHash).push(c);
-        stashSet.add(c.hash);
-      }
-
-      if (stashByParent.size > 0) {
-        const reordered = [];
-        for (const c of commits) {
-          if (stashSet.has(c.hash)) continue;
-          const stashes = stashByParent.get(c.hash);
-          if (stashes) {
-            for (const s of stashes) reordered.push(s);
-          }
-          reordered.push(c);
-        }
-        commits = reordered;
-      }
-    }
-
-    // Fork-style reorder: HEAD's first-parent chain as main lane,
-    // branch tips inserted at their fork points
-    commits = reorderForkStyle(commits);
-
-    const graphRows = calcGraphRows(commits, stashFullHashes, ui.stashMap);
-
-    state.logItems = [];
-    state.logSelectables = [];
-    for (const row of graphRows) {
-      if (row.type === 'commit') {
-        state.logSelectables.push(state.logItems.length);
-      }
-      state.logItems.push(row);
-    }
-
-    if (state.logCursor >= state.logSelectables.length) {
-      state.logCursor = Math.max(0, state.logSelectables.length - 1);
-    }
-
+    // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
+    // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
+    const fullRaw = await gitExec(buildArgs(LOG_FULL_LIMIT), state.cwd, 30000);
+    if (_logSeq !== seq) return;
+    const fullCommits = parseLogRaw(fullRaw, recovery, recoveryHashSet);
+    applyLogGraphRows(buildLogGraphRows(fullCommits, stashFullHashes));
     require('./render').render();
   })();
 }
