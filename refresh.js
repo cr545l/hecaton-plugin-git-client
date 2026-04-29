@@ -777,8 +777,7 @@ function parseLogRaw(raw, recovery, recoveryHashSet) {
       pos = next + 1;
     }
     parts.push(trimmed.substring(pos));
-    const fullBody = (parts[9] || '').trim();
-    const firstLine = fullBody.split('\n')[0];
+    const subject = (parts[9] || '').trim().replace(/[\r\n]/g, '');
     return {
       hash: parts[0] || '',
       parents: parts[1] ? parts[1].split(' ') : [],
@@ -789,8 +788,8 @@ function parseLogRaw(raw, recovery, recoveryHashSet) {
       committerName: parts[6] || '',
       committerEmail: parts[7] || '',
       committerDate: parts[8] || '',
-      subject: firstLine.replace(/[\r\n]/g, ''),
-      body: fullBody,
+      subject,
+      body: '',
       isRecovery: recoveryHashSet.has(parts[0] || ''),
       recoveryRef: recovery.refsByHash ? recovery.refsByHash[parts[0] || ''] || null : null,
     };
@@ -891,7 +890,7 @@ function refreshLog() {
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
 
-    const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B';
+    const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
     const buildArgs = (limit) => {
       const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
       if (stashHashes.length > 0) args.push(...stashHashes);
@@ -907,6 +906,7 @@ function refreshLog() {
     const fastCommits = parseLogRaw(fastRaw, recovery, recoveryHashSet);
     applyLogGraphRows(buildLogGraphRows(fastCommits, stashFullHashes));
     require('./render').render();
+    if (fastCommits.length < LOG_FAST_LIMIT) return;
 
     // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
     // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
@@ -933,6 +933,7 @@ function updateLogDetail() {
     return;
   }
   const lines = [];
+  const separator = '\u2500'.repeat(40);
 
   lines.push('commit ' + item.hash);
   if (item.authorName || item.authorDate) {
@@ -946,40 +947,57 @@ function updateLogDetail() {
     lines.push('Commit: ' + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
   }
 
-  lines.push('\u2500'.repeat(40));
+  lines.push(separator);
+  const headerLines = [...lines];
 
-  if (item.body) {
-    for (const l of item.body.split('\n')) {
-      lines.push(l.replace(/[\r\n]/g, ''));
-    }
-  }
-
+  const recoveryLines = [];
   if (item.isRecovery) {
-    lines.push('');
-    lines.push('Recovery: reflog-only commit');
+    recoveryLines.push('');
+    recoveryLines.push('Recovery: reflog-only commit');
     if (item.recoveryRef && item.recoveryRef.selector) {
-      lines.push('Reflog: ' + item.recoveryRef.selector);
+      recoveryLines.push('Reflog: ' + item.recoveryRef.selector);
     }
     if (item.recoveryRef && item.recoveryRef.subject) {
-      lines.push('Event: ' + item.recoveryRef.subject);
+      recoveryLines.push('Event: ' + item.recoveryRef.subject);
     }
   }
 
-  lines.push('\u2500'.repeat(40));
+  lines.push(...recoveryLines);
+  lines.push(separator);
 
-  // Show header immediately, load diff async
+  // Show header immediately, load body/diff async.
   state.logDetailLines = [...lines];
   const seq = ++_logDetailSeq;
   const stashRef = ui.stashMap.get(item.ref);
   const promise = stashRef
     ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)
-    : gitExec(['show', '--pretty=format:', item.ref], state.cwd, 30000);
+    : gitExec(['show', '--format=%B%x00', '--patch', item.ref], state.cwd, 30000);
   promise.then(raw => {
     if (_logDetailSeq !== seq) return;
-    for (const l of raw.split('\n')) {
-      lines.push(l.replace(/\r/g, ''));
+    const detailLines = [];
+    if (stashRef) {
+      detailLines.push(...lines);
+      for (const l of raw.split('\n')) {
+        detailLines.push(l.replace(/\r/g, ''));
+      }
+    } else {
+      const normalized = raw.replace(/\r/g, '');
+      const markerIdx = normalized.indexOf('\x00');
+      const bodyRaw = markerIdx >= 0 ? normalized.substring(0, markerIdx).trim() : '';
+      const patchRaw = (markerIdx >= 0 ? normalized.substring(markerIdx + 1) : normalized).replace(/^\n+/, '');
+      detailLines.push(...headerLines);
+      if (bodyRaw) {
+        for (const l of bodyRaw.split('\n')) {
+          detailLines.push(l.replace(/[\r\n]/g, ''));
+        }
+      }
+      detailLines.push(...recoveryLines);
+      detailLines.push(separator);
+      for (const l of patchRaw.split('\n')) {
+        detailLines.push(l.replace(/\r/g, ''));
+      }
     }
-    state.logDetailLines = lines;
+    state.logDetailLines = detailLines;
     require('./render').render();
   });
 }
