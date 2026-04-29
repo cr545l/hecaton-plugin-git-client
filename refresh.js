@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { git, gitExec, unquoteGitPath, gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked, gitStashRefs, gitLogCommits, gitShowRef, gitStashDiff, gitRebaseState, gitOperationState, gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitAheadBehind, gitFreshLog, gitShowCommitFile, gitFilePatch, gitGetConfig, gitGetConfigLocal, gitReadConflictFile } = require('./git');
+const { gitExec, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -9,6 +9,7 @@ const FRESH_TIME_WINDOWS = [
   { label: '60 days', days: 60 },
   { label: '90 days', days: 90 },
 ];
+const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
 const { formatWindowTitle } = require('./title');
@@ -318,109 +319,176 @@ function remapSelectedFiles() {
   }
 }
 
-async function refresh() {
-  if (!state.cwd) return;
-  // Set pending message before exec_process (may hang)
-  state.error = 'Checking git... cwd: ' + state.cwd;
-  const repoCheck = await gitIsRepo(state.cwd);
-  if (repoCheck === true) {
-    state.isGitRepo = true;
-    state.gitNotFound = false;
-    state.error = null;
-  } else {
-    state.isGitRepo = false;
-    const diag = repoCheck || {};
-    state.gitNotFound = !!diag.notFound;
-    const parts = [state.gitNotFound ? 'git not found' : 'Not a git repository'];
-    parts.push('cwd: ' + state.cwd);
-    if (diag.error) parts.push('error: ' + diag.error);
-    if (diag.stderr) parts.push('stderr: ' + diag.stderr.trim());
-    if (diag.exit_code !== undefined) parts.push('exit: ' + diag.exit_code);
-    state.error = parts.join(' | ');
-  }
-  if (!state.isGitRepo) {
-    state.branch = '';
-    state.worktrees = [];
-    state.staged = [];
-    state.unstaged = [];
-    state.untracked = [];
-    state.ignored = [];
-    state.diffLines = [];
-    state.conflictView = null;
-    state.currentDiffFile = null;
-    return;
-  }
-  if (!state.spinnerActive) state.error = null;
-  state.branch = await gitBranch(state.cwd);
-  state.operationState = await gitOperationState(state.cwd);
-  state.branches = await gitBranches(state.cwd);
-  state.remoteBranches = await gitRemoteBranches(state.cwd);
-  state.remotes = await gitRemotes(state.cwd);
-  state.worktrees = await gitWorktrees(state.cwd);
-  state.stashes = await gitStashRefs(state.cwd);
-  state.committerName = await gitGetConfig(state.cwd, 'user.name');
-  state.committerEmail = await gitGetConfig(state.cwd, 'user.email');
-  state.committerNameIsLocal = !!(await gitGetConfigLocal(state.cwd, 'user.name'));
-  state.committerEmailIsLocal = !!(await gitGetConfigLocal(state.cwd, 'user.email'));
-  const ab = await gitAheadBehind(state.cwd);
-  state.ahead = ab.ahead;
-  state.behind = ab.behind;
-  state._prevFileList = buildFileList();
-  const status = await gitStatus(state.cwd);
-  state.staged = status.staged;
-  state.unstaged = status.unstaged;
-  state.untracked = status.untracked;
-  state.ignored = status.ignored;
-  remapSelectedFiles();
-  clampCursor();
-  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
-  updateDiff();
-}
-
 let _refreshRunning = false;
 let _refreshQueued = false;
 let _refreshQueuedOpts = {};
+let _refreshQueuedWaiters = [];
+
+function refreshNeedsStatus(options) {
+  return options.metadataOnly !== true;
+}
+
+function refreshNeedsMeta(options) {
+  return options.statusOnly !== true;
+}
+
+function mergeRefreshOptions(existing, incoming) {
+  const merged = { ...existing, ...incoming };
+  const needsStatus = refreshNeedsStatus(existing) || refreshNeedsStatus(incoming);
+  const needsMeta = refreshNeedsMeta(existing) || refreshNeedsMeta(incoming);
+
+  if (needsStatus && !needsMeta) {
+    merged.statusOnly = true;
+    delete merged.metadataOnly;
+  } else if (!needsStatus && needsMeta) {
+    merged.metadataOnly = true;
+    delete merged.statusOnly;
+  } else {
+    delete merged.statusOnly;
+    delete merged.metadataOnly;
+  }
+
+  if (existing.includeIgnored || incoming.includeIgnored) merged.includeIgnored = true;
+  if (existing.loadBranch || incoming.loadBranch) merged.loadBranch = true;
+  if (existing.loadGuiConfig || incoming.loadGuiConfig) merged.loadGuiConfig = true;
+  if (existing.singleProcessStatus || incoming.singleProcessStatus) merged.singleProcessStatus = true;
+  if (existing.fastFirstPaint || incoming.fastFirstPaint) merged.fastFirstPaint = true;
+  if (existing.silent === true && incoming.silent === true) merged.silent = true;
+  else delete merged.silent;
+
+  return merged;
+}
 
 // 캐싱된 gui config — 전체 refresh 시에만 갱신
 let _cachedUntrackedFlag = '-unormal';
 let _cachedMaxFilesDisplayed = 5000;
 let _guiConfigLoaded = false;
 
+// 메타 데이터 캐시 — .git 내부 mtime fingerprint가 동일하면 재호출 생략.
+// 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees, user.* config(글로벌+로컬), ahead/behind.
+// status는 워킹트리 변경을 잡아야 하므로 항상 새로 호출한다.
+let _metaCache = null;
+let _metaFingerprint = '';
+let _metaCacheCwd = '';
+
+async function computeMetaFingerprint(cwd, gitDir) {
+  if (!gitDir) return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const targets = [
+    gitDir + sep + 'HEAD',
+    gitDir + sep + 'config',
+    gitDir + sep + 'packed-refs',
+    gitDir + sep + 'FETCH_HEAD',
+    gitDir + sep + 'refs',
+    gitDir + sep + 'worktrees',
+    gitDir + sep + 'logs' + sep + 'HEAD',
+  ];
+  const stats = await Promise.all(targets.map(async p => {
+    try {
+      const r = await hecaton.fs.stat({ path: p });
+      return (r && r.exists) ? (r.mtime_ms || 0) : -1;
+    } catch { return -1; }
+  }));
+  return stats.join('|');
+}
+
+function invalidateMetaCache() {
+  _metaCache = null;
+  _metaFingerprint = '';
+  _metaCacheCwd = '';
+}
+
 // 마지막 사용자 refresh 시간 — 폴링 억제용으로 외부에서 참조
 let _lastUserRefreshTime = 0;
 function getLastUserRefreshTime() { return _lastUserRefreshTime; }
 function touchUserRefreshTime() { _lastUserRefreshTime = Date.now(); }
 
+function shouldIncludeIgnored(options) {
+  return options.includeIgnored === true || ui.collapsedSections.ignored === false;
+}
+
+function applyStatusSnapshot(snapshot, includeIgnored) {
+  state._prevFileList = buildFileList();
+  state.staged = snapshot.staged || [];
+  state.unstaged = snapshot.unstaged || [];
+  state.untracked = snapshot.untracked || [];
+  state.ignored = includeIgnored ? (snapshot.ignored || []) : [];
+  state.ignoredLoaded = includeIgnored;
+  state.ignoredLoading = false;
+  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+  remapSelectedFiles();
+  clampCursor();
+  updateDiff();
+}
+
+async function readBranchNameFast() {
+  if (!state.gitDir) {
+    return (await gitExec(['--no-optional-locks', 'symbolic-ref', '--short', 'HEAD'], state.cwd, 5000)).trim();
+  }
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  try {
+    const res = await hecaton.fs.read_file({ path: state.gitDir + sep + 'HEAD' });
+    const head = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
+    if (head.startsWith('ref: refs/heads/')) return head.substring('ref: refs/heads/'.length);
+    return '';
+  } catch {
+    return (await gitExec(['--no-optional-locks', 'symbolic-ref', '--short', 'HEAD'], state.cwd, 5000)).trim();
+  }
+}
+
 async function refreshAsync(options = {}) {
   if (!state.cwd) return;
 
   const statusOnly = !!options.statusOnly;
+  const metadataOnly = !!options.metadataOnly;
+  const showSpinner = options.silent !== true;
 
   // 동시 실행 방지 — 이미 실행 중이면 대기열에 넣고 리턴
   if (_refreshRunning) {
-    // 대기 중인 요청이 statusOnly인데 전체 refresh가 요청되면 전체로 승격
-    if (_refreshQueued && _refreshQueuedOpts.statusOnly && !statusOnly) {
-      _refreshQueuedOpts = {};
-    } else if (!_refreshQueued) {
-      _refreshQueuedOpts = options;
-    }
+    // 대기 중인 요청들은 필요한 범위(status/meta)를 합쳐서 한 번만 실행한다.
+    _refreshQueuedOpts = _refreshQueued
+      ? mergeRefreshOptions(_refreshQueuedOpts, options)
+      : { ...options };
     _refreshQueued = true;
-    return;
+    return new Promise((resolve, reject) => {
+      _refreshQueuedWaiters.push({ resolve, reject });
+    });
   }
   _refreshRunning = true;
   _refreshQueued = false;
   _refreshQueuedOpts = {};
 
-  _lastUserRefreshTime = Date.now();
+  if (!options.silent) _lastUserRefreshTime = Date.now();
 
   refreshCount++;
-  if (refreshCount === 1) {
+  if (showSpinner && refreshCount === 1) {
     acquireSpinner();
   }
 
   try {
 
-  if (!statusOnly) {
+  if (statusOnly && options.fastFirstPaint && !state.isGitRepo) {
+    const includeIgnored = shouldIncludeIgnored(options);
+    state.ignoredLoading = includeIgnored;
+    const statusSnapshot = await gitStatusPorcelain(state.cwd, {
+      displayUntracked: _cachedUntrackedFlag !== '-uno',
+      includeIgnored,
+      maxFilesDisplayed: _cachedMaxFilesDisplayed,
+      timeout: 15000,
+      includeBranch: options.loadBranch,
+      nullOnError: true,
+    });
+    if (statusSnapshot) {
+      state.isGitRepo = true;
+      if (options.loadBranch) state.branch = statusSnapshot.branch || 'HEAD (detached)';
+      if (!state.spinnerActive) state.error = null;
+      applyStatusSnapshot(statusSnapshot, includeIgnored);
+      return;
+    }
+    state.ignoredLoading = false;
+  }
+
+  if (!statusOnly && !metadataOnly) {
     // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
     try {
       const sep = (process.platform === 'win32') ? '\\' : '/';
@@ -438,16 +506,17 @@ async function refreshAsync(options = {}) {
 
   // Pre-check: 이미 git repo로 확인된 상태면 skip (cwd가 바뀌는 경우 isGitRepo를 false로 리셋하는 쪽이 책임짐).
   // 첫 refresh나 repo 미확인 상태에서만 rev-parse 수행 — status/diff 결과로 실제 repo 여부가 다시 검증됨.
+  // is-inside-work-tree와 git-dir을 한 번에 가져와 이후 Promise.all에서 git-dir 호출을 생략한다.
   if (!state.isGitRepo) {
-    // Pre-check: can git run at all? (with diagnostic on failure)
-    // Also verify stdout content — host may return ok:true even on timeout/cancellation
-    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree'], cwd: state.cwd, timeout_ms: 5000 });
+    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir'], cwd: state.cwd, timeout_ms: 5000 });
     console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
-    const preCheckStdout = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').trim() : '';
-    if (!preCheck || !preCheck.ok || preCheckStdout !== 'true') {
+    const preLines = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').split('\n') : [];
+    const insideWorkTree = (preLines[0] || '').trim();
+    const preGitDir = (preLines[1] || '').trim();
+    if (!preCheck || !preCheck.ok || insideWorkTree !== 'true') {
       state.isGitRepo = false;
       const parts = [];
-      if (preCheck && preCheck.ok && preCheckStdout !== 'true') {
+      if (preCheck && preCheck.ok && insideWorkTree !== 'true') {
         parts.push('Not a git repository');
       } else if (!preCheck) {
         parts.push('exec_process returned null');
@@ -459,11 +528,16 @@ async function refreshAsync(options = {}) {
         if (preCheck.error) parts.push('error: ' + preCheck.error);
         if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
         if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);
-        parts.push('ok:' + preCheck.ok + ' stdout:[' + preCheckStdout + ']');
+        parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');
       }
       state.error = parts.join(' | ');
-      state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
+      state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.ignoredLoaded = false; state.ignoredLoading = false; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
       return;
+    }
+    if (preGitDir && !state.gitDir) {
+      const sep = (process.platform === 'win32') ? '\\' : '/';
+      const isAbsolute = preGitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(preGitDir);
+      state.gitDir = isAbsolute ? preGitDir : (state.cwd + sep + preGitDir);
     }
   }
 
@@ -472,15 +546,27 @@ async function refreshAsync(options = {}) {
   if (!state.spinnerActive) state.error = null;
 
   // gui 설정 읽기 — 전체 refresh 시에만 갱신 (거의 변경되지 않으므로 캐싱)
-  if (!statusOnly || !_guiConfigLoaded) {
-    const duRaw = await gitExec(['--no-optional-locks', 'config', 'gui.displayuntracked'], state.cwd);
-    const mfRaw = await gitExec(['--no-optional-locks', 'config', 'gui.maxfilesdisplayed'], state.cwd);
+  // 두 키를 --get-regexp '^gui\.' 한 번의 spawn으로 가져온다
+  if ((!metadataOnly && (!statusOnly || !_guiConfigLoaded)) || (options.loadGuiConfig && !_guiConfigLoaded)) {
+    const guiRaw = await gitExec(['--no-optional-locks', 'config', '--get-regexp', '^gui\\.'], state.cwd);
+    let duVal = '';
+    let mfVal = '';
+    if (guiRaw) {
+      for (const line of guiRaw.split('\n')) {
+        if (!line) continue;
+        const sp = line.indexOf(' ');
+        if (sp === -1) continue;
+        const key = line.substring(0, sp);
+        const val = line.substring(sp + 1).trim();
+        if (key === 'gui.displayuntracked') duVal = val.toLowerCase();
+        else if (key === 'gui.maxfilesdisplayed') mfVal = val;
+      }
+    }
     // gui.displayuntracked (기본: true) — false면 untracked 스캔 건너뜀
-    const duVal = duRaw.trim().toLowerCase();
     const showUntracked = !duVal || duVal === 'true' || duVal === '1' || duVal === 'yes' || duVal === 'on';
     _cachedUntrackedFlag = showUntracked ? '-unormal' : '-uno';
     // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
-    _cachedMaxFilesDisplayed = parseInt(mfRaw.trim()) || 5000;
+    _cachedMaxFilesDisplayed = parseInt(mfVal) || 5000;
     _guiConfigLoaded = true;
   }
   const untrackedFlag = _cachedUntrackedFlag;
@@ -488,53 +574,92 @@ async function refreshAsync(options = {}) {
 
   if (statusOnly) {
     // ── 경량 refresh: git status만 실행 ──
-    const statusRaw = await gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000);
+    const includeIgnored = shouldIncludeIgnored(options);
+    state.ignoredLoading = includeIgnored;
+    const statusReader = options.singleProcessStatus === false ? gitStatusSplit : gitStatusPorcelain;
+    const statusPromise = statusReader(state.cwd, {
+      displayUntracked: untrackedFlag !== '-uno',
+      includeIgnored,
+      maxFilesDisplayed,
+      timeout: 15000,
+    });
+    const branchPromise = options.loadBranch
+      ? readBranchNameFast()
+      : Promise.resolve('');
+    const [statusSnapshot, branchRaw] = await Promise.all([statusPromise, branchPromise]);
+    if (options.loadBranch) {
+      const branchName = (branchRaw || '').trim();
+      state.branch = branchName || 'HEAD (detached)';
+    }
     if (!state.spinnerActive) state.error = null;
 
-    // status 파싱
-    const staged = [], unstaged = [], untracked = [], ignored = [];
-    for (const line of statusRaw.split('\n')) {
-      if (!line) continue;
-      const x = line[0], y = line[1], file = unquoteGitPath(line.substring(3));
-      if (x === '!' && y === '!') { ignored.push({ file }); }
-      else if (x === '?') { untracked.push({ file }); }
-      else {
-        if (x !== ' ' && x !== '?') staged.push({ status: x, file });
-        if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
-      }
-    }
-    const trackedCount = staged.length + unstaged.length;
-    const untrackedLimit = Math.max(0, maxFilesDisplayed - trackedCount);
-    if (untracked.length > untrackedLimit) {
-      untracked.length = untrackedLimit;
-    }
-
-    state._prevFileList = buildFileList();
-    state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
-    hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
-    remapSelectedFiles();
-    clampCursor();
-    updateDiff();
+    applyStatusSnapshot(statusSnapshot, includeIgnored);
     return; // 경량 refresh 완료 — 나머지 skip
   }
 
   // ── 전체 refresh ──
-  // 13 → 9개로 통합:
-  // - branch --show-current + branch --format + branch -r → for-each-ref 하나
-  // - config user.name/email + --local user.name/email → --get-regexp 2개
+  // 평상시 spawn 수:
+  // - status는 항상 호출 (워킹트리 변경 추적)
+  // - 메타(stash/for-each-ref/remote/worktrees/user 2종/ahead-behind) 7개는 fingerprint 캐시 적중 시 재호출 생략
+  // - git-dir은 state.gitDir 캐시 우선 (preCheck/setupGitWatcher가 채움)
+  // → 캐시 적중: 1 spawn (status), 미스: 8 spawn
   const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)';
-  const [statusRaw, stashRaw, refsRaw, remoteNamesRaw, worktrees, gitDirRaw, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
-    await Promise.all([
-      gitExec(['--no-optional-locks', 'status', '--porcelain=v1', untrackedFlag, '--ignored'], state.cwd, 15000),
-      gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
-      gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
-      gitExec(['--no-optional-locks', 'remote'], state.cwd),
-      gitWorktrees(state.cwd),
-      gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
-      gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
-      gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
-    ]);
+  const sepLocal = (process.platform === 'win32') ? '\\' : '/';
+  const gitDirPromise = state.gitDir
+    ? Promise.resolve(state.gitDir)
+    : gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd).then(raw => {
+        const trimmed = raw.trim();
+        if (!trimmed) return '';
+        const isAbsolute = trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed);
+        const resolved = isAbsolute ? trimmed : (state.cwd + sepLocal + trimmed);
+        state.gitDir = resolved;
+        return resolved;
+      });
+
+  // git-dir과 fingerprint를 먼저 확정 (메타 캐시 적중 여부 결정)
+  const gitDir = await gitDirPromise;
+  if (_metaCacheCwd && _metaCacheCwd !== state.cwd) invalidateMetaCache();
+  const fingerprint = await computeMetaFingerprint(state.cwd, gitDir);
+  const metaHit = !!_metaCache && fingerprint && fingerprint === _metaFingerprint;
+
+  const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
+  if (!metadataOnly) state.ignoredLoading = includeIgnored;
+  let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw;
+  const statusPromise = metadataOnly
+    ? Promise.resolve(null)
+    : gitStatusSplit(state.cwd, {
+        displayUntracked: untrackedFlag !== '-uno',
+        includeIgnored,
+        maxFilesDisplayed,
+        timeout: 15000,
+      });
+  if (metaHit) {
+    statusSnapshot = await statusPromise;
+    stashRaw = _metaCache.stashRaw;
+    refsRaw = _metaCache.refsRaw;
+    remoteNamesRaw = _metaCache.remoteNamesRaw;
+    worktrees = _metaCache.worktrees;
+    userCfgRaw = _metaCache.userCfgRaw;
+    localUserCfgRaw = _metaCache.localUserCfgRaw;
+    aheadBehindRaw = _metaCache.aheadBehindRaw;
+  } else {
+    [statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
+      await Promise.all([
+        statusPromise,
+        gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
+        gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
+        gitExec(['--no-optional-locks', 'remote'], state.cwd),
+        gitWorktrees(state.cwd),
+        gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
+        gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
+        gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
+      ]);
+    if (fingerprint) {
+      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw };
+      _metaFingerprint = fingerprint;
+      _metaCacheCwd = state.cwd;
+    }
+  }
 
   if (!state.spinnerActive) state.error = null;
 
@@ -561,30 +686,10 @@ async function refreshAsync(options = {}) {
       }
     }
   }
-  state.branch = currentBranch || 'HEAD (detached)';
-
-  // status 파싱
-  const staged = [], unstaged = [], untracked = [], ignored = [];
-  for (const line of statusRaw.split('\n')) {
-    if (!line) continue;
-    const x = line[0], y = line[1], file = unquoteGitPath(line.substring(3));
-    if (x === '!' && y === '!') { ignored.push({ file }); }
-    else if (x === '?') { untracked.push({ file }); }
-    else {
-      if (x !== ' ' && x !== '?') staged.push({ status: x, file });
-      if (y !== ' ' && y !== '?') unstaged.push({ status: y, file });
-    }
+  state.branch = currentBranch || (metadataOnly && state.branch ? state.branch : 'HEAD (detached)');
+  if (!metadataOnly) {
+    applyStatusSnapshot(statusSnapshot, includeIgnored);
   }
-  // gui.maxfilesdisplayed — git-gui처럼 한도 초과 시 untracked부터 제외
-  const trackedCount = staged.length + unstaged.length;
-  const untrackedLimit = Math.max(0, maxFilesDisplayed - trackedCount);
-  if (untracked.length > untrackedLimit) {
-    untracked.length = untrackedLimit;
-  }
-
-  state._prevFileList = buildFileList();
-  state.staged = staged; state.unstaged = unstaged; state.untracked = untracked; state.ignored = ignored;
-  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
 
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
@@ -603,12 +708,10 @@ async function refreshAsync(options = {}) {
 
   // operationState — detect rebase/merge/cherry-pick/revert in progress (병렬화)
   state.operationState = null;
-  const gitDir = gitDirRaw.trim();
   if (gitDir) {
-    const sep = (process.platform === 'win32') ? '\\' : '/';
-    // gitDir may be absolute (worktrees) or relative (.git)
-    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
-    const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
+    const sep = sepLocal;
+    // gitDir is already resolved to an absolute path (cached or by gitDirPromise)
+    const base = gitDir;
     const rebaseMerge = base + sep + 'rebase-merge';
     const rebaseApply = base + sep + 'rebase-apply';
     const mergeHead = base + sep + 'MERGE_HEAD';
@@ -660,9 +763,8 @@ async function refreshAsync(options = {}) {
   const prevRebaseMessage = state.rebaseMessage || '';
   state.rebaseMessage = '';
   if (state.operationState && gitDir) {
-    const sep = (process.platform === 'win32') ? '\\' : '/';
-    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
-    const base = isAbsolute ? gitDir : (state.cwd + sep + gitDir);
+    const sep = sepLocal;
+    const base = gitDir;
     // Try multiple message sources in priority order
     const msgPaths = [];
     if (state.operationState.type === 'rebase-merge') {
@@ -719,23 +821,137 @@ async function refreshAsync(options = {}) {
   state.behind = parseInt(abParts[0]) || 0;
   state.ahead = parseInt(abParts[1]) || 0;
 
-  remapSelectedFiles();
-  clampCursor();
-  updateDiff();
+  if (metadataOnly) {
+    hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+  } else {
+    remapSelectedFiles();
+    clampCursor();
+    updateDiff();
+  }
 
   } finally {
     refreshCount--;
-    if (refreshCount === 0) {
+    if (showSpinner && refreshCount === 0) {
       releaseSpinner();
     }
     _refreshRunning = false;
     // 대기 중인 refresh가 있으면 다시 실행
     if (_refreshQueued) {
       const queuedOpts = _refreshQueuedOpts;
+      const queuedWaiters = _refreshQueuedWaiters;
       _refreshQueued = false;
       _refreshQueuedOpts = {};
-      refreshAsync(queuedOpts);
+      _refreshQueuedWaiters = [];
+      refreshAsync(queuedOpts).then(
+        (value) => queuedWaiters.forEach(waiter => waiter.resolve(value)),
+        (error) => queuedWaiters.forEach(waiter => waiter.reject(error)),
+      );
     }
+  }
+}
+
+// 로그 fetch 한도. 첫 paint는 LOG_FAST_LIMIT으로 빨리 띄우고,
+// 백그라운드에서 LOG_FULL_LIMIT으로 받아 그래프를 보강한다.
+const LOG_FAST_LIMIT = 200;
+const LOG_FULL_LIMIT = 2000;
+
+function parseLogRaw(raw, recovery, recoveryHashSet) {
+  raw = (raw || '').replace(/\r/g, '').trim();
+  if (!raw) return [];
+  return raw.split('\x01').filter(r => r.trim()).map(record => {
+    const trimmed = record.trim();
+    const parts = [];
+    let pos = 0;
+    for (let i = 0; i < 9; i++) {
+      const next = trimmed.indexOf('\x00', pos);
+      if (next === -1) break;
+      parts.push(trimmed.substring(pos, next));
+      pos = next + 1;
+    }
+    parts.push(trimmed.substring(pos));
+    const subject = (parts[9] || '').trim().replace(/[\r\n]/g, '');
+    return {
+      hash: parts[0] || '',
+      parents: parts[1] ? parts[1].split(' ') : [],
+      refs: parts[2] || '',
+      authorName: parts[3] || '',
+      authorEmail: parts[4] || '',
+      authorDate: parts[5] || '',
+      committerName: parts[6] || '',
+      committerEmail: parts[7] || '',
+      committerDate: parts[8] || '',
+      subject,
+      body: '',
+      isRecovery: recoveryHashSet.has(parts[0] || ''),
+      recoveryRef: recovery.refsByHash ? recovery.refsByHash[parts[0] || ''] || null : null,
+    };
+  });
+}
+
+function buildLogGraphRows(rawCommits, stashFullHashes) {
+  // Filter stash sub-commits (index, untracked) to keep graph clean.
+  const stashSubHashes = new Set();
+  for (const c of rawCommits) {
+    if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
+      for (let i = 1; i < c.parents.length; i++) {
+        stashSubHashes.add(c.parents[i]);
+      }
+    }
+  }
+  let commits = stashSubHashes.size > 0
+    ? rawCommits
+        .filter(c => !stashSubHashes.has(c.hash))
+        .map(c => {
+          const fp = c.parents.filter(p => !stashSubHashes.has(p));
+          return fp.length === c.parents.length ? c : { ...c, parents: fp };
+        })
+    : rawCommits;
+
+  // Reorder stash commits: place them right BEFORE their parent commit
+  if (stashFullHashes.size > 0) {
+    const hashIdx = new Map();
+    for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
+
+    const stashByParent = new Map();
+    const stashSet = new Set();
+    for (const c of commits) {
+      if (!stashFullHashes.has(c.hash)) continue;
+      const parentHash = c.parents[0];
+      if (!parentHash || !hashIdx.has(parentHash)) continue;
+      if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
+      stashByParent.get(parentHash).push(c);
+      stashSet.add(c.hash);
+    }
+
+    if (stashByParent.size > 0) {
+      const reordered = [];
+      for (const c of commits) {
+        if (stashSet.has(c.hash)) continue;
+        const stashes = stashByParent.get(c.hash);
+        if (stashes) {
+          for (const s of stashes) reordered.push(s);
+        }
+        reordered.push(c);
+      }
+      commits = reordered;
+    }
+  }
+
+  commits = reorderForkStyle(commits);
+  return calcGraphRows(commits, stashFullHashes, ui.stashMap);
+}
+
+function applyLogGraphRows(graphRows) {
+  state.logItems = [];
+  state.logSelectables = [];
+  for (const row of graphRows) {
+    if (row.type === 'commit') {
+      state.logSelectables.push(state.logItems.length);
+    }
+    state.logItems.push(row);
+  }
+  if (state.logCursor >= state.logSelectables.length) {
+    state.logCursor = Math.max(0, state.logSelectables.length - 1);
   }
 }
 
@@ -743,10 +959,12 @@ function refreshLog() {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
     state.logSelectables = [];
+    state.logLoading = false;
     state.recoveryRefs = {};
     ui.stashMap = new Map();
     return;
   }
+  if (state.logLoading && state.logItems.length === 0) return;
 
   // Build stash map and collect stash hashes for graph inclusion
   const stashRefList = state.stashes;
@@ -760,123 +978,49 @@ function refreshLog() {
   }
 
   const seq = ++_logSeq;
+  state.logLoading = true;
   (async () => {
-    const recovery = await gitReflogRecoveries(state.cwd, 250, 64, 256);
+    const recoveryPromise = gitReflogRecoveries(state.cwd, 250, 64, 256)
+      .catch(() => ({ hashes: [], refsByHash: {} }));
+
+    const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
+    const buildArgs = (limit, recoveryHashes) => {
+      const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
+      if (stashHashes.length > 0) args.push(...stashHashes);
+      if (recoveryHashes && recoveryHashes.length > 0) args.push(...recoveryHashes);
+      args.push('-' + limit);
+      return args;
+    };
+
+    // 1차: 빠른 첫 paint (작은 한도). graph는 부분 데이터 기준이라 정확도가 약간 떨어질 수 있으나
+    // 즉시 화면이 뜨므로 체감 속도 우선. _logSeq로 out-of-order 가드.
+    const fastRaw = await gitExec(buildArgs(LOG_FAST_LIMIT, []), state.cwd, 30000);
+    if (_logSeq !== seq) return;
+    const fastCommits = parseLogRaw(fastRaw, { refsByHash: {} }, new Set());
+    applyLogGraphRows(buildLogGraphRows(fastCommits, stashFullHashes));
+    if (state.rightView === 'log') updateLogDetail();
+    state.logLoading = false;
+    require('./render').render();
+    const recovery = await recoveryPromise;
     if (_logSeq !== seq) return;
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
+    if (fastCommits.length < LOG_FAST_LIMIT && recoveryHashSet.size === 0) return;
 
-    const args = ['log', '--all', '--topo-order', '--format=%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B'];
-    if (stashHashes.length > 0) args.push(...stashHashes);
-    if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
-    args.push('-2000');
-
-    let raw = await gitExec(args, state.cwd, 30000);
+    // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
+    // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
+    const fullRaw = await gitExec(buildArgs(LOG_FULL_LIMIT, recovery.hashes || []), state.cwd, 30000);
     if (_logSeq !== seq) return;
-
-    raw = raw.replace(/\r/g, '').trim();
-    let rawCommits = [];
-    if (raw) {
-      rawCommits = raw.split('\x01').filter(r => r.trim()).map(record => {
-        const trimmed = record.trim();
-        const parts = [];
-        let pos = 0;
-        for (let i = 0; i < 9; i++) {
-          const next = trimmed.indexOf('\x00', pos);
-          if (next === -1) break;
-          parts.push(trimmed.substring(pos, next));
-          pos = next + 1;
-        }
-        parts.push(trimmed.substring(pos));
-        const fullBody = (parts[9] || '').trim();
-        const firstLine = fullBody.split('\n')[0];
-        return {
-          hash: parts[0] || '',
-          parents: parts[1] ? parts[1].split(' ') : [],
-          refs: parts[2] || '',
-          authorName: parts[3] || '',
-          authorEmail: parts[4] || '',
-          authorDate: parts[5] || '',
-          committerName: parts[6] || '',
-          committerEmail: parts[7] || '',
-          committerDate: parts[8] || '',
-          subject: firstLine.replace(/[\r\n]/g, ''),
-          body: fullBody,
-          isRecovery: recoveryHashSet.has(parts[0] || ''),
-          recoveryRef: recovery.refsByHash ? recovery.refsByHash[parts[0] || ''] || null : null,
-        };
-      });
-    }
-
-    // Filter stash sub-commits (index, untracked) to keep graph clean.
-    const stashSubHashes = new Set();
-    for (const c of rawCommits) {
-      if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
-        for (let i = 1; i < c.parents.length; i++) {
-          stashSubHashes.add(c.parents[i]);
-        }
-      }
-    }
-    let commits = stashSubHashes.size > 0
-      ? rawCommits
-          .filter(c => !stashSubHashes.has(c.hash))
-          .map(c => {
-            const fp = c.parents.filter(p => !stashSubHashes.has(p));
-            return fp.length === c.parents.length ? c : { ...c, parents: fp };
-          })
-      : rawCommits;
-
-    // Reorder stash commits: place them right BEFORE their parent commit
-    if (stashFullHashes.size > 0) {
-      const hashIdx = new Map();
-      for (let i = 0; i < commits.length; i++) hashIdx.set(commits[i].hash, i);
-
-      const stashByParent = new Map();
-      const stashSet = new Set();
-      for (const c of commits) {
-        if (!stashFullHashes.has(c.hash)) continue;
-        const parentHash = c.parents[0];
-        if (!parentHash || !hashIdx.has(parentHash)) continue;
-        if (!stashByParent.has(parentHash)) stashByParent.set(parentHash, []);
-        stashByParent.get(parentHash).push(c);
-        stashSet.add(c.hash);
-      }
-
-      if (stashByParent.size > 0) {
-        const reordered = [];
-        for (const c of commits) {
-          if (stashSet.has(c.hash)) continue;
-          const stashes = stashByParent.get(c.hash);
-          if (stashes) {
-            for (const s of stashes) reordered.push(s);
-          }
-          reordered.push(c);
-        }
-        commits = reordered;
-      }
-    }
-
-    // Fork-style reorder: HEAD's first-parent chain as main lane,
-    // branch tips inserted at their fork points
-    commits = reorderForkStyle(commits);
-
-    const graphRows = calcGraphRows(commits, stashFullHashes, ui.stashMap);
-
-    state.logItems = [];
-    state.logSelectables = [];
-    for (const row of graphRows) {
-      if (row.type === 'commit') {
-        state.logSelectables.push(state.logItems.length);
-      }
-      state.logItems.push(row);
-    }
-
-    if (state.logCursor >= state.logSelectables.length) {
-      state.logCursor = Math.max(0, state.logSelectables.length - 1);
-    }
-
+    const fullCommits = parseLogRaw(fullRaw, recovery, recoveryHashSet);
+    applyLogGraphRows(buildLogGraphRows(fullCommits, stashFullHashes));
+    if (state.rightView === 'log') updateLogDetail();
+    state.logLoading = false;
     require('./render').render();
-  })();
+  })().catch(() => {
+    if (_logSeq !== seq) return;
+    state.logLoading = false;
+    if (state.rightView === 'log') require('./render').render();
+  });
 }
 
 function selectedLogRef() {
@@ -894,6 +1038,7 @@ function updateLogDetail() {
     return;
   }
   const lines = [];
+  const separator = '\u2500'.repeat(40);
 
   lines.push('commit ' + item.hash);
   if (item.authorName || item.authorDate) {
@@ -907,40 +1052,57 @@ function updateLogDetail() {
     lines.push('Commit: ' + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
   }
 
-  lines.push('\u2500'.repeat(40));
+  lines.push(separator);
+  const headerLines = [...lines];
 
-  if (item.body) {
-    for (const l of item.body.split('\n')) {
-      lines.push(l.replace(/[\r\n]/g, ''));
-    }
-  }
-
+  const recoveryLines = [];
   if (item.isRecovery) {
-    lines.push('');
-    lines.push('Recovery: reflog-only commit');
+    recoveryLines.push('');
+    recoveryLines.push('Recovery: reflog-only commit');
     if (item.recoveryRef && item.recoveryRef.selector) {
-      lines.push('Reflog: ' + item.recoveryRef.selector);
+      recoveryLines.push('Reflog: ' + item.recoveryRef.selector);
     }
     if (item.recoveryRef && item.recoveryRef.subject) {
-      lines.push('Event: ' + item.recoveryRef.subject);
+      recoveryLines.push('Event: ' + item.recoveryRef.subject);
     }
   }
 
-  lines.push('\u2500'.repeat(40));
+  lines.push(...recoveryLines);
+  lines.push(separator);
 
-  // Show header immediately, load diff async
+  // Show header immediately, load body/diff async.
   state.logDetailLines = [...lines];
   const seq = ++_logDetailSeq;
   const stashRef = ui.stashMap.get(item.ref);
   const promise = stashRef
     ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)
-    : gitExec(['show', '--pretty=format:', item.ref], state.cwd, 30000);
+    : gitExec(['show', '--format=%B%x00', '--patch', item.ref], state.cwd, 30000);
   promise.then(raw => {
     if (_logDetailSeq !== seq) return;
-    for (const l of raw.split('\n')) {
-      lines.push(l.replace(/\r/g, ''));
+    const detailLines = [];
+    if (stashRef) {
+      detailLines.push(...lines);
+      for (const l of raw.split('\n')) {
+        detailLines.push(l.replace(/\r/g, ''));
+      }
+    } else {
+      const normalized = raw.replace(/\r/g, '');
+      const markerIdx = normalized.indexOf('\x00');
+      const bodyRaw = markerIdx >= 0 ? normalized.substring(0, markerIdx).trim() : '';
+      const patchRaw = (markerIdx >= 0 ? normalized.substring(markerIdx + 1) : normalized).replace(/^\n+/, '');
+      detailLines.push(...headerLines);
+      if (bodyRaw) {
+        for (const l of bodyRaw.split('\n')) {
+          detailLines.push(l.replace(/[\r\n]/g, ''));
+        }
+      }
+      detailLines.push(...recoveryLines);
+      detailLines.push(separator);
+      for (const l of patchRaw.split('\n')) {
+        detailLines.push(l.replace(/\r/g, ''));
+      }
     }
-    state.logDetailLines = lines;
+    state.logDetailLines = detailLines;
     require('./render').render();
   });
 }
@@ -960,9 +1122,15 @@ function formatDateTime(isoStr) {
   }
 }
 
+// 빠른 커서 이동 시 spawn 큐 누적을 막기 위해 실제 fetch는 80ms debounce.
+// 헤더/스크롤 reset은 즉시 처리해 시각적 즉응을 유지하고, _diffSeq로 out-of-order 결과를 가드한다.
+const DIFF_DEBOUNCE_MS = 80;
+let _diffDebounceTimer = null;
+
 function updateDiff() {
   const item = selectedItem();
   if (!item) {
+    if (_diffDebounceTimer) { clearTimeout(_diffDebounceTimer); _diffDebounceTimer = null; }
     state.diffLines = [];
     state.conflictView = null;
     state.currentDiffFile = null;
@@ -980,37 +1148,43 @@ function updateDiff() {
   }
 
   const seq = ++_diffSeq;
-  if (item.status === 'U') {
-    gitReadConflictFile(state.cwd, item.file).then(conflictView => {
+  if (_diffDebounceTimer) clearTimeout(_diffDebounceTimer);
+  _diffDebounceTimer = setTimeout(() => {
+    _diffDebounceTimer = null;
+    if (_diffSeq !== seq) return;
+
+    if (item.status === 'U') {
+      gitReadConflictFile(state.cwd, item.file).then(conflictView => {
+        if (_diffSeq !== seq) return;
+        state.conflictView = conflictView;
+        state.diffLines = [];
+        if (ui.mergeConflictFile !== item.file) {
+          ui.mergeConflictFile = item.file;
+          ui.mergeChunkCursor = 0;
+          ui.mergeChunkSelections = {};
+        }
+        ensureConflictSelections(conflictView);
+        require('./render').render();
+      });
+      return;
+    }
+
+    state.conflictView = null;
+    let args;
+    if (item.type === 'staged') {
+      args = ['diff', '--cached', '--', item.file];
+    } else if (item.type === 'unstaged') {
+      args = ['diff', '--', item.file];
+    } else {
+      args = ['diff', '--no-index', '--', '/dev/null', item.file];
+    }
+    gitExec(args, state.cwd).then(raw => {
       if (_diffSeq !== seq) return;
-      state.conflictView = conflictView;
-      state.diffLines = [];
-      if (ui.mergeConflictFile !== item.file) {
-        ui.mergeConflictFile = item.file;
-        ui.mergeChunkCursor = 0;
-        ui.mergeChunkSelections = {};
-      }
-      ensureConflictSelections(conflictView);
+      state.conflictView = null;
+      state.diffLines = raw.split('\n');
       require('./render').render();
     });
-    return;
-  }
-
-  state.conflictView = null;
-  let args;
-  if (item.type === 'staged') {
-    args = ['diff', '--cached', '--', item.file];
-  } else if (item.type === 'unstaged') {
-    args = ['diff', '--', item.file];
-  } else {
-    args = ['diff', '--no-index', '--', '/dev/null', item.file];
-  }
-  gitExec(args, state.cwd).then(raw => {
-    if (_diffSeq !== seq) return;
-    state.conflictView = null;
-    state.diffLines = raw.split('\n');
-    require('./render').render();
-  });
+  }, DIFF_DEBOUNCE_MS);
 }
 
 function refreshFresh() {
@@ -1058,7 +1232,7 @@ function refreshFresh() {
   const tw = FRESH_TIME_WINDOWS[state.freshTimeWindow] || FRESH_TIME_WINDOWS[1];
   if (tw.days > 0) {
     const seq = ++_freshSeq;
-    gitExec(['log', '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {
+    gitExec(['log', '--max-count=' + FRESH_LOG_MAX_COUNT, '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {
       if (_freshSeq !== seq) return;
       let currentCommit = null;
       for (const line of raw.split('\n')) {
@@ -1124,7 +1298,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  refresh, refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
 };

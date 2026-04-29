@@ -24,6 +24,7 @@ const { refreshAsync, refreshLog, refreshFresh, getLastUserRefreshTime } = requi
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
+const path = require('path');
 
 async function main() {
   // Register stdin handler BEFORE any await — the deno runner drops
@@ -87,6 +88,8 @@ async function main() {
   const params = hecaton.initialState?.params;
   if (params && params.path) {
     state.cwd = params.path;
+  } else if (hecaton.initialState?.cwd) {
+    state.cwd = hecaton.initialState.cwd;
   } else {
     const cwdResult = await hecaton.terminal.get_cwd().catch(() => null);
     if (cwdResult && cwdResult.cwd) {
@@ -94,6 +97,10 @@ async function main() {
     } else {
       state.cwd = process.cwd();
     }
+  }
+
+  if (await primeInitialBranchFromDisk()) {
+    render();
   }
 
   // Get initial cell size from host
@@ -106,11 +113,25 @@ async function main() {
   } catch { /* ignore — use defaults */ }
 
   state.loading = false;
-  await refreshAsync();
+  await refreshAsync({ statusOnly: true, loadBranch: true, singleProcessStatus: true, fastFirstPaint: true });
   render();
 
   // Auto-refresh: watch .git directory for changes
-  await setupGitWatcher();
+  setupGitWatcher().catch(() => null);
+
+  if (state.isGitRepo) {
+    setTimeout(() => {
+      refreshLog();
+    }, 250);
+
+    setTimeout(() => {
+      refreshAsync({ metadataOnly: true, silent: true, loadGuiConfig: true }).then(() => {
+        if (state.rightView === 'log') refreshLog();
+        if (state.rightView === 'fresh') refreshFresh();
+        render();
+      }).catch(() => null);
+    }, 500);
+  }
 
   // Graceful shutdown
   process.on('SIGTERM', () => { stopGitWatcher(); process.exit(0); });
@@ -118,7 +139,52 @@ async function main() {
   process.stdin.on('end', () => { stopGitWatcher(); process.exit(0); });
 }
 
+async function primeInitialBranchFromDisk() {
+  if (!state.cwd || state.branch) return false;
+  const gitDir = await findGitDirFromDisk(state.cwd);
+  if (!gitDir) return false;
+  const branch = await readBranchFromGitDir(gitDir);
+  if (!branch) return false;
+  state.gitDir = gitDir;
+  state.branch = branch;
+  hecaton.window.set_title({ title: branch }).catch(() => null);
+  return true;
+}
+
+async function findGitDirFromDisk(cwd) {
+  let dir = path.resolve(cwd);
+  while (dir) {
+    const dotGit = path.join(dir, '.git');
+    try {
+      const st = await hecaton.fs.stat({ path: dotGit });
+      if (st && st.exists) {
+        if (st.is_dir) return dotGit;
+        const res = await hecaton.fs.read_file({ path: dotGit });
+        const content = typeof res === 'string' ? res : (res && res.content) ? res.content : '';
+        const m = content.match(/^gitdir:\s*(.+)\s*$/i);
+        if (m) return path.resolve(dir, m[1].trim());
+      }
+    } catch { /* keep walking */ }
+    const parent = path.dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+  return '';
+}
+
+async function readBranchFromGitDir(gitDir) {
+  try {
+    const res = await hecaton.fs.read_file({ path: path.join(gitDir, 'HEAD') });
+    const head = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
+    if (head.startsWith('ref: refs/heads/')) return head.substring('ref: refs/heads/'.length);
+    if (head) return 'HEAD (detached)';
+  } catch { /* ignore */ }
+  return '';
+}
+
 let _gitWatcherCleanup = null;
+const GIT_MTIME_POLL_INTERVAL_MS = 2000;
+const GIT_WORKTREE_POLL_INTERVAL_MS = 15000;
 
 function stopGitWatcher() {
   if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
@@ -128,16 +194,78 @@ function stopGitWatcher() {
 ui.stopGitWatcher = stopGitWatcher;
 ui.setupGitWatcher = () => setupGitWatcher();
 
+// cwd당 1회만 시도하기 위한 메모. 같은 저장소를 다시 열어도 추가 spawn은 발생하지 않는다.
+const _gitOptimizationsAppliedFor = new Set();
+
+// status 가속을 위해 core.untrackedCache, core.fsmonitor를 자동 활성화한다.
+// - 이미 사용자가 true/false로 명시한 경우는 건드리지 않는다 (의도 존중).
+// - fsmonitor는 git 2.37+에서만 활성화 (그 이하에서는 동작이 다르다).
+// - 모든 호출은 best-effort. 실패해도 silent.
+async function applyGitOptimizations(cwd) {
+  if (_gitOptimizationsAppliedFor.has(cwd)) return;
+  _gitOptimizationsAppliedFor.add(cwd);
+
+  // core.untrackedCache
+  try {
+    const cur = await hecaton.process.exec({
+      program: 'git', args: ['config', '--local', '--get', 'core.untrackedCache'],
+      cwd, timeout_ms: 3000,
+    });
+    const val = cur && cur.ok ? (cur.stdout || '').replace(/\r\n/g, '\n').trim().toLowerCase() : '';
+    // exit_code != 0 이거나 stdout 비어있으면 미설정 → 자동 활성화
+    if (val !== 'true' && val !== 'false') {
+      await hecaton.process.exec({
+        program: 'git', args: ['config', '--local', 'core.untrackedCache', 'true'],
+        cwd, timeout_ms: 3000,
+      });
+      console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');
+    }
+  } catch { /* ignore */ }
+
+  // core.fsmonitor — git 2.37+ 필요
+  try {
+    const ver = await hecaton.process.exec({
+      program: 'git', args: ['--version'],
+      cwd, timeout_ms: 3000,
+    });
+    const verStr = ver && ver.ok ? (ver.stdout || '').replace(/\r\n/g, '\n').trim() : '';
+    const m = verStr.match(/git version (\d+)\.(\d+)/);
+    if (!m) return;
+    const major = parseInt(m[1], 10);
+    const minor = parseInt(m[2], 10);
+    const supportsFsmonitor = (major > 2) || (major === 2 && minor >= 37);
+    if (!supportsFsmonitor) return;
+
+    const cur = await hecaton.process.exec({
+      program: 'git', args: ['config', '--local', '--get', 'core.fsmonitor'],
+      cwd, timeout_ms: 3000,
+    });
+    const val = cur && cur.ok ? (cur.stdout || '').replace(/\r\n/g, '\n').trim().toLowerCase() : '';
+    // 미설정만 자동 활성화. true/false/외부 hook 경로가 잡혀 있으면 그대로 둔다.
+    if (val !== '' && val !== 'true' && val !== 'false') return;
+    if (val === '') {
+      await hecaton.process.exec({
+        program: 'git', args: ['config', '--local', 'core.fsmonitor', 'true'],
+        cwd, timeout_ms: 3000,
+      });
+      console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');
+    }
+  } catch { /* ignore */ }
+}
+
 async function setupGitWatcher() {
   stopGitWatcher(); // 기존 워처 정리
   if (!state.cwd || !state.isGitRepo) return;
+
+  // 저장소별 1회 자동 활성화 (status 가속). state.isGitRepo 확인 후라 안전.
+  applyGitOptimizations(state.cwd);
 
   let debounceTimer = null;
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
 
   function triggerRefresh() {
-    // 사용자 작업 직후 2초간은 폴링에 의한 중복 refresh 억제
-    if (Date.now() - getLastUserRefreshTime() < 2000) return;
+    // 사용자 작업 직후 5초간은 폴링에 의한 중복 refresh 억제 (액션 연타 시 폴러와의 경합 방지)
+    if (Date.now() - getLastUserRefreshTime() < 5000) return;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       if (state.loading || state.minimized) return;
@@ -152,18 +280,24 @@ async function setupGitWatcher() {
   // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
   // Worktree인 경우 .git은 파일이므로 실제 git 디렉토리를 찾아야 함
   let gitDir = state.cwd + sep + '.git';
-  try {
-    const gitDirResult = await hecaton.process.exec({
-      program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout_ms: 3000
-    });
-    if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
-      const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
-      if (resolved) {
-        const isAbsolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolved);
-        gitDir = isAbsolute ? resolved : (state.cwd + sep + resolved);
+  // state.gitDir이 이미 캐시되어 있으면 재사용 — refreshAsync가 먼저 채웠을 수 있음
+  if (state.gitDir) {
+    gitDir = state.gitDir;
+  } else {
+    try {
+      const gitDirResult = await hecaton.process.exec({
+        program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout_ms: 3000
+      });
+      if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
+        const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
+        if (resolved) {
+          const isAbsolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolved);
+          gitDir = isAbsolute ? resolved : (state.cwd + sep + resolved);
+          state.gitDir = gitDir;
+        }
       }
-    }
-  } catch { /* fallback to .git */ }
+    } catch { /* fallback to .git */ }
+  }
   const pollTargets = [
     gitDir + sep + 'index',
     gitDir + sep + 'HEAD',
@@ -191,15 +325,18 @@ async function setupGitWatcher() {
       lastMtimes = current;
       triggerRefresh();
     }
-  }, 2000);
+  }, GIT_MTIME_POLL_INTERVAL_MS);
 
-  // 워킹 디렉토리 변경 감지 (diff-files로 변경 여부만 확인 — 가볍고 빠름)
+  // 워킹 디렉토리 변경 감지 — 외부 도구의 워킹트리 수정은 .git/index mtime을 안 건드리므로
+  // mtime 폴러로 잡을 수 없다. diff-files로만 감지 가능. spawn이 발생하므로 주기는 idle 부담을 고려해 둔다.
   let lastStatusSnapshot = '';
   let statusPolling = false;
   const statusPollInterval = setInterval(async () => {
     if (statusPolling) return;
     if (state.loading || state.minimized) return;
     if (state.mode !== 'normal') return;
+    // 사용자 액션 직후 5초간은 polling spawn도 회피
+    if (Date.now() - getLastUserRefreshTime() < 5000) return;
     statusPolling = true;
     try {
       const result = await hecaton.process.exec({
@@ -212,7 +349,7 @@ async function setupGitWatcher() {
       }
     } catch { /* ignore */ }
     statusPolling = false;
-  }, 3000);
+  }, GIT_WORKTREE_POLL_INTERVAL_MS);
 
   _gitWatcherCleanup = () => {
     if (debounceTimer) clearTimeout(debounceTimer);

@@ -141,9 +141,98 @@ function parseLsFilesOutput(raw) {
   });
 }
 
+function parseStatusBranchHeader(header) {
+  const text = (header || '').trim();
+  if (!text) return '';
+  const noCommits = text.match(/^No commits yet on (.+)$/);
+  if (noCommits) return noCommits[1].trim();
+  if (text.startsWith('HEAD ')) return '';
+  return text.split('...')[0].replace(/\s+\[.*\]$/, '').trim();
+}
+
+function parseStatusPorcelain(raw, includeIgnored) {
+  const staged = [];
+  const unstaged = [];
+  const untracked = [];
+  const ignored = [];
+  let branch = '';
+  if (!raw) return { staged, unstaged, untracked, ignored, branch };
+
+  const parts = raw.split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const rec = parts[i];
+    if (!rec || rec.length < 4) continue;
+    if (rec.startsWith('## ')) {
+      branch = parseStatusBranchHeader(rec.substring(3));
+      continue;
+    }
+
+    const x = rec[0];
+    const y = rec[1];
+    const file = rec.substring(3);
+    if (!file) continue;
+
+    if (x === '?' && y === '?') {
+      untracked.push({ file });
+      continue;
+    }
+    if (x === '!' && y === '!') {
+      if (includeIgnored) ignored.push({ file });
+      continue;
+    }
+
+    // In -z porcelain v1, rename/copy records are "XY new\0old\0".
+    if ((x === 'R' || x === 'C') && i + 1 < parts.length) i++;
+
+    const unmerged = x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D');
+    if (unmerged) {
+      unstaged.push({ status: 'U', file });
+      continue;
+    }
+
+    if (x && x !== ' ') staged.push({ status: x, file });
+    if (y && y !== ' ') unstaged.push({ status: y, file });
+  }
+
+  return { staged, unstaged, untracked, ignored, branch };
+}
+
+async function gitStatusPorcelain(cwd, opts = {}) {
+  const showUntracked = opts.displayUntracked !== false;
+  const includeIgnored = opts.includeIgnored === true;
+  const maxFiles = opts.maxFilesDisplayed || 0;
+  const statusTimeout = opts.timeout || 15000;
+  const args = [
+    '--no-optional-locks',
+    'status',
+    '--porcelain=v1',
+    '-z',
+    showUntracked ? '--untracked-files=normal' : '--untracked-files=no',
+  ];
+  if (opts.includeBranch === true) args.push('--branch');
+  if (showUntracked && includeIgnored) args.push('--ignored');
+
+  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: statusTimeout });
+  if (!result || !result.ok) {
+    if (opts.nullOnError) return null;
+    return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
+  }
+  const snapshot = parseStatusPorcelain((result.stdout || '').replace(/\r\n/g, '\n'), includeIgnored);
+  if (maxFiles > 0) {
+    const trackedCount = snapshot.staged.length + snapshot.unstaged.length;
+    const untrackedLimit = Math.max(0, maxFiles - trackedCount);
+    if (snapshot.untracked.length > untrackedLimit) {
+      snapshot.untracked = snapshot.untracked.slice(0, untrackedLimit);
+    }
+  }
+  return snapshot;
+}
+
 async function gitStatusSplit(cwd, opts = {}) {
   const showUntracked = opts.displayUntracked !== false;
+  const includeIgnored = opts.includeIgnored === true;
   const maxFiles = opts.maxFilesDisplayed || 0;
+  const statusTimeout = opts.timeout || 15000;
 
   // HEAD 존재 여부 확인 → diff-index 대상 결정
   const headRef = await gitExec(['--no-optional-locks', 'rev-parse', '--verify', 'HEAD'], cwd);
@@ -151,20 +240,22 @@ async function gitStatusSplit(cwd, opts = {}) {
 
   // 1단계: 빠른 명령 병렬 실행
   const promises = [
-    gitExec(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd),
-    gitExec(['--no-optional-locks', 'diff-files', '-z'], cwd),
+    gitExec(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd, statusTimeout),
+    gitExec(['--no-optional-locks', 'diff-files', '-z'], cwd, statusTimeout),
   ];
   // untracked/ignored는 조건부
   if (showUntracked) {
-    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '-z', '--exclude-standard'], cwd, 15000));
-    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--ignored', '-z', '--exclude-standard'], cwd, 15000));
+    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
+    if (includeIgnored) {
+      promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--ignored', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
+    }
   }
 
   const results = await Promise.all(promises);
   const staged = parseDiffOutput(results[0]);
   const unstaged = parseDiffOutput(results[1]);
   let untracked = showUntracked ? parseLsFilesOutput(results[2]) : [];
-  let ignored = showUntracked ? parseLsFilesOutput(results[3]) : [];
+  let ignored = showUntracked && includeIgnored ? parseLsFilesOutput(results[3]) : [];
 
   // maxFilesDisplayed 적용 — git-gui처럼 untracked 파일부터 제한
   if (maxFiles > 0) {
@@ -743,7 +834,7 @@ async function gitUnsetConfigLocal(cwd, key) { try { await git(['config', '--loc
 async function gitFreshLog(cwd, days) {
   try {
     const raw = await git(
-      ['log', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],
+      ['log', '--max-count=1000', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],
       cwd
     );
     const items = [];
@@ -954,7 +1045,7 @@ module.exports = {
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
-  gitStatusSplit, parseDiffOutput, parseLsFilesOutput,
+  gitStatusSplit, gitStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,

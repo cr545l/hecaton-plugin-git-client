@@ -1,11 +1,14 @@
 const state = {
   cwd: '',
   isGitRepo: false,
+  gitDir: '',           // cached resolved git-dir absolute path (invalidated on cwd change)
   branch: '',
   staged: [],
   unstaged: [],
   untracked: [],
   ignored: [],
+  ignoredLoaded: false,
+  ignoredLoading: false,
   cursor: 0,
   scrollOffset: 0,
   focusPanel: 'status',  // 'status' | 'diff'
@@ -18,6 +21,7 @@ const state = {
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable
+  logLoading: false,
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
   logDetailLines: [],

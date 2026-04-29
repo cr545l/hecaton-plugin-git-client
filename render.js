@@ -8,9 +8,28 @@ const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
+// Layout 전환 감지 — sixel은 텍스트 redraw로 지워지지 않아 잔상이 남는다.
+// rightView/minimize/패널 collapse/터미널 크기 변화 시점에 한 번 화면을 erase해서
+// 이전 sixel(그래프, 스크롤바)을 강제로 제거한다. 일반 redraw는 그대로 둬 깜빡임을 피한다.
+let _lastLayoutSig = '';
+function computeLayoutSig() {
+  return [
+    state.minimized ? 'mini' : 'norm',
+    state.rightView || 'diff',
+    ui.leftPanelCollapsed ? '1' : '0',
+    ui.middlePanelCollapsed ? '1' : '0',
+    ui.rightPanelCollapsed ? '1' : '0',
+    ui.rightTopCollapsed ? '1' : '0',
+    ui.rightBottomCollapsed ? '1' : '0',
+    ui.termCols,
+    ui.termRows,
+  ].join('|');
+}
+
 function render() {
   if (state.minimized) {
     renderMinimized();
+    _lastLayoutSig = computeLayoutSig();
     return;
   }
 
@@ -23,6 +42,13 @@ function render() {
 
   const buf = [];
   buf.push(ansi.hideCursor + CSI + '?7l');
+
+  // Layout 전환 시 화면 강제 erase — sixel 잔상 제거
+  const layoutSig = computeLayoutSig();
+  if (layoutSig !== _lastLayoutSig) {
+    buf.push(CSI + '2J');
+    _lastLayoutSig = layoutSig;
+  }
 
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
 
@@ -89,13 +115,13 @@ function render() {
       const isLocal = state.rightView === 'diff';
       const isCommits = state.rightView === 'log';
       const isFresh = state.rightView === 'fresh';
-      const localLabel = ` Local *${totalChanges} `;
+      const localLabel = state.loading ? ' Local ... ' : ` Local *${totalChanges} `;
       const commitsLabel = ' Commits ';
       const freshLabel = ' Files ';
 
       const localIdx = zoneIdx++;
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
-      const localHighlight = totalChanges > 0;
+      const localHighlight = !state.loading && totalChanges > 0;
       const localColor = localHighlight ? colors.orange + ansi.bold : colors.cyan;
       const localStyle = localIdx === ui.hoveredTitleZoneIndex
         ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
@@ -939,6 +965,13 @@ function buildFileListPanel(w, h) {
   const focused = state.focusPanel === 'status';
   ui.fileHeaderZones = [];
 
+  if (state.loading) {
+    ui.fileLineMap = [];
+    ui.filesMaxScroll = 0;
+    ui.scrollPct.files = -1;
+    return [colors.dim + ' Loading status...' + ansi.reset].slice(0, h);
+  }
+
   // Pre-compute horizontal scroll to reserve row for scrollbar
   // Only count files in non-collapsed sections
   let preMaxFileW = 0;
@@ -1076,17 +1109,20 @@ function buildFileListPanel(w, h) {
   }
 
   // Ignored
-  if (state.ignored.length > 0) {
+  if (state.ignoredLoaded ? (state.ignored.length > 0 || ui.collapsedSections.ignored === false) : true) {
     const ignoredCollapsed = ui.collapsedSections.ignored !== false; // default collapsed
     const arrow = ignoredCollapsed ? '+' : '-';
-    const headerLabel = ' ' + arrow + '  Ignored (' + state.ignored.length + ')';
+    const ignoredCount = state.ignoredLoading ? '...' : (state.ignoredLoaded ? String(state.ignored.length) : '?');
+    const headerLabel = ' ' + arrow + '  Ignored (' + ignoredCount + ')';
     const zoneIdx = ui.fileHeaderZones.length;
     const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
     const headerStyle = isHovered ? colors.dim + ansi.bold + CSI + '4m' : colors.dim;
     const headerLine = headerStyle + headerLabel + ansi.reset;
     ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: 0, btnColEnd: visLen(headerLabel), action: 'toggleIgnored' });
     pushFileLine(headerLine, -1);
-    if (!ignoredCollapsed) {
+    if (!ignoredCollapsed && !state.ignoredLoaded) {
+      pushFileLine(colors.dim + '   Loading ignored files...' + ansi.reset, -1);
+    } else if (!ignoredCollapsed) {
       for (let i = 0; i < state.ignored.length; i++) {
         const item = state.ignored[i];
         const isCursor = state.cursor === listIdx;
@@ -1312,6 +1348,9 @@ function buildDiffCommitPanel(w, h) {
 
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
+    if (state.logLoading) {
+      return [colors.dim + ' Loading commits...' + ansi.reset];
+    }
     return [colors.dim + ' No commits yet' + ansi.reset];
   }
 
