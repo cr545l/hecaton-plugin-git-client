@@ -106,11 +106,21 @@ async function main() {
   } catch { /* ignore — use defaults */ }
 
   state.loading = false;
-  await refreshAsync();
+  await refreshAsync({ statusOnly: true, loadBranch: true, singleProcessStatus: true, fastFirstPaint: true });
   render();
 
   // Auto-refresh: watch .git directory for changes
-  await setupGitWatcher();
+  setupGitWatcher().catch(() => null);
+
+  if (state.isGitRepo) {
+    setTimeout(() => {
+      refreshAsync({ metadataOnly: true, silent: true, loadGuiConfig: true }).then(() => {
+        if (state.rightView === 'log') refreshLog();
+        if (state.rightView === 'fresh') refreshFresh();
+        render();
+      }).catch(() => null);
+    }, 500);
+  }
 
   // Graceful shutdown
   process.on('SIGTERM', () => { stopGitWatcher(); process.exit(0); });

@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitExec, gitStatusSplit, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
+const { gitExec, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -322,6 +322,42 @@ function remapSelectedFiles() {
 let _refreshRunning = false;
 let _refreshQueued = false;
 let _refreshQueuedOpts = {};
+let _refreshQueuedWaiters = [];
+
+function refreshNeedsStatus(options) {
+  return options.metadataOnly !== true;
+}
+
+function refreshNeedsMeta(options) {
+  return options.statusOnly !== true;
+}
+
+function mergeRefreshOptions(existing, incoming) {
+  const merged = { ...existing, ...incoming };
+  const needsStatus = refreshNeedsStatus(existing) || refreshNeedsStatus(incoming);
+  const needsMeta = refreshNeedsMeta(existing) || refreshNeedsMeta(incoming);
+
+  if (needsStatus && !needsMeta) {
+    merged.statusOnly = true;
+    delete merged.metadataOnly;
+  } else if (!needsStatus && needsMeta) {
+    merged.metadataOnly = true;
+    delete merged.statusOnly;
+  } else {
+    delete merged.statusOnly;
+    delete merged.metadataOnly;
+  }
+
+  if (existing.includeIgnored || incoming.includeIgnored) merged.includeIgnored = true;
+  if (existing.loadBranch || incoming.loadBranch) merged.loadBranch = true;
+  if (existing.loadGuiConfig || incoming.loadGuiConfig) merged.loadGuiConfig = true;
+  if (existing.singleProcessStatus || incoming.singleProcessStatus) merged.singleProcessStatus = true;
+  if (existing.fastFirstPaint || incoming.fastFirstPaint) merged.fastFirstPaint = true;
+  if (existing.silent === true && incoming.silent === true) merged.silent = true;
+  else delete merged.silent;
+
+  return merged;
+}
 
 // 캐싱된 gui config — 전체 refresh 시에만 갱신
 let _cachedUntrackedFlag = '-unormal';
@@ -385,36 +421,74 @@ function applyStatusSnapshot(snapshot, includeIgnored) {
   updateDiff();
 }
 
+async function readBranchNameFast() {
+  if (!state.gitDir) {
+    return (await gitExec(['--no-optional-locks', 'symbolic-ref', '--short', 'HEAD'], state.cwd, 5000)).trim();
+  }
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  try {
+    const res = await hecaton.fs.read_file({ path: state.gitDir + sep + 'HEAD' });
+    const head = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
+    if (head.startsWith('ref: refs/heads/')) return head.substring('ref: refs/heads/'.length);
+    return '';
+  } catch {
+    return (await gitExec(['--no-optional-locks', 'symbolic-ref', '--short', 'HEAD'], state.cwd, 5000)).trim();
+  }
+}
+
 async function refreshAsync(options = {}) {
   if (!state.cwd) return;
 
   const statusOnly = !!options.statusOnly;
+  const metadataOnly = !!options.metadataOnly;
+  const showSpinner = options.silent !== true;
 
   // 동시 실행 방지 — 이미 실행 중이면 대기열에 넣고 리턴
   if (_refreshRunning) {
-    // 대기 중인 요청이 statusOnly인데 전체 refresh가 요청되면 전체로 승격
-    if (_refreshQueued && _refreshQueuedOpts.statusOnly && !statusOnly) {
-      _refreshQueuedOpts = {};
-    } else if (!_refreshQueued) {
-      _refreshQueuedOpts = options;
-    }
+    // 대기 중인 요청들은 필요한 범위(status/meta)를 합쳐서 한 번만 실행한다.
+    _refreshQueuedOpts = _refreshQueued
+      ? mergeRefreshOptions(_refreshQueuedOpts, options)
+      : { ...options };
     _refreshQueued = true;
-    return;
+    return new Promise((resolve, reject) => {
+      _refreshQueuedWaiters.push({ resolve, reject });
+    });
   }
   _refreshRunning = true;
   _refreshQueued = false;
   _refreshQueuedOpts = {};
 
-  _lastUserRefreshTime = Date.now();
+  if (!options.silent) _lastUserRefreshTime = Date.now();
 
   refreshCount++;
-  if (refreshCount === 1) {
+  if (showSpinner && refreshCount === 1) {
     acquireSpinner();
   }
 
   try {
 
-  if (!statusOnly) {
+  if (statusOnly && options.fastFirstPaint && !state.isGitRepo) {
+    const includeIgnored = shouldIncludeIgnored(options);
+    state.ignoredLoading = includeIgnored;
+    const statusSnapshot = await gitStatusPorcelain(state.cwd, {
+      displayUntracked: _cachedUntrackedFlag !== '-uno',
+      includeIgnored,
+      maxFilesDisplayed: _cachedMaxFilesDisplayed,
+      timeout: 15000,
+      includeBranch: options.loadBranch,
+      nullOnError: true,
+    });
+    if (statusSnapshot) {
+      state.isGitRepo = true;
+      if (options.loadBranch) state.branch = statusSnapshot.branch || 'HEAD (detached)';
+      if (!state.spinnerActive) state.error = null;
+      applyStatusSnapshot(statusSnapshot, includeIgnored);
+      return;
+    }
+    state.ignoredLoading = false;
+  }
+
+  if (!statusOnly && !metadataOnly) {
     // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
     try {
       const sep = (process.platform === 'win32') ? '\\' : '/';
@@ -473,7 +547,7 @@ async function refreshAsync(options = {}) {
 
   // gui 설정 읽기 — 전체 refresh 시에만 갱신 (거의 변경되지 않으므로 캐싱)
   // 두 키를 --get-regexp '^gui\.' 한 번의 spawn으로 가져온다
-  if (!statusOnly || !_guiConfigLoaded) {
+  if ((!metadataOnly && (!statusOnly || !_guiConfigLoaded)) || (options.loadGuiConfig && !_guiConfigLoaded)) {
     const guiRaw = await gitExec(['--no-optional-locks', 'config', '--get-regexp', '^gui\\.'], state.cwd);
     let duVal = '';
     let mfVal = '';
@@ -502,12 +576,21 @@ async function refreshAsync(options = {}) {
     // ── 경량 refresh: git status만 실행 ──
     const includeIgnored = shouldIncludeIgnored(options);
     state.ignoredLoading = includeIgnored;
-    const statusSnapshot = await gitStatusSplit(state.cwd, {
+    const statusReader = options.singleProcessStatus === false ? gitStatusSplit : gitStatusPorcelain;
+    const statusPromise = statusReader(state.cwd, {
       displayUntracked: untrackedFlag !== '-uno',
       includeIgnored,
       maxFilesDisplayed,
       timeout: 15000,
     });
+    const branchPromise = options.loadBranch
+      ? readBranchNameFast()
+      : Promise.resolve('');
+    const [statusSnapshot, branchRaw] = await Promise.all([statusPromise, branchPromise]);
+    if (options.loadBranch) {
+      const branchName = (branchRaw || '').trim();
+      state.branch = branchName || 'HEAD (detached)';
+    }
     if (!state.spinnerActive) state.error = null;
 
     applyStatusSnapshot(statusSnapshot, includeIgnored);
@@ -539,16 +622,19 @@ async function refreshAsync(options = {}) {
   const fingerprint = await computeMetaFingerprint(state.cwd, gitDir);
   const metaHit = !!_metaCache && fingerprint && fingerprint === _metaFingerprint;
 
-  const includeIgnored = shouldIncludeIgnored(options);
-  state.ignoredLoading = includeIgnored;
+  const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
+  if (!metadataOnly) state.ignoredLoading = includeIgnored;
   let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw;
+  const statusPromise = metadataOnly
+    ? Promise.resolve(null)
+    : gitStatusSplit(state.cwd, {
+        displayUntracked: untrackedFlag !== '-uno',
+        includeIgnored,
+        maxFilesDisplayed,
+        timeout: 15000,
+      });
   if (metaHit) {
-    statusSnapshot = await gitStatusSplit(state.cwd, {
-      displayUntracked: untrackedFlag !== '-uno',
-      includeIgnored,
-      maxFilesDisplayed,
-      timeout: 15000,
-    });
+    statusSnapshot = await statusPromise;
     stashRaw = _metaCache.stashRaw;
     refsRaw = _metaCache.refsRaw;
     remoteNamesRaw = _metaCache.remoteNamesRaw;
@@ -559,12 +645,7 @@ async function refreshAsync(options = {}) {
   } else {
     [statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
       await Promise.all([
-        gitStatusSplit(state.cwd, {
-          displayUntracked: untrackedFlag !== '-uno',
-          includeIgnored,
-          maxFilesDisplayed,
-          timeout: 15000,
-        }),
+        statusPromise,
         gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
         gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
         gitExec(['--no-optional-locks', 'remote'], state.cwd),
@@ -605,8 +686,10 @@ async function refreshAsync(options = {}) {
       }
     }
   }
-  state.branch = currentBranch || 'HEAD (detached)';
-  applyStatusSnapshot(statusSnapshot, includeIgnored);
+  state.branch = currentBranch || (metadataOnly && state.branch ? state.branch : 'HEAD (detached)');
+  if (!metadataOnly) {
+    applyStatusSnapshot(statusSnapshot, includeIgnored);
+  }
 
   // stashes
   state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
@@ -738,22 +821,31 @@ async function refreshAsync(options = {}) {
   state.behind = parseInt(abParts[0]) || 0;
   state.ahead = parseInt(abParts[1]) || 0;
 
-  remapSelectedFiles();
-  clampCursor();
-  updateDiff();
+  if (metadataOnly) {
+    hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+  } else {
+    remapSelectedFiles();
+    clampCursor();
+    updateDiff();
+  }
 
   } finally {
     refreshCount--;
-    if (refreshCount === 0) {
+    if (showSpinner && refreshCount === 0) {
       releaseSpinner();
     }
     _refreshRunning = false;
     // 대기 중인 refresh가 있으면 다시 실행
     if (_refreshQueued) {
       const queuedOpts = _refreshQueuedOpts;
+      const queuedWaiters = _refreshQueuedWaiters;
       _refreshQueued = false;
       _refreshQueuedOpts = {};
-      refreshAsync(queuedOpts);
+      _refreshQueuedWaiters = [];
+      refreshAsync(queuedOpts).then(
+        (value) => queuedWaiters.forEach(waiter => waiter.resolve(value)),
+        (error) => queuedWaiters.forEach(waiter => waiter.reject(error)),
+      );
     }
   }
 }

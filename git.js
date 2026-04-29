@@ -141,6 +141,93 @@ function parseLsFilesOutput(raw) {
   });
 }
 
+function parseStatusBranchHeader(header) {
+  const text = (header || '').trim();
+  if (!text) return '';
+  const noCommits = text.match(/^No commits yet on (.+)$/);
+  if (noCommits) return noCommits[1].trim();
+  if (text.startsWith('HEAD ')) return '';
+  return text.split('...')[0].replace(/\s+\[.*\]$/, '').trim();
+}
+
+function parseStatusPorcelain(raw, includeIgnored) {
+  const staged = [];
+  const unstaged = [];
+  const untracked = [];
+  const ignored = [];
+  let branch = '';
+  if (!raw) return { staged, unstaged, untracked, ignored, branch };
+
+  const parts = raw.split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const rec = parts[i];
+    if (!rec || rec.length < 4) continue;
+    if (rec.startsWith('## ')) {
+      branch = parseStatusBranchHeader(rec.substring(3));
+      continue;
+    }
+
+    const x = rec[0];
+    const y = rec[1];
+    const file = rec.substring(3);
+    if (!file) continue;
+
+    if (x === '?' && y === '?') {
+      untracked.push({ file });
+      continue;
+    }
+    if (x === '!' && y === '!') {
+      if (includeIgnored) ignored.push({ file });
+      continue;
+    }
+
+    // In -z porcelain v1, rename/copy records are "XY new\0old\0".
+    if ((x === 'R' || x === 'C') && i + 1 < parts.length) i++;
+
+    const unmerged = x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D');
+    if (unmerged) {
+      unstaged.push({ status: 'U', file });
+      continue;
+    }
+
+    if (x && x !== ' ') staged.push({ status: x, file });
+    if (y && y !== ' ') unstaged.push({ status: y, file });
+  }
+
+  return { staged, unstaged, untracked, ignored, branch };
+}
+
+async function gitStatusPorcelain(cwd, opts = {}) {
+  const showUntracked = opts.displayUntracked !== false;
+  const includeIgnored = opts.includeIgnored === true;
+  const maxFiles = opts.maxFilesDisplayed || 0;
+  const statusTimeout = opts.timeout || 15000;
+  const args = [
+    '--no-optional-locks',
+    'status',
+    '--porcelain=v1',
+    '-z',
+    showUntracked ? '--untracked-files=normal' : '--untracked-files=no',
+  ];
+  if (opts.includeBranch === true) args.push('--branch');
+  if (showUntracked && includeIgnored) args.push('--ignored');
+
+  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: statusTimeout });
+  if (!result || !result.ok) {
+    if (opts.nullOnError) return null;
+    return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
+  }
+  const snapshot = parseStatusPorcelain((result.stdout || '').replace(/\r\n/g, '\n'), includeIgnored);
+  if (maxFiles > 0) {
+    const trackedCount = snapshot.staged.length + snapshot.unstaged.length;
+    const untrackedLimit = Math.max(0, maxFiles - trackedCount);
+    if (snapshot.untracked.length > untrackedLimit) {
+      snapshot.untracked = snapshot.untracked.slice(0, untrackedLimit);
+    }
+  }
+  return snapshot;
+}
+
 async function gitStatusSplit(cwd, opts = {}) {
   const showUntracked = opts.displayUntracked !== false;
   const includeIgnored = opts.includeIgnored === true;
@@ -958,7 +1045,7 @@ module.exports = {
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
-  gitStatusSplit, parseDiffOutput, parseLsFilesOutput,
+  gitStatusSplit, gitStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,
