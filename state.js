@@ -7,6 +7,8 @@ const state = {
   unstaged: [],
   untracked: [],
   ignored: [],
+  ignoredLoaded: false,
+  ignoredLoading: false,
   cursor: 0,
   scrollOffset: 0,
   focusPanel: 'status',  // 'status' | 'diff'

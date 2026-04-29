@@ -278,6 +278,8 @@ async function handleContextMenuAction(actionId) {
       state.unstaged = [];
       state.untracked = [];
       state.ignored = [];
+      state.ignoredLoaded = false;
+      state.ignoredLoading = false;
       state.diffLines = [];
       state.currentDiffFile = null;
       state.logEntries = [];

@@ -119,6 +119,8 @@ async function main() {
 }
 
 let _gitWatcherCleanup = null;
+const GIT_MTIME_POLL_INTERVAL_MS = 2000;
+const GIT_WORKTREE_POLL_INTERVAL_MS = 15000;
 
 function stopGitWatcher() {
   if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
@@ -259,10 +261,10 @@ async function setupGitWatcher() {
       lastMtimes = current;
       triggerRefresh();
     }
-  }, 2000);
+  }, GIT_MTIME_POLL_INTERVAL_MS);
 
   // 워킹 디렉토리 변경 감지 — 외부 도구의 워킹트리 수정은 .git/index mtime을 안 건드리므로
-  // mtime 폴러로 잡을 수 없다. diff-files로만 감지 가능. spawn이 발생하므로 주기는 idle 부담을 고려해 5초.
+  // mtime 폴러로 잡을 수 없다. diff-files로만 감지 가능. spawn이 발생하므로 주기는 idle 부담을 고려해 둔다.
   let lastStatusSnapshot = '';
   let statusPolling = false;
   const statusPollInterval = setInterval(async () => {
@@ -283,7 +285,7 @@ async function setupGitWatcher() {
       }
     } catch { /* ignore */ }
     statusPolling = false;
-  }, 5000);
+  }, GIT_WORKTREE_POLL_INTERVAL_MS);
 
   _gitWatcherCleanup = () => {
     if (debounceTimer) clearTimeout(debounceTimer);

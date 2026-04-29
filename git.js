@@ -143,7 +143,9 @@ function parseLsFilesOutput(raw) {
 
 async function gitStatusSplit(cwd, opts = {}) {
   const showUntracked = opts.displayUntracked !== false;
+  const includeIgnored = opts.includeIgnored === true;
   const maxFiles = opts.maxFilesDisplayed || 0;
+  const statusTimeout = opts.timeout || 15000;
 
   // HEAD 존재 여부 확인 → diff-index 대상 결정
   const headRef = await gitExec(['--no-optional-locks', 'rev-parse', '--verify', 'HEAD'], cwd);
@@ -151,20 +153,22 @@ async function gitStatusSplit(cwd, opts = {}) {
 
   // 1단계: 빠른 명령 병렬 실행
   const promises = [
-    gitExec(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd),
-    gitExec(['--no-optional-locks', 'diff-files', '-z'], cwd),
+    gitExec(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd, statusTimeout),
+    gitExec(['--no-optional-locks', 'diff-files', '-z'], cwd, statusTimeout),
   ];
   // untracked/ignored는 조건부
   if (showUntracked) {
-    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '-z', '--exclude-standard'], cwd, 15000));
-    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--ignored', '-z', '--exclude-standard'], cwd, 15000));
+    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
+    if (includeIgnored) {
+      promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--ignored', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
+    }
   }
 
   const results = await Promise.all(promises);
   const staged = parseDiffOutput(results[0]);
   const unstaged = parseDiffOutput(results[1]);
   let untracked = showUntracked ? parseLsFilesOutput(results[2]) : [];
-  let ignored = showUntracked ? parseLsFilesOutput(results[3]) : [];
+  let ignored = showUntracked && includeIgnored ? parseLsFilesOutput(results[3]) : [];
 
   // maxFilesDisplayed 적용 — git-gui처럼 untracked 파일부터 제한
   if (maxFiles > 0) {
@@ -743,7 +747,7 @@ async function gitUnsetConfigLocal(cwd, key) { try { await git(['config', '--loc
 async function gitFreshLog(cwd, days) {
   try {
     const raw = await git(
-      ['log', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],
+      ['log', '--max-count=1000', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],
       cwd
     );
     const items = [];

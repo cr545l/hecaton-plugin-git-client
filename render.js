@@ -1102,17 +1102,20 @@ function buildFileListPanel(w, h) {
   }
 
   // Ignored
-  if (state.ignored.length > 0) {
+  if (state.ignoredLoaded ? (state.ignored.length > 0 || ui.collapsedSections.ignored === false) : true) {
     const ignoredCollapsed = ui.collapsedSections.ignored !== false; // default collapsed
     const arrow = ignoredCollapsed ? '+' : '-';
-    const headerLabel = ' ' + arrow + '  Ignored (' + state.ignored.length + ')';
+    const ignoredCount = state.ignoredLoading ? '...' : (state.ignoredLoaded ? String(state.ignored.length) : '?');
+    const headerLabel = ' ' + arrow + '  Ignored (' + ignoredCount + ')';
     const zoneIdx = ui.fileHeaderZones.length;
     const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
     const headerStyle = isHovered ? colors.dim + ansi.bold + CSI + '4m' : colors.dim;
     const headerLine = headerStyle + headerLabel + ansi.reset;
     ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: 0, btnColEnd: visLen(headerLabel), action: 'toggleIgnored' });
     pushFileLine(headerLine, -1);
-    if (!ignoredCollapsed) {
+    if (!ignoredCollapsed && !state.ignoredLoaded) {
+      pushFileLine(colors.dim + '   Loading ignored files...' + ansi.reset, -1);
+    } else if (!ignoredCollapsed) {
       for (let i = 0; i < state.ignored.length; i++) {
         const item = state.ignored[i];
         const isCursor = state.cursor === listIdx;

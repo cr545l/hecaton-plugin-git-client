@@ -1870,8 +1870,15 @@ async function handleMouseData(data) {
               const btnScreenColEnd = midStart + zone.btnColEnd;
               if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {
                 if (zone.action === 'toggleIgnored') {
-                  ui.collapsedSections.ignored = ui.collapsedSections.ignored === false ? true : false;
-                  render();
+                  const opening = ui.collapsedSections.ignored !== false;
+                  ui.collapsedSections.ignored = opening ? false : true;
+                  if (opening && !state.ignoredLoaded) {
+                    state.ignoredLoading = true;
+                    render();
+                    refreshAsync({ statusOnly: true, includeIgnored: true }).then(() => render());
+                  } else {
+                    render();
+                  }
                   headerHandled = true;
                   break;
                 }
