@@ -61,6 +61,8 @@ const state = {
   behind: 0,
   spinnerActive: false,
   spinnerFrame: 0,
+  refreshing: false,
+  refreshMessage: '',
 };
 
 const ui = {

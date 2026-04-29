@@ -19,7 +19,7 @@ const {
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
   gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs,
 } = require('./git');
-const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, applyStageToState, applyUnstageToState } = require('./refresh');
+const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
@@ -404,9 +404,8 @@ async function handleContextMenuAction(actionId) {
               showError('Stage failed');
               render();
             } else {
-              await refreshAsync({ statusOnly: true });
               stopSpinner();
-              render();
+              refreshInBackground({ statusOnly: true });
             }
           }
         }
@@ -422,9 +421,8 @@ async function handleContextMenuAction(actionId) {
               showError('Unstage failed');
               render();
             } else {
-              await refreshAsync({ statusOnly: true });
               stopSpinner();
-              render();
+              refreshInBackground({ statusOnly: true });
             }
           }
         }
@@ -480,9 +478,8 @@ async function handleContextMenuAction(actionId) {
           showError('Stage all failed');
           render();
         } else {
-          await refreshAsync({ statusOnly: true });
           stopSpinner();
-          render();
+          refreshInBackground({ statusOnly: true });
         }
         break;
       }
@@ -648,16 +645,16 @@ async function handleContextMenuAction(actionId) {
         break;
       case 'branch_push':
         startSpinner('Pushing...');
-        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push'); });
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true }); });
         break;
       case 'branch_push_pr':
         startSpinner('Pushing...');
         gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-          if (err) { await afterGitOp(err, 'Push'); return; }
+          if (err) { await afterGitOp(err, 'Push', { metadataOnly: true }); return; }
           const remoteUrl = await gitGetRemoteUrl(state.cwd, remote);
           const prUrl = buildPullRequestUrl(remoteUrl, branchName);
           if (prUrl) await openExternal(prUrl);
-          await afterGitOp(null, 'Push');
+          await afterGitOp(null, 'Push', { metadataOnly: true });
         });
         break;
       case 'branch_new_branch':
@@ -1359,15 +1356,12 @@ async function handleDialogResult(params) {
 
 async function afterGitOp(err, opName, refreshOpts = {}) {
   if (!state.spinnerActive) state.error = null;
-  await refreshAsync(refreshOpts);
-  if (!refreshOpts.statusOnly) {
-    if (state.rightView === 'log') refreshLog();
-  }
   stopSpinner();
   if (err) {
+    refreshInBackground(refreshOpts, { refreshLog: !refreshOpts.statusOnly });
     showError(opName + ' failed:\n' + err);
   } else {
-    render();
+    refreshInBackground(refreshOpts, { refreshLog: !refreshOpts.statusOnly });
   }
 }
 

@@ -7,7 +7,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
 
@@ -181,11 +181,8 @@ async function handleKey(key) {
         showErrorDialog(err);
         render();
       } else {
-        await refreshAsync();
-        if (state.rightView === 'log') refreshLog();
-        if (state.rightView === 'fresh') refreshFresh();
         stopSpinner();
-        render();
+        refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
       }
     });
     return;
@@ -322,9 +319,8 @@ async function handleKey(key) {
             showErrorDialog('Stage failed');
             render();
           } else {
-            await refreshAsync({ statusOnly: true });
             stopSpinner();
-            render();
+            refreshInBackground({ statusOnly: true });
           }
         }
       }
@@ -350,9 +346,8 @@ async function handleKey(key) {
             showErrorDialog('Unstage failed');
             render();
           } else {
-            await refreshAsync({ statusOnly: true });
             stopSpinner();
-            render();
+            refreshInBackground({ statusOnly: true });
           }
         }
       }
@@ -636,10 +631,8 @@ function handleCommitInput(key) {
         }
         state.commitMsg = '';
         state.commitCursor = 0;
-        // commit 성공 후 실제 state는 refreshAsync로만 반영 — 낙관적 업데이트 금지
-        await refreshAsync();
         stopSpinner();
-        render();
+        refreshInBackground({}, { refreshLog: true, refreshFresh: true });
       });
     }
     return;
@@ -1411,11 +1404,8 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
-                  await refreshAsync();
-                  if (state.rightView === 'log') refreshLog();
-                  if (state.rightView === 'fresh') refreshFresh();
                   stopSpinner();
-                  render();
+                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
                 }
               });
               handled = true;
@@ -1427,11 +1417,8 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
-                  await refreshAsync();
-                  if (state.rightView === 'log') refreshLog();
-                  if (state.rightView === 'fresh') refreshFresh();
                   stopSpinner();
-                  render();
+                  refreshInBackground({}, { refreshLog: true, refreshFresh: true });
                 }
               });
               handled = true;
@@ -1449,11 +1436,8 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
-                  await refreshAsync();
-                  if (state.rightView === 'log') refreshLog();
-                  if (state.rightView === 'fresh') refreshFresh();
                   stopSpinner();
-                  render();
+                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
                 }
               });
               handled = true;
@@ -1901,9 +1885,8 @@ async function handleMouseData(data) {
                         showErrorDialog(label + ' failed');
                         render();
                       } else {
-                        await refreshAsync({ statusOnly: true });
                         stopSpinner();
-                        render();
+                        refreshInBackground({ statusOnly: true });
                       }
                     })();
                   }
@@ -1936,9 +1919,8 @@ async function handleMouseData(data) {
                       showErrorDialog(label + ' failed');
                       render();
                     } else {
-                      await refreshAsync({ statusOnly: true });
                       stopSpinner();
-                      render();
+                      refreshInBackground({ statusOnly: true });
                     }
                   })();
                 }
@@ -1969,9 +1951,8 @@ async function handleMouseData(data) {
                     render();
                     return;
                   }
-                  await refreshAsync({ statusOnly: true });
                   stopSpinner();
-                  render();
+                  refreshInBackground({ statusOnly: true });
                 });
               }
               ui.lastClickFileIdx = -1;

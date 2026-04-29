@@ -207,6 +207,39 @@ let _logDetailSeq = 0;
 let _freshDetailSeq = 0;
 let _logSeq = 0;
 let _freshSeq = 0;
+let _backgroundRefreshCount = 0;
+
+function renderNow() {
+  require('./render').render();
+}
+
+function refreshInBackground(options = {}, followup = {}) {
+  if (!state.cwd) return Promise.resolve();
+  _backgroundRefreshCount++;
+  state.refreshing = true;
+  state.refreshMessage = followup.message || 'Refreshing...';
+  acquireSpinner();
+  renderNow();
+
+  const refreshOptions = { ...options, silent: true };
+  return refreshAsync(refreshOptions)
+    .then(() => {
+      if (followup.refreshLog && state.rightView === 'log') refreshLog();
+      if (followup.refreshFresh && state.rightView === 'fresh') refreshFresh();
+    })
+    .catch(err => {
+      state.error = (err && (err.message || String(err))) || 'Refresh failed';
+    })
+    .finally(() => {
+      _backgroundRefreshCount = Math.max(0, _backgroundRefreshCount - 1);
+      releaseSpinner();
+      if (_backgroundRefreshCount === 0) {
+        state.refreshing = false;
+        state.refreshMessage = '';
+      }
+      renderNow();
+    });
+}
 
 function buildFileList() {
   const list = [];
@@ -1300,5 +1333,6 @@ module.exports = {
   buildFileList, selectedItem, clampCursor,
   refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
+  refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
 };
