@@ -1915,25 +1915,31 @@ async function handleMouseData(data) {
                   ? Array.from(state.selectedFiles).sort((a, b) => a - b)
                   : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
                 if (targets.length > 0) {
-                  const total = targets.length;
                   const label = zone.action === 'stageSelected' ? 'Staging' : 'Unstaging';
                   const isStage = zone.action === 'stageSelected';
-                  startSpinner(`${label}... (0/${total}) 0%`);
+                  const files = targets
+                    .map(i => fileList[i])
+                    .filter(item => item && (isStage ? item.type !== 'staged' : item.type === 'staged'))
+                    .map(item => item.file);
+                  if (files.length === 0) {
+                    headerHandled = true;
+                    break;
+                  }
+                  startSpinner(`${label}...`);
                   (async () => {
-                    for (let i = 0; i < total; i++) {
-                      const item = fileList[targets[i]];
-                      if (isStage) {
-                        if (item && item.type !== 'staged') await gitStageAsync(state.cwd, item.file);
-                      } else {
-                        if (item && item.type === 'staged') await gitUnstageAsync(state.cwd, item.file);
-                      }
-                      const pct = Math.round(((i + 1) / total) * 100);
-                      state.error = `${label}... (${i + 1}/${total}) ${pct}%`;
-                    }
+                    const ok = isStage
+                      ? await gitStageMultiple(state.cwd, files)
+                      : await gitUnstageMultiple(state.cwd, files);
                     state.selectedFiles.clear();
-                    await refreshAsync();
-                    stopSpinner();
-                    render();
+                    if (!ok) {
+                      stopSpinner();
+                      showErrorDialog(label + ' failed');
+                      render();
+                    } else {
+                      await refreshAsync({ statusOnly: true });
+                      stopSpinner();
+                      render();
+                    }
                   })();
                 }
                 headerHandled = true;
@@ -1956,8 +1962,14 @@ async function handleMouseData(data) {
                 const isUnstage = item.type === 'staged';
                 const msg = isUnstage ? 'Unstaging...' : 'Staging...';
                 startSpinner(msg);
-                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(async () => {
-                  await refreshAsync();
+                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(async ok => {
+                  if (!ok) {
+                    stopSpinner();
+                    showErrorDialog((isUnstage ? 'Unstage' : 'Stage') + ' failed');
+                    render();
+                    return;
+                  }
+                  await refreshAsync({ statusOnly: true });
                   stopSpinner();
                   render();
                 });
