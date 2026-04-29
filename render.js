@@ -478,6 +478,8 @@ function render() {
   } else if (state.refreshing) {
     const msg = state.refreshMessage || 'Refreshing...';
     hintContent = ' ' + colors.yellow + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ' ' + msg + ansi.reset;
+  } else if (state.logLoadingMore) {
+    hintContent = ' ' + colors.yellow + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ' Loading more commits...' + ansi.reset;
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else if (state.operationState) {

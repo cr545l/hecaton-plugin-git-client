@@ -7,7 +7,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
 
@@ -42,6 +42,15 @@ function showErrorDialog(msg) {
     message: msg,
     buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
+}
+
+function maybeLoadMoreLog() {
+  if (state.rightView !== 'log' || !state.logHasMore || state.logLoadingMore) return;
+  const cursorRemaining = state.logSelectables.length > 0
+    ? state.logSelectables.length - 1 - state.logCursor
+    : Infinity;
+  const scrollRemaining = state.logItems.length - (state.logScrollOffset + (ui.lastLogListH || 0));
+  if (cursorRemaining <= 50 || scrollRemaining <= 50) loadMoreLog();
 }
 
 function isStaleRebaseError(err) {
@@ -237,6 +246,7 @@ async function handleKey(key) {
           state.logCursor = Math.min(state.logSelectables.length - 1, state.logCursor + 1);
           state.diffScrollOffset = 0;
           updateLogDetail();
+          maybeLoadMoreLog();
         }
       } else {
         const list = buildFileList();
@@ -882,7 +892,7 @@ function applyScrollbarOffset(target, offset) {
     case 'left': ui.leftPanelScrollOffset = offset; break;
     case 'files': state.scrollOffset = offset; ui.filesScrollPin = state.cursor; break;
     case 'diff': state.diffScrollOffset = offset; break;
-    case 'logList': state.logScrollOffset = offset; ui.logScrollPin = state.logCursor; break;
+    case 'logList': state.logScrollOffset = offset; ui.logScrollPin = state.logCursor; maybeLoadMoreLog(); break;
     case 'logDetail': state.diffScrollOffset = offset; break;
     case 'freshList': state.freshScrollOffset = offset; ui.freshScrollPin = state.freshCursor; break;
     case 'freshDetail': state.diffScrollOffset = offset; break;
@@ -1316,8 +1326,10 @@ async function handleMouseData(data) {
               if (state.logScrollOffset !== prev) {
                 ui.logScrollPin = state.logCursor;
                 changed = true;
+                maybeLoadMoreLog();
               }
             }
+            if (cb !== 64) maybeLoadMoreLog();
             state.focusPanel = 'status';
           } else {
             const prev = state.diffScrollOffset;

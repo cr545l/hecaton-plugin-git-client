@@ -22,6 +22,9 @@ const state = {
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable
   logLoading: false,
+  logLoadingMore: false,
+  logHasMore: false,
+  logLoadedLimit: 0,
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
   logDetailLines: [],

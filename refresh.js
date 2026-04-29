@@ -887,6 +887,9 @@ async function refreshAsync(options = {}) {
 // 백그라운드에서 LOG_FULL_LIMIT으로 받아 그래프를 보강한다.
 const LOG_FAST_LIMIT = 200;
 const LOG_FULL_LIMIT = 2000;
+const LOG_PAGE_SIZE = 2000;
+let _logRequestedLimit = LOG_FULL_LIMIT;
+let _logLimitCwd = '';
 
 function parseLogRaw(raw, recovery, recoveryHashSet) {
   raw = (raw || '').replace(/\r/g, '').trim();
@@ -993,11 +996,19 @@ function refreshLog() {
     state.logItems = [];
     state.logSelectables = [];
     state.logLoading = false;
+    state.logLoadingMore = false;
+    state.logHasMore = false;
+    state.logLoadedLimit = 0;
     state.recoveryRefs = {};
     ui.stashMap = new Map();
     return;
   }
   if (state.logLoading && state.logItems.length === 0) return;
+  state.logLoadingMore = false;
+  if (_logLimitCwd !== state.cwd) {
+    _logLimitCwd = state.cwd;
+    _logRequestedLimit = LOG_FULL_LIMIT;
+  }
 
   // Build stash map and collect stash hashes for graph inclusion
   const stashRefList = state.stashes;
@@ -1038,22 +1049,94 @@ function refreshLog() {
     if (_logSeq !== seq) return;
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
-    if (fastCommits.length < LOG_FAST_LIMIT && recoveryHashSet.size === 0) return;
+    if (fastCommits.length < LOG_FAST_LIMIT && recoveryHashSet.size === 0) {
+      state.logHasMore = false;
+      state.logLoadedLimit = fastCommits.length;
+      return;
+    }
 
     // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
     // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
-    const fullRaw = await gitExec(buildArgs(LOG_FULL_LIMIT, recovery.hashes || []), state.cwd, 30000);
+    const fullLimit = _logRequestedLimit;
+    const fullRaw = await gitExec(buildArgs(fullLimit, recovery.hashes || []), state.cwd, 30000);
     if (_logSeq !== seq) return;
     const fullCommits = parseLogRaw(fullRaw, recovery, recoveryHashSet);
     applyLogGraphRows(buildLogGraphRows(fullCommits, stashFullHashes));
+    state.logLoadedLimit = fullLimit;
+    state.logHasMore = fullCommits.length >= fullLimit;
     if (state.rightView === 'log') updateLogDetail();
     state.logLoading = false;
     require('./render').render();
   })().catch(() => {
     if (_logSeq !== seq) return;
     state.logLoading = false;
+    state.logLoadingMore = false;
     if (state.rightView === 'log') require('./render').render();
   });
+}
+
+function loadMoreLog() {
+  if (!state.cwd || !state.isGitRepo) return false;
+  if (state.logLoadingMore || !state.logHasMore) return false;
+  if (_logLimitCwd !== state.cwd) {
+    _logLimitCwd = state.cwd;
+    _logRequestedLimit = LOG_FULL_LIMIT;
+  }
+
+  _logRequestedLimit += LOG_PAGE_SIZE;
+  const targetLimit = _logRequestedLimit;
+  const keepCursor = state.logCursor;
+  const keepScrollOffset = state.logScrollOffset;
+
+  const stashRefList = state.stashes;
+  ui.stashMap = new Map();
+  const stashHashes = [];
+  const stashFullHashes = new Set();
+  for (const s of stashRefList) {
+    ui.stashMap.set(s.shortHash, s.ref);
+    stashHashes.push(s.hash);
+    stashFullHashes.add(s.hash);
+  }
+
+  const seq = ++_logSeq;
+  state.logLoadingMore = true;
+  state.logLoading = true;
+  acquireSpinner();
+  require('./render').render();
+
+  (async () => {
+    const recovery = await gitReflogRecoveries(state.cwd, 250, 64, 256)
+      .catch(() => ({ hashes: [], refsByHash: {} }));
+    if (_logSeq !== seq) return;
+    state.recoveryRefs = recovery.refsByHash || {};
+    const recoveryHashSet = new Set(recovery.hashes || []);
+    const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
+    const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
+    if (stashHashes.length > 0) args.push(...stashHashes);
+    if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
+    args.push('-' + targetLimit);
+
+    const raw = await gitExec(args, state.cwd, 30000);
+    if (_logSeq !== seq) return;
+    const commits = parseLogRaw(raw, recovery, recoveryHashSet);
+    applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
+    state.logCursor = Math.min(keepCursor, Math.max(0, state.logSelectables.length - 1));
+    state.logScrollOffset = keepScrollOffset;
+    state.logLoadedLimit = targetLimit;
+    state.logHasMore = commits.length >= targetLimit;
+    if (state.rightView === 'log') updateLogDetail();
+  })().catch(() => {
+    if (_logSeq === seq) state.logHasMore = false;
+  }).finally(() => {
+    const isCurrent = _logSeq === seq;
+    if (isCurrent) {
+      state.logLoading = false;
+      state.logLoadingMore = false;
+    }
+    releaseSpinner();
+    if (isCurrent && state.rightView === 'log') require('./render').render();
+  });
+  return true;
 }
 
 function selectedLogRef() {
@@ -1331,7 +1414,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  refreshAsync, refreshLog, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
