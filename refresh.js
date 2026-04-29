@@ -386,6 +386,9 @@ function mergeRefreshOptions(existing, incoming) {
   if (existing.loadGuiConfig || incoming.loadGuiConfig) merged.loadGuiConfig = true;
   if (existing.singleProcessStatus || incoming.singleProcessStatus) merged.singleProcessStatus = true;
   if (existing.fastFirstPaint || incoming.fastFirstPaint) merged.fastFirstPaint = true;
+  if (existing.statusTimeout || incoming.statusTimeout) {
+    merged.statusTimeout = Math.max(existing.statusTimeout || 0, incoming.statusTimeout || 0);
+  }
   if (existing.silent === true && incoming.silent === true) merged.silent = true;
   else delete merged.silent;
 
@@ -475,6 +478,7 @@ async function refreshAsync(options = {}) {
   const statusOnly = !!options.statusOnly;
   const metadataOnly = !!options.metadataOnly;
   const showSpinner = options.silent !== true;
+  const statusTimeout = options.statusTimeout || 15000;
 
   // 동시 실행 방지 — 이미 실행 중이면 대기열에 넣고 리턴
   if (_refreshRunning) {
@@ -507,7 +511,7 @@ async function refreshAsync(options = {}) {
       displayUntracked: _cachedUntrackedFlag !== '-uno',
       includeIgnored,
       maxFilesDisplayed: _cachedMaxFilesDisplayed,
-      timeout: 15000,
+      timeout: statusTimeout,
       includeBranch: options.loadBranch,
       nullOnError: true,
     });
@@ -542,11 +546,20 @@ async function refreshAsync(options = {}) {
   // is-inside-work-tree와 git-dir을 한 번에 가져와 이후 Promise.all에서 git-dir 호출을 생략한다.
   if (!state.isGitRepo) {
     const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir'], cwd: state.cwd, timeout_ms: 5000 });
-    console.log('[git-client] preCheck:', JSON.stringify(preCheck), 'cwd:', state.cwd);
     const preLines = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').split('\n') : [];
     const insideWorkTree = (preLines[0] || '').trim();
     const preGitDir = (preLines[1] || '').trim();
     if (!preCheck || !preCheck.ok || insideWorkTree !== 'true') {
+      if (state.gitDir) {
+        state.isGitRepo = true;
+        state.ignoredLoading = false;
+        if (!state.branch) {
+          const branchName = await readBranchNameFast().catch(() => '');
+          state.branch = branchName || 'HEAD';
+        }
+        if (!state.spinnerActive) state.error = 'Repository detected; Git is still warming up...';
+        return;
+      }
       state.isGitRepo = false;
       const parts = [];
       if (preCheck && preCheck.ok && insideWorkTree !== 'true') {
@@ -610,11 +623,17 @@ async function refreshAsync(options = {}) {
     const includeIgnored = shouldIncludeIgnored(options);
     state.ignoredLoading = includeIgnored;
     const statusReader = options.singleProcessStatus === false ? gitStatusSplit : gitStatusPorcelain;
-    const statusPromise = statusReader(state.cwd, {
+    const statusOptions = {
       displayUntracked: untrackedFlag !== '-uno',
       includeIgnored,
       maxFilesDisplayed,
-      timeout: 15000,
+      timeout: statusTimeout,
+    };
+    if (options.fastFirstPaint && statusReader === gitStatusPorcelain) {
+      statusOptions.nullOnError = true;
+    }
+    const statusPromise = statusReader(state.cwd, {
+      ...statusOptions,
     });
     const branchPromise = options.loadBranch
       ? readBranchNameFast()
@@ -623,6 +642,11 @@ async function refreshAsync(options = {}) {
     if (options.loadBranch) {
       const branchName = (branchRaw || '').trim();
       state.branch = branchName || 'HEAD (detached)';
+    }
+    if (!statusSnapshot) {
+      state.ignoredLoading = false;
+      if (!state.spinnerActive) state.error = 'Repository detected; status scan is still warming up...';
+      return;
     }
     if (!state.spinnerActive) state.error = null;
 
@@ -664,7 +688,7 @@ async function refreshAsync(options = {}) {
         displayUntracked: untrackedFlag !== '-uno',
         includeIgnored,
         maxFilesDisplayed,
-        timeout: 15000,
+        timeout: statusTimeout,
       });
   if (metaHit) {
     statusSnapshot = await statusPromise;

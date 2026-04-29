@@ -20,7 +20,7 @@
  */
 
 const { state, ui, init: initState } = require('./state');
-const { refreshAsync, refreshLog, refreshFresh, getLastUserRefreshTime } = require('./refresh');
+const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
@@ -99,7 +99,8 @@ async function main() {
     }
   }
 
-  if (await primeInitialBranchFromDisk()) {
+  const primedFromDisk = await primeInitialBranchFromDisk();
+  if (primedFromDisk) {
     render();
   }
 
@@ -113,24 +114,46 @@ async function main() {
   } catch { /* ignore — use defaults */ }
 
   state.loading = false;
-  await refreshAsync({ statusOnly: true, loadBranch: true, singleProcessStatus: true, fastFirstPaint: true });
-  render();
+  let initialRefresh = null;
+  if (primedFromDisk) {
+    render();
+    initialRefresh = refreshInBackground({
+      statusOnly: true,
+      loadBranch: true,
+      singleProcessStatus: true,
+      fastFirstPaint: true,
+      statusTimeout: 60000,
+    }, { message: 'Scanning repository...' });
+  } else {
+    await refreshAsync({ statusOnly: true, loadBranch: true, singleProcessStatus: true, fastFirstPaint: true });
+    render();
+  }
 
   // Auto-refresh: watch .git directory for changes
   setupGitWatcher().catch(() => null);
 
-  if (state.isGitRepo) {
-    setTimeout(() => {
-      refreshLog();
-    }, 250);
+  const scheduleStartupBackgroundWork = () => {
+    if (!state.isGitRepo) return;
+    if (state.rightView === 'log') {
+      setTimeout(() => {
+        if (state.rightView === 'log') refreshLog();
+      }, 250);
+    }
 
     setTimeout(() => {
+      if (!state.isGitRepo) return;
       refreshAsync({ metadataOnly: true, silent: true, loadGuiConfig: true }).then(() => {
         if (state.rightView === 'log') refreshLog();
         if (state.rightView === 'fresh') refreshFresh();
         render();
       }).catch(() => null);
-    }, 500);
+    }, 1000);
+  };
+
+  if (initialRefresh) {
+    initialRefresh.finally(scheduleStartupBackgroundWork);
+  } else {
+    scheduleStartupBackgroundWork();
   }
 
   // Graceful shutdown
@@ -144,10 +167,11 @@ async function primeInitialBranchFromDisk() {
   const gitDir = await findGitDirFromDisk(state.cwd);
   if (!gitDir) return false;
   const branch = await readBranchFromGitDir(gitDir);
-  if (!branch) return false;
   state.gitDir = gitDir;
-  state.branch = branch;
-  hecaton.window.set_title({ title: branch }).catch(() => null);
+  state.isGitRepo = true;
+  state.branch = branch || 'HEAD';
+  state.error = null;
+  hecaton.window.set_title({ title: state.branch }).catch(() => null);
   return true;
 }
 
