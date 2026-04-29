@@ -24,6 +24,7 @@ const { refreshAsync, refreshLog, refreshFresh, getLastUserRefreshTime } = requi
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
+const path = require('path');
 
 async function main() {
   // Register stdin handler BEFORE any await — the deno runner drops
@@ -87,6 +88,8 @@ async function main() {
   const params = hecaton.initialState?.params;
   if (params && params.path) {
     state.cwd = params.path;
+  } else if (hecaton.initialState?.cwd) {
+    state.cwd = hecaton.initialState.cwd;
   } else {
     const cwdResult = await hecaton.terminal.get_cwd().catch(() => null);
     if (cwdResult && cwdResult.cwd) {
@@ -94,6 +97,10 @@ async function main() {
     } else {
       state.cwd = process.cwd();
     }
+  }
+
+  if (await primeInitialBranchFromDisk()) {
+    render();
   }
 
   // Get initial cell size from host
@@ -114,6 +121,10 @@ async function main() {
 
   if (state.isGitRepo) {
     setTimeout(() => {
+      refreshLog();
+    }, 250);
+
+    setTimeout(() => {
       refreshAsync({ metadataOnly: true, silent: true, loadGuiConfig: true }).then(() => {
         if (state.rightView === 'log') refreshLog();
         if (state.rightView === 'fresh') refreshFresh();
@@ -126,6 +137,49 @@ async function main() {
   process.on('SIGTERM', () => { stopGitWatcher(); process.exit(0); });
   process.on('SIGINT', () => { stopGitWatcher(); process.exit(0); });
   process.stdin.on('end', () => { stopGitWatcher(); process.exit(0); });
+}
+
+async function primeInitialBranchFromDisk() {
+  if (!state.cwd || state.branch) return false;
+  const gitDir = await findGitDirFromDisk(state.cwd);
+  if (!gitDir) return false;
+  const branch = await readBranchFromGitDir(gitDir);
+  if (!branch) return false;
+  state.gitDir = gitDir;
+  state.branch = branch;
+  hecaton.window.set_title({ title: branch }).catch(() => null);
+  return true;
+}
+
+async function findGitDirFromDisk(cwd) {
+  let dir = path.resolve(cwd);
+  while (dir) {
+    const dotGit = path.join(dir, '.git');
+    try {
+      const st = await hecaton.fs.stat({ path: dotGit });
+      if (st && st.exists) {
+        if (st.is_dir) return dotGit;
+        const res = await hecaton.fs.read_file({ path: dotGit });
+        const content = typeof res === 'string' ? res : (res && res.content) ? res.content : '';
+        const m = content.match(/^gitdir:\s*(.+)\s*$/i);
+        if (m) return path.resolve(dir, m[1].trim());
+      }
+    } catch { /* keep walking */ }
+    const parent = path.dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+  return '';
+}
+
+async function readBranchFromGitDir(gitDir) {
+  try {
+    const res = await hecaton.fs.read_file({ path: path.join(gitDir, 'HEAD') });
+    const head = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
+    if (head.startsWith('ref: refs/heads/')) return head.substring('ref: refs/heads/'.length);
+    if (head) return 'HEAD (detached)';
+  } catch { /* ignore */ }
+  return '';
 }
 
 let _gitWatcherCleanup = null;

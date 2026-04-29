@@ -21,6 +21,7 @@ const state = {
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable
+  logLoading: false,
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
   logDetailLines: [],

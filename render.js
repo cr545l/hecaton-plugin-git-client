@@ -115,13 +115,13 @@ function render() {
       const isLocal = state.rightView === 'diff';
       const isCommits = state.rightView === 'log';
       const isFresh = state.rightView === 'fresh';
-      const localLabel = ` Local *${totalChanges} `;
+      const localLabel = state.loading ? ' Local ... ' : ` Local *${totalChanges} `;
       const commitsLabel = ' Commits ';
       const freshLabel = ' Files ';
 
       const localIdx = zoneIdx++;
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
-      const localHighlight = totalChanges > 0;
+      const localHighlight = !state.loading && totalChanges > 0;
       const localColor = localHighlight ? colors.orange + ansi.bold : colors.cyan;
       const localStyle = localIdx === ui.hoveredTitleZoneIndex
         ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
@@ -965,6 +965,13 @@ function buildFileListPanel(w, h) {
   const focused = state.focusPanel === 'status';
   ui.fileHeaderZones = [];
 
+  if (state.loading) {
+    ui.fileLineMap = [];
+    ui.filesMaxScroll = 0;
+    ui.scrollPct.files = -1;
+    return [colors.dim + ' Loading status...' + ansi.reset].slice(0, h);
+  }
+
   // Pre-compute horizontal scroll to reserve row for scrollbar
   // Only count files in non-collapsed sections
   let preMaxFileW = 0;
@@ -1341,6 +1348,9 @@ function buildDiffCommitPanel(w, h) {
 
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
+    if (state.logLoading) {
+      return [colors.dim + ' Loading commits...' + ansi.reset];
+    }
     return [colors.dim + ' No commits yet' + ansi.reset];
   }
 

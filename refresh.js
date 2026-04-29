@@ -959,10 +959,12 @@ function refreshLog() {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
     state.logSelectables = [];
+    state.logLoading = false;
     state.recoveryRefs = {};
     ui.stashMap = new Map();
     return;
   }
+  if (state.logLoading && state.logItems.length === 0) return;
 
   // Build stash map and collect stash hashes for graph inclusion
   const stashRefList = state.stashes;
@@ -976,38 +978,49 @@ function refreshLog() {
   }
 
   const seq = ++_logSeq;
+  state.logLoading = true;
   (async () => {
-    const recovery = await gitReflogRecoveries(state.cwd, 250, 64, 256);
-    if (_logSeq !== seq) return;
-    state.recoveryRefs = recovery.refsByHash || {};
-    const recoveryHashSet = new Set(recovery.hashes || []);
+    const recoveryPromise = gitReflogRecoveries(state.cwd, 250, 64, 256)
+      .catch(() => ({ hashes: [], refsByHash: {} }));
 
     const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
-    const buildArgs = (limit) => {
+    const buildArgs = (limit, recoveryHashes) => {
       const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
       if (stashHashes.length > 0) args.push(...stashHashes);
-      if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
+      if (recoveryHashes && recoveryHashes.length > 0) args.push(...recoveryHashes);
       args.push('-' + limit);
       return args;
     };
 
     // 1차: 빠른 첫 paint (작은 한도). graph는 부분 데이터 기준이라 정확도가 약간 떨어질 수 있으나
     // 즉시 화면이 뜨므로 체감 속도 우선. _logSeq로 out-of-order 가드.
-    const fastRaw = await gitExec(buildArgs(LOG_FAST_LIMIT), state.cwd, 30000);
+    const fastRaw = await gitExec(buildArgs(LOG_FAST_LIMIT, []), state.cwd, 30000);
     if (_logSeq !== seq) return;
-    const fastCommits = parseLogRaw(fastRaw, recovery, recoveryHashSet);
+    const fastCommits = parseLogRaw(fastRaw, { refsByHash: {} }, new Set());
     applyLogGraphRows(buildLogGraphRows(fastCommits, stashFullHashes));
+    if (state.rightView === 'log') updateLogDetail();
+    state.logLoading = false;
     require('./render').render();
-    if (fastCommits.length < LOG_FAST_LIMIT) return;
+    const recovery = await recoveryPromise;
+    if (_logSeq !== seq) return;
+    state.recoveryRefs = recovery.refsByHash || {};
+    const recoveryHashSet = new Set(recovery.hashes || []);
+    if (fastCommits.length < LOG_FAST_LIMIT && recoveryHashSet.size === 0) return;
 
     // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
     // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
-    const fullRaw = await gitExec(buildArgs(LOG_FULL_LIMIT), state.cwd, 30000);
+    const fullRaw = await gitExec(buildArgs(LOG_FULL_LIMIT, recovery.hashes || []), state.cwd, 30000);
     if (_logSeq !== seq) return;
     const fullCommits = parseLogRaw(fullRaw, recovery, recoveryHashSet);
     applyLogGraphRows(buildLogGraphRows(fullCommits, stashFullHashes));
+    if (state.rightView === 'log') updateLogDetail();
+    state.logLoading = false;
     require('./render').render();
-  })();
+  })().catch(() => {
+    if (_logSeq !== seq) return;
+    state.logLoading = false;
+    if (state.rightView === 'log') require('./render').render();
+  });
 }
 
 function selectedLogRef() {
