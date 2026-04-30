@@ -209,7 +209,8 @@ async function readBranchFromGitDir(gitDir) {
 
 let _gitWatcherCleanup = null;
 const GIT_MTIME_POLL_INTERVAL_MS = 2000;
-const GIT_WORKTREE_POLL_INTERVAL_MS = 15000;
+const GIT_WORKTREE_POLL_INTERVAL_MS = 3000;
+const USER_ACTION_REFRESH_SUPPRESS_MS = 1500;
 
 function stopGitWatcher() {
   if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
@@ -286,20 +287,36 @@ async function setupGitWatcher() {
   applyGitOptimizations(state.cwd);
 
   let debounceTimer = null;
+  let pendingAutoRefreshOptions = null;
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
 
-  function triggerRefresh() {
-    // 사용자 작업 직후 5초간은 폴링에 의한 중복 refresh 억제 (액션 연타 시 폴러와의 경합 방지)
-    if (Date.now() - getLastUserRefreshTime() < 5000) return;
+  function mergeAutoRefreshOptions(existing, incoming) {
+    if (!existing) return { ...incoming };
+    if (existing.statusOnly === true && incoming.statusOnly === true) {
+      return { statusOnly: true };
+    }
+    return {};
+  }
+
+  function triggerRefresh(options = {}) {
+    // Delay auto-refresh briefly after local actions, but do not drop it.
+    pendingAutoRefreshOptions = mergeAutoRefreshOptions(pendingAutoRefreshOptions, options);
     if (debounceTimer) clearTimeout(debounceTimer);
+    const elapsed = Date.now() - getLastUserRefreshTime();
+    const delay = elapsed < USER_ACTION_REFRESH_SUPPRESS_MS
+      ? USER_ACTION_REFRESH_SUPPRESS_MS - elapsed
+      : 150;
     debounceTimer = setTimeout(async () => {
+      debounceTimer = null;
+      const refreshOptions = pendingAutoRefreshOptions || {};
+      pendingAutoRefreshOptions = null;
       if (state.loading || state.minimized) return;
       if (state.mode !== 'normal') return;
-      await refreshAsync();
-      if (state.rightView === 'log') refreshLog();
+      await refreshAsync(refreshOptions);
+      if (!refreshOptions.statusOnly && state.rightView === 'log') refreshLog();
       if (state.rightView === 'fresh') refreshFresh();
       render();
-    }, 150);
+    }, delay);
   }
 
   // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
@@ -339,6 +356,51 @@ async function setupGitWatcher() {
     } catch { return 0; }
   }
 
+  function splitNul(raw) {
+    return (raw || '').split('\0').filter(Boolean);
+  }
+
+  async function statWorktreeEntry(file) {
+    try {
+      const r = await hecaton.fs.stat({ path: path.join(state.cwd, file) });
+      if (!r || !r.exists) return file + '\tmissing';
+      const type = r.is_dir ? 'd' : 'f';
+      const mtime = r.mtime_ms || 0;
+      const size = r.size || 0;
+      return file + '\t' + type + '\t' + mtime + '\t' + size;
+    } catch {
+      return file + '\tmissing';
+    }
+  }
+
+  async function buildWorktreeSnapshot() {
+    const [diffResult, untrackedResult] = await Promise.all([
+      hecaton.process.exec({
+        program: 'git',
+        args: ['--no-optional-locks', 'diff-files', '--name-only', '-z'],
+        cwd: state.cwd,
+        timeout_ms: 5000,
+      }),
+      hecaton.process.exec({
+        program: 'git',
+        args: ['--no-optional-locks', 'ls-files', '--others', '--directory', '--no-empty-directory', '-z', '--exclude-standard'],
+        cwd: state.cwd,
+        timeout_ms: 5000,
+      }),
+    ]);
+    if (!diffResult || !diffResult.ok) return null;
+    const diffRaw = diffResult.stdout || '';
+    const untrackedRaw = (untrackedResult && untrackedResult.ok) ? (untrackedResult.stdout || '') : '';
+    const files = new Set();
+    for (const file of splitNul(diffRaw)) files.add(file);
+    for (let file of splitNul(untrackedRaw)) {
+      if (file.endsWith('/')) file = file.slice(0, -1);
+      if (file) files.add(file);
+    }
+    const stats = await Promise.all(Array.from(files).sort().map(statWorktreeEntry));
+    return diffRaw + '\x1e' + untrackedRaw + '\x1e' + stats.join('\x1e');
+  }
+
   let lastMtimes = await Promise.all(pollTargets.map(statMtime));
   const pollInterval = setInterval(async () => {
     const current = await Promise.all(pollTargets.map(statMtime));
@@ -352,25 +414,22 @@ async function setupGitWatcher() {
     }
   }, GIT_MTIME_POLL_INTERVAL_MS);
 
-  // 워킹 디렉토리 변경 감지 — 외부 도구의 워킹트리 수정은 .git/index mtime을 안 건드리므로
-  // mtime 폴러로 잡을 수 없다. diff-files로만 감지 가능. spawn이 발생하므로 주기는 idle 부담을 고려해 둔다.
-  let lastStatusSnapshot = '';
+  // Worktree edits do not touch .git/index. Track names plus mtimes so
+  // repeated edits to an already-modified file also refresh the diff/status.
+  let lastStatusSnapshot = await buildWorktreeSnapshot().catch(() => '') || '';
   let statusPolling = false;
   const statusPollInterval = setInterval(async () => {
     if (statusPolling) return;
     if (state.loading || state.minimized) return;
     if (state.mode !== 'normal') return;
-    // 사용자 액션 직후 5초간은 polling spawn도 회피
-    if (Date.now() - getLastUserRefreshTime() < 5000) return;
+    // Avoid polling during the short action-coalescing window.
+    if (Date.now() - getLastUserRefreshTime() < USER_ACTION_REFRESH_SUPPRESS_MS) return;
     statusPolling = true;
     try {
-      const result = await hecaton.process.exec({
-        program: 'git', args: ['--no-optional-locks', 'diff-files', '--name-only'], cwd: state.cwd, timeout_ms: 5000
-      });
-      const snapshot = (result && result.ok) ? (result.stdout || '') : '';
-      if (snapshot !== lastStatusSnapshot) {
+      const snapshot = await buildWorktreeSnapshot();
+      if (snapshot !== null && snapshot !== lastStatusSnapshot) {
         lastStatusSnapshot = snapshot;
-        triggerRefresh();
+        triggerRefresh({ statusOnly: true });
       }
     } catch { /* ignore */ }
     statusPolling = false;

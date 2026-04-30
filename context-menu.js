@@ -405,6 +405,7 @@ async function handleContextMenuAction(actionId) {
               render();
             } else {
               stopSpinner();
+              applyStageToState(files);
               refreshInBackground({ statusOnly: true });
             }
           }
@@ -422,6 +423,7 @@ async function handleContextMenuAction(actionId) {
               render();
             } else {
               stopSpinner();
+              applyUnstageToState(files);
               refreshInBackground({ statusOnly: true });
             }
           }
@@ -479,6 +481,7 @@ async function handleContextMenuAction(actionId) {
           render();
         } else {
           stopSpinner();
+          applyStageToState(allFiles);
           refreshInBackground({ statusOnly: true });
         }
         break;

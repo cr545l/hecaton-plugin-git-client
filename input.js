@@ -330,6 +330,7 @@ async function handleKey(key) {
             render();
           } else {
             stopSpinner();
+            applyStageToState(filesToStage);
             refreshInBackground({ statusOnly: true });
           }
         }
@@ -357,6 +358,7 @@ async function handleKey(key) {
             render();
           } else {
             stopSpinner();
+            applyUnstageToState(filesToUnstage);
             refreshInBackground({ statusOnly: true });
           }
         }
@@ -399,6 +401,7 @@ async function handleKey(key) {
 
       } else {
         state.rightView = 'diff';
+        refreshInBackground({ statusOnly: true });
         updateDiff();
 
       }
@@ -1382,6 +1385,7 @@ async function handleMouseData(data) {
             } else if (zone.action === 'tab-local') {
               ui.leftPanelActiveBranch = null;
               state.rightView = 'diff';
+              refreshInBackground({ statusOnly: true });
               updateDiff();
       
               state.focusPanel = 'status';
@@ -1898,6 +1902,8 @@ async function handleMouseData(data) {
                         render();
                       } else {
                         stopSpinner();
+                        if (isStage) applyStageToState(files);
+                        else applyUnstageToState(files);
                         refreshInBackground({ statusOnly: true });
                       }
                     })();
@@ -1932,6 +1938,8 @@ async function handleMouseData(data) {
                       render();
                     } else {
                       stopSpinner();
+                      if (isStage) applyStageToState(files);
+                      else applyUnstageToState(files);
                       refreshInBackground({ statusOnly: true });
                     }
                   })();
@@ -1964,6 +1972,8 @@ async function handleMouseData(data) {
                     return;
                   }
                   stopSpinner();
+                  if (isUnstage) applyUnstageToState([item.file]);
+                  else applyStageToState([item.file]);
                   refreshInBackground({ statusOnly: true });
                 });
               }

@@ -360,6 +360,7 @@ function applyStageToState(filePaths) {
   _lastUserRefreshTime = Date.now();
   const fileSet = new Set(filePaths);
   state._prevFileList = buildFileList();
+  state.staged = state.staged.filter(f => !fileSet.has(f.file));
   // unstaged → staged 이동
   const remainUnstaged = [];
   for (const f of state.unstaged) {
@@ -391,6 +392,8 @@ function applyUnstageToState(filePaths) {
   _lastUserRefreshTime = Date.now();
   const fileSet = new Set(filePaths);
   state._prevFileList = buildFileList();
+  state.unstaged = state.unstaged.filter(f => !fileSet.has(f.file));
+  state.untracked = state.untracked.filter(f => !fileSet.has(f.file));
   // staged → unstaged/untracked 이동
   const remainStaged = [];
   for (const f of state.staged) {
