@@ -529,6 +529,7 @@ async function gitReflogRecoveries(cwd, maxEntries, maxCandidates, maxDepth) {
     const candidateLimit = maxCandidates || 64;
     const depthLimit = maxDepth || 256;
     const raw = (await git([
+      '--no-optional-locks',
       'reflog',
       '--all',
       '-n',
@@ -556,8 +557,9 @@ async function gitReflogRecoveries(cwd, maxEntries, maxCandidates, maxDepth) {
     if (candidates.length === 0) return { hashes: [], refsByHash: {} };
 
     const lostRaw = (await git([
+      '--no-optional-locks',
       'rev-list',
-      '--topo-order',
+      '--date-order',
       '--max-count',
       String(depthLimit),
       ...candidates,

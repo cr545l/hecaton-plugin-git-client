@@ -14,23 +14,105 @@ const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
 const { formatWindowTitle } = require('./title');
 
-// Fork-style reorder: DFS traversal of the branch tree.
-// HEAD's first-parent chain is the trunk; at each commit,
-// branches that fork from it are recursively inserted before it.
-function reorderForkStyle(commits) {
+function findHeadCommitHash(commits) {
+  for (const c of commits) {
+    if (c.refs && (c.refs.includes('HEAD') || c.refs.startsWith('HEAD'))) {
+      return c.hash;
+    }
+  }
+  return null;
+}
+
+// Large histories need a linear-time approximation. The exact Fork-style
+// reorder below repeatedly walks ancestors and becomes a visible cost once the
+// initial page grows into several thousand commits.
+function reorderForkStyleFast(commits) {
   if (commits.length <= 1) return commits;
 
   const byHash = new Map();
   for (const c of commits) byHash.set(c.hash, c);
 
-  // Find HEAD commit
-  let headHash = null;
+  const headHash = findHeadCommitHash(commits);
+  if (!headHash) return commits;
+
+  const fpChain = [];
+  const fpSet = new Set();
+  let cur = headHash;
+  while (cur && byHash.has(cur)) {
+    fpChain.push(cur);
+    fpSet.add(cur);
+    const c = byHash.get(cur);
+    cur = c.parents.length > 0 ? c.parents[0] : null;
+  }
+
+  const forkMemo = new Map();
+  function firstParentFork(hash) {
+    const path = [];
+    let h = hash;
+    let fork = null;
+    while (h) {
+      if (fpSet.has(h)) {
+        fork = h;
+        break;
+      }
+      if (forkMemo.has(h)) {
+        fork = forkMemo.get(h);
+        break;
+      }
+      const c = byHash.get(h);
+      if (!c || c.parents.length === 0) break;
+      path.push(h);
+      h = c.parents[0];
+    }
+    for (const p of path) forkMemo.set(p, fork);
+    return fork;
+  }
+
+  const branchesByFork = new Map();
   for (const c of commits) {
-    if (c.refs && (c.refs.includes('HEAD') || c.refs.startsWith('HEAD'))) {
-      headHash = c.hash;
-      break;
+    if (fpSet.has(c.hash)) continue;
+    const fork = firstParentFork(c.hash);
+    if (!fork) continue;
+    if (!branchesByFork.has(fork)) branchesByFork.set(fork, []);
+    branchesByFork.get(fork).push(c);
+  }
+
+  const result = [];
+  const inserted = new Set();
+  for (const fpHash of fpChain) {
+    const group = branchesByFork.get(fpHash);
+    if (group) {
+      for (const c of group) {
+        if (!inserted.has(c.hash)) {
+          result.push(c);
+          inserted.add(c.hash);
+        }
+      }
+    }
+    if (!inserted.has(fpHash)) {
+      result.push(byHash.get(fpHash));
+      inserted.add(fpHash);
     }
   }
+
+  for (const c of commits) {
+    if (!inserted.has(c.hash)) result.push(c);
+  }
+  return result;
+}
+
+// Fork-style reorder: DFS traversal of the branch tree.
+// HEAD's first-parent chain is the trunk; at each commit,
+// branches that fork from it are recursively inserted before it.
+function reorderForkStyle(commits) {
+  if (commits.length <= 1) return commits;
+  if (commits.length > 1500) return reorderForkStyleFast(commits);
+
+  const byHash = new Map();
+  for (const c of commits) byHash.set(c.hash, c);
+
+  // Find HEAD commit
+  const headHash = findHeadCommitHash(commits);
   if (!headHash) return commits;
 
   // Build first-parent chain from HEAD
@@ -909,11 +991,13 @@ async function refreshAsync(options = {}) {
 
 // 로그 fetch 한도. 첫 paint는 LOG_FAST_LIMIT으로 빨리 띄우고,
 // 백그라운드에서 LOG_FULL_LIMIT으로 받아 그래프를 보강한다.
-const LOG_FAST_LIMIT = 200;
-const LOG_FULL_LIMIT = 2000;
-const LOG_PAGE_SIZE = 2000;
+const LOG_FAST_LIMIT = 300;
+const LOG_PREFETCH_LIMIT = 2000;
+const LOG_FULL_LIMIT = 6000;
+const LOG_PAGE_SIZE = 4000;
 let _logRequestedLimit = LOG_FULL_LIMIT;
 let _logLimitCwd = '';
+let _logExpansionRunning = false;
 
 function parseLogRaw(raw, recovery, recoveryHashSet) {
   raw = (raw || '').replace(/\r/g, '').trim();
@@ -1015,7 +1099,7 @@ function applyLogGraphRows(graphRows) {
   }
 }
 
-function refreshLog() {
+function refreshLog(options = {}) {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
     state.logSelectables = [];
@@ -1027,7 +1111,14 @@ function refreshLog() {
     ui.stashMap = new Map();
     return;
   }
-  if (state.logLoading && state.logItems.length === 0) return;
+  if (state.logLoading) {
+    if (state.rightView === 'log') require('./render').render();
+    return;
+  }
+  if (_logExpansionRunning && state.logItems.length > 0) {
+    if (state.rightView === 'log') require('./render').render();
+    return;
+  }
   state.logLoadingMore = false;
   if (_logLimitCwd !== state.cwd) {
     _logLimitCwd = state.cwd;
@@ -1048,17 +1139,24 @@ function refreshLog() {
   const seq = ++_logSeq;
   state.logLoading = true;
   (async () => {
-    const recoveryPromise = gitReflogRecoveries(state.cwd, 250, 64, 256)
-      .catch(() => ({ hashes: [], refsByHash: {} }));
-
     const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
     const buildArgs = (limit, recoveryHashes) => {
-      const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
+      const args = [
+        '--no-optional-locks',
+        'log',
+        '--date-order',
+        '--no-show-signature',
+        '--no-notes',
+        '--all',
+        '--max-count=' + limit,
+        '--format=' + baseFormat,
+      ];
       if (stashHashes.length > 0) args.push(...stashHashes);
       if (recoveryHashes && recoveryHashes.length > 0) args.push(...recoveryHashes);
-      args.push('-' + limit);
       return args;
     };
+    const loadRecovery = () => gitReflogRecoveries(state.cwd, 250, 64, 256)
+      .catch(() => ({ hashes: [], refsByHash: {} }));
 
     // 1차: 빠른 첫 paint (작은 한도). graph는 부분 데이터 기준이라 정확도가 약간 떨어질 수 있으나
     // 즉시 화면이 뜨므로 체감 속도 우선. _logSeq로 out-of-order 가드.
@@ -1066,33 +1164,99 @@ function refreshLog() {
     if (_logSeq !== seq) return;
     const fastCommits = parseLogRaw(fastRaw, { refsByHash: {} }, new Set());
     applyLogGraphRows(buildLogGraphRows(fastCommits, stashFullHashes));
-    if (state.rightView === 'log') updateLogDetail();
+    state.logLoadedLimit = fastCommits.length;
+    state.logHasMore = fastCommits.length >= LOG_FAST_LIMIT;
     state.logLoading = false;
-    require('./render').render();
-    const recovery = await recoveryPromise;
-    if (_logSeq !== seq) return;
-    state.recoveryRefs = recovery.refsByHash || {};
-    const recoveryHashSet = new Set(recovery.hashes || []);
-    if (fastCommits.length < LOG_FAST_LIMIT && recoveryHashSet.size === 0) {
+    if (state.rightView === 'log') {
+      updateLogDetail({ headerOnly: true });
+      require('./render').render();
+    }
+
+    if (fastCommits.length < LOG_FAST_LIMIT) {
+      const recovery = await loadRecovery();
+      if (_logSeq !== seq) return;
+      state.recoveryRefs = recovery.refsByHash || {};
+      const recoveryHashSet = new Set(recovery.hashes || []);
+      if (recoveryHashSet.size === 0) {
+        state.logHasMore = false;
+        state.logLoadedLimit = fastCommits.length;
+        state.logLoading = false;
+        if (state.rightView === 'log') require('./render').render();
+        return;
+      }
+
+      const recoveredRaw = await gitExec(buildArgs(LOG_FULL_LIMIT, recovery.hashes || []), state.cwd, 30000);
+      if (_logSeq !== seq) return;
+      const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
+      if (recoveredCommits.length === 0 && fastCommits.length > 0) {
+        state.logLoading = false;
+        if (state.rightView === 'log') require('./render').render();
+        return;
+      }
+      applyLogGraphRows(buildLogGraphRows(recoveredCommits, stashFullHashes));
+      state.logLoadedLimit = recoveredCommits.length;
       state.logHasMore = false;
-      state.logLoadedLimit = fastCommits.length;
+      if (state.rightView === 'log') updateLogDetail();
+      state.logLoading = false;
+      if (state.rightView === 'log') require('./render').render();
       return;
     }
 
     // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
     // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
+    _logExpansionRunning = true;
+
+    const prefetchLimit = Math.min(LOG_PREFETCH_LIMIT, _logRequestedLimit);
+    let expandedCommits = fastCommits;
+    if (prefetchLimit > LOG_FAST_LIMIT) {
+      const prefetchRaw = await gitExec(buildArgs(prefetchLimit, []), state.cwd, 30000);
+      if (_logSeq !== seq) { _logExpansionRunning = false; return; }
+      const prefetchCommits = parseLogRaw(prefetchRaw, { refsByHash: {} }, new Set());
+      if (prefetchCommits.length > 0) {
+        expandedCommits = prefetchCommits;
+        applyLogGraphRows(buildLogGraphRows(expandedCommits, stashFullHashes));
+        state.logLoadedLimit = prefetchLimit;
+        state.logHasMore = expandedCommits.length >= prefetchLimit;
+        if (state.rightView === 'log') updateLogDetail();
+        if (state.rightView === 'log') require('./render').render();
+      }
+    }
+
     const fullLimit = _logRequestedLimit;
-    const fullRaw = await gitExec(buildArgs(fullLimit, recovery.hashes || []), state.cwd, 30000);
+    if (fullLimit > prefetchLimit && expandedCommits.length >= prefetchLimit) {
+      const fullRaw = await gitExec(buildArgs(fullLimit, []), state.cwd, 30000);
+      if (_logSeq !== seq) { _logExpansionRunning = false; return; }
+      const fullCommits = parseLogRaw(fullRaw, { refsByHash: {} }, new Set());
+      if (fullCommits.length > 0) {
+        expandedCommits = fullCommits;
+        applyLogGraphRows(buildLogGraphRows(expandedCommits, stashFullHashes));
+        state.logLoadedLimit = fullLimit;
+        state.logHasMore = expandedCommits.length >= fullLimit;
+        if (state.rightView === 'log') updateLogDetail();
+        if (state.rightView === 'log') require('./render').render();
+      }
+    }
+
+    _logExpansionRunning = false;
+
+    const recovery = await loadRecovery();
     if (_logSeq !== seq) return;
-    const fullCommits = parseLogRaw(fullRaw, recovery, recoveryHashSet);
-    applyLogGraphRows(buildLogGraphRows(fullCommits, stashFullHashes));
+    state.recoveryRefs = recovery.refsByHash || {};
+    const recoveryHashSet = new Set(recovery.hashes || []);
+    if (recoveryHashSet.size === 0) return;
+
+    const recoveredRaw = await gitExec(buildArgs(fullLimit, recovery.hashes || []), state.cwd, 30000);
+    if (_logSeq !== seq) return;
+    const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
+    if (recoveredCommits.length === 0 && expandedCommits.length > 0) return;
+    applyLogGraphRows(buildLogGraphRows(recoveredCommits, stashFullHashes));
     state.logLoadedLimit = fullLimit;
-    state.logHasMore = fullCommits.length >= fullLimit;
+    state.logHasMore = recoveredCommits.length >= fullLimit;
     if (state.rightView === 'log') updateLogDetail();
-    state.logLoading = false;
-    require('./render').render();
+    if (state.rightView === 'log') require('./render').render();
   })().catch(() => {
     if (_logSeq !== seq) return;
+    _logExpansionRunning = false;
     state.logLoading = false;
     state.logLoadingMore = false;
     if (state.rightView === 'log') require('./render').render();
@@ -1101,7 +1265,8 @@ function refreshLog() {
 
 function loadMoreLog() {
   if (!state.cwd || !state.isGitRepo) return false;
-  if (state.logLoadingMore || !state.logHasMore) return false;
+  if (state.logLoading || state.logLoadingMore || !state.logHasMore) return false;
+  _logExpansionRunning = false;
   if (_logLimitCwd !== state.cwd) {
     _logLimitCwd = state.cwd;
     _logRequestedLimit = LOG_FULL_LIMIT;
@@ -1135,10 +1300,18 @@ function loadMoreLog() {
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
     const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
-    const args = ['log', '--all', '--topo-order', '--format=' + baseFormat];
+    const args = [
+      '--no-optional-locks',
+      'log',
+      '--date-order',
+      '--no-show-signature',
+      '--no-notes',
+      '--all',
+      '--max-count=' + targetLimit,
+      '--format=' + baseFormat,
+    ];
     if (stashHashes.length > 0) args.push(...stashHashes);
     if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
-    args.push('-' + targetLimit);
 
     const raw = await gitExec(args, state.cwd, 30000);
     if (_logSeq !== seq) return;
@@ -1169,7 +1342,7 @@ function selectedLogRef() {
   return state.logItems[idx] || null;
 }
 
-function updateLogDetail() {
+function updateLogDetail(options = {}) {
   ui.collapsedDetailFiles.clear();
   state.diffScrollX = 0;
   const item = selectedLogRef();
@@ -1213,6 +1386,7 @@ function updateLogDetail() {
   // Show header immediately, load body/diff async.
   state.logDetailLines = [...lines];
   const seq = ++_logDetailSeq;
+  if (options.headerOnly) return;
   const stashRef = ui.stashMap.get(item.ref);
   const promise = stashRef
     ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)

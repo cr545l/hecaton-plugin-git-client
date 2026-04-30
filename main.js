@@ -144,6 +144,7 @@ async function main() {
       if (!state.isGitRepo) return;
       refreshAsync({ metadataOnly: true, silent: true, loadGuiConfig: true }).then(() => {
         if (state.rightView === 'log') refreshLog();
+        else if (state.logItems.length === 0 && !state.logLoading) refreshLog({ prefetch: true });
         if (state.rightView === 'fresh') refreshFresh();
         render();
       }).catch(() => null);
