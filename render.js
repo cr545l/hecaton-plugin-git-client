@@ -102,7 +102,7 @@ function render() {
       rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
     } else {
       rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Stage', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
-      rightParts.push({ label: (ui.rightPanelCollapsed ? '  + ' : '  - ') + 'Diff', action: 'toggleDiff', collapsed: ui.rightPanelCollapsed });
+      rightParts.push({ label: '  Diff: ' + (state.diffView === 'side' ? 'side' : 'unified'), action: 'toggleDiff', collapsed: false });
     }
     let rightTotalW = 0;
     for (const p of rightParts) rightTotalW += visLen(p.label);
@@ -1194,6 +1194,7 @@ function buildDiffCommitPanel(w, h) {
   const lines = [];
   const innerW = w - 1;
   const isConflictView = !!(state.conflictView && state.conflictView.file === state.currentDiffFile);
+  const diffItem = selectedItem();
 
   let msgLineCount = 1;
   if (state.mode === 'commit') {
@@ -1206,20 +1207,30 @@ function buildDiffCommitPanel(w, h) {
 
   let preMaxScrollX = 0;
   let annotated = null;
+  let sideBySideLayout = null;
   let numW = 0; let gutterW = 0; let contentW = 0;
   if (!isConflictView && state.diffLines.length > 0 && diffH > 0) {
-    annotated = annotateDiffLineNumbers(state.diffLines);
-    numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
-    gutterW = numW > 0 ? numW * 2 + 2 : 0;
-    contentW = innerW - (gutterW > 0 ? gutterW : 1);
-    let maxLineW = 0;
-    for (const line of state.diffLines) {
-      const plain = line.replace(/[\r\n]/g, '');
-      if (isDiffMetaLine(plain)) continue;
-      const lw = stripAnsi(plain).length;
-      if (lw > maxLineW) maxLineW = lw;
+    if (diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffView === 'side') {
+      sideBySideLayout = buildSideBySideDiffLayout(state.diffLines, innerW);
+      if (sideBySideLayout) {
+        preMaxScrollX = sideBySideLayout.maxScrollX;
+      }
     }
-    preMaxScrollX = Math.max(0, maxLineW - contentW);
+
+    if (!sideBySideLayout) {
+      annotated = annotateDiffLineNumbers(state.diffLines);
+      numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
+      gutterW = numW > 0 ? numW * 2 + 2 : 0;
+      contentW = innerW - (gutterW > 0 ? gutterW : 1);
+      let maxLineW = 0;
+      for (const line of state.diffLines) {
+        const plain = line.replace(/[\r\n]/g, '');
+        if (isDiffMetaLine(plain)) continue;
+        const lw = stripAnsi(plain).length;
+        if (lw > maxLineW) maxLineW = lw;
+      }
+      preMaxScrollX = Math.max(0, maxLineW - contentW);
+    }
   }
   const hasHScrollbar = !isConflictView && preMaxScrollX > 0;
   if (hasHScrollbar) diffH--;
@@ -1251,30 +1262,42 @@ function buildDiffCommitPanel(w, h) {
     } else {
       ui.mergeClickZones = [];
       ui.mergeChunkLineMap = {};
-      const maxScroll = Math.max(0, state.diffLines.length - diffH);
-      ui.diffMaxScroll = maxScroll;
-      if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
       ui.diffMaxScrollX = preMaxScrollX;
       if (state.diffScrollX > preMaxScrollX) state.diffScrollX = preMaxScrollX;
       const scrollX = state.diffScrollX;
-      const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
-      for (const entry of visible) {
-        if (entry.inDiff && gutterW > 0) {
-          let gutter;
-          if (entry.oldNum != null || entry.newNum != null) {
-            const oldStr = entry.oldNum != null ? String(entry.oldNum).padStart(numW) : ' '.repeat(numW);
-            const newStr = entry.newNum != null ? String(entry.newNum).padStart(numW) : ' '.repeat(numW);
-            gutter = colors.dim + oldStr + ' ' + newStr + ansi.reset + ' ';
+
+      if (sideBySideLayout) {
+        const sideBySideLines = renderSideBySideDiffLines(sideBySideLayout, state.currentDiffFile, scrollX);
+        const maxScroll = Math.max(0, sideBySideLines.length - diffH);
+        ui.diffMaxScroll = maxScroll;
+        if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
+        const visible = sideBySideLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+        for (const line of visible) lines.push(line);
+        ui.scrollPct.diff = sideBySideLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
+        for (let i = visible.length; i < diffH; i++) lines.push('');
+      } else {
+        const maxScroll = Math.max(0, state.diffLines.length - diffH);
+        ui.diffMaxScroll = maxScroll;
+        if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
+        const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+        for (const entry of visible) {
+          if (entry.inDiff && gutterW > 0) {
+            let gutter;
+            if (entry.oldNum != null || entry.newNum != null) {
+              const oldStr = entry.oldNum != null ? String(entry.oldNum).padStart(numW) : ' '.repeat(numW);
+              const newStr = entry.newNum != null ? String(entry.newNum).padStart(numW) : ' '.repeat(numW);
+              gutter = colors.dim + oldStr + ' ' + newStr + ansi.reset + ' ';
+            } else {
+              gutter = ' '.repeat(gutterW);
+            }
+            lines.push(gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX));
           } else {
-            gutter = ' '.repeat(gutterW);
+            lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX));
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX));
-        } else {
-          lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX));
         }
+        ui.scrollPct.diff = state.diffLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
+        for (let i = visible.length; i < diffH; i++) lines.push('');
       }
-      ui.scrollPct.diff = state.diffLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
-      for (let i = visible.length; i < diffH; i++) lines.push('');
       if (hasHScrollbar) lines.push('');
     }
   }
@@ -1320,16 +1343,21 @@ function buildDiffCommitPanel(w, h) {
           lines.push('');
         }
       }
-    } else if (state.staged.length > 0) {
-      if (state.operationState) {
-        const opIsRebase = state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply';
-        const opLabel = opIsRebase ? 'continue rebase' : 'commit';
-        lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] ' + opLabel + '  [b] menu' + ansi.reset);
-      } else {
-        lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + ansi.reset);
-      }
     } else {
-      lines.push(colors.dim + ' No files staged' + ansi.reset);
+      const diffViewHint = diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged')
+        ? '  [v] ' + (state.diffView === 'side' ? 'unified' : 'side')
+        : '';
+      if (state.staged.length > 0) {
+        if (state.operationState) {
+          const opIsRebase = state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply';
+          const opLabel = opIsRebase ? 'continue rebase' : 'commit';
+          lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] ' + opLabel + '  [b] menu' + diffViewHint + ansi.reset);
+        } else {
+          lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + diffViewHint + ansi.reset);
+        }
+      } else {
+        lines.push(colors.dim + ' No files staged' + diffViewHint + ansi.reset);
+      }
     }
 
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
@@ -2050,6 +2078,196 @@ function buildConflictDiffLines(innerW) {
   }
 
   return { lines, zones, chunkLineMap };
+}
+
+const SIDE_BY_SIDE_MIN_WIDTH = 56;
+
+function isDeletionDiffLine(line) {
+  return line.startsWith('-') && !line.startsWith('---');
+}
+
+function isAdditionDiffLine(line) {
+  return line.startsWith('+') && !line.startsWith('+++');
+}
+
+function parseHunkHeader(line) {
+  const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+  if (!match) return null;
+  return { oldLine: parseInt(match[1], 10), newLine: parseInt(match[2], 10) };
+}
+
+function buildSideBySideDiffRows(rawLines) {
+  const rows = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let maxLine = 0;
+  let inHunk = false;
+
+  function pushMeta(text) {
+    if (text === '' && rows.length === 0) return;
+    rows.push({ type: 'meta', text });
+  }
+
+  function pushPair(leftText, rightText, oldNum, newNum) {
+    if (oldNum != null) maxLine = Math.max(maxLine, oldNum);
+    if (newNum != null) maxLine = Math.max(maxLine, newNum);
+    rows.push({ type: 'pair', leftText, rightText, oldNum, newNum });
+  }
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i].replace(/[\r\n]/g, '');
+    if (i === rawLines.length - 1 && line === '') continue;
+
+    const hunk = parseHunkHeader(line);
+    if (hunk) {
+      oldLine = hunk.oldLine;
+      newLine = hunk.newLine;
+      inHunk = true;
+      rows.push({ type: 'hunk', text: line });
+      continue;
+    }
+
+    if (!inHunk) {
+      pushMeta(line);
+      continue;
+    }
+
+    if (line.startsWith('diff --git ') || line.startsWith('index ') ||
+        line.startsWith('---') || line.startsWith('+++') ||
+        line.startsWith('new file') || line.startsWith('deleted file') ||
+        line.startsWith('old mode') || line.startsWith('new mode') ||
+        line.startsWith('similarity') || line.startsWith('rename') ||
+        line.startsWith('Binary') || line.startsWith('\\')) {
+      pushMeta(line);
+      continue;
+    }
+
+    if (line.startsWith(' ')) {
+      pushPair(line, line, oldLine, newLine);
+      oldLine++;
+      newLine++;
+      continue;
+    }
+
+    if (isDeletionDiffLine(line)) {
+      const deletions = [];
+      let j = i;
+      while (j < rawLines.length) {
+        const candidate = rawLines[j].replace(/[\r\n]/g, '');
+        if (!isDeletionDiffLine(candidate)) break;
+        deletions.push(candidate);
+        j++;
+      }
+      const additions = [];
+      while (j < rawLines.length) {
+        const candidate = rawLines[j].replace(/[\r\n]/g, '');
+        if (!isAdditionDiffLine(candidate)) break;
+        additions.push(candidate);
+        j++;
+      }
+
+      const rowCount = Math.max(deletions.length, additions.length);
+      for (let row = 0; row < rowCount; row++) {
+        const leftText = deletions[row] || '';
+        const rightText = additions[row] || '';
+        const oldNum = leftText ? oldLine++ : null;
+        const newNum = rightText ? newLine++ : null;
+        pushPair(leftText, rightText, oldNum, newNum);
+      }
+      i = j - 1;
+      continue;
+    }
+
+    if (isAdditionDiffLine(line)) {
+      pushPair('', line, null, newLine);
+      newLine++;
+      continue;
+    }
+
+    pushMeta(line);
+  }
+
+  rows.maxLine = maxLine;
+  return rows;
+}
+
+function buildSideBySideDiffLayout(rawLines, innerW) {
+  if (innerW < SIDE_BY_SIDE_MIN_WIDTH) return null;
+
+  const gapW = 3;
+  const availableW = innerW - gapW;
+  const leftW = Math.floor(availableW / 2);
+  const rightW = availableW - leftW;
+  if (leftW < 24 || rightW < 24) return null;
+
+  const rows = buildSideBySideDiffRows(rawLines);
+  const numW = rows.maxLine > 0 ? String(rows.maxLine).length : 1;
+  const gutterW = numW + 1;
+  const leftContentW = Math.max(1, leftW - gutterW);
+  const rightContentW = Math.max(1, rightW - gutterW);
+  let maxLeftW = 0;
+  let maxRightW = 0;
+
+  for (const row of rows) {
+    if (row.type !== 'pair') continue;
+    if (row.leftText) maxLeftW = Math.max(maxLeftW, visLen(row.leftText));
+    if (row.rightText) maxRightW = Math.max(maxRightW, visLen(row.rightText));
+  }
+
+  rows.unshift({ type: 'side-header' });
+  rows.unshift({ type: 'side-title' });
+
+  return {
+    rows,
+    innerW,
+    leftW,
+    rightW,
+    numW,
+    leftContentW,
+    rightContentW,
+    maxScrollX: Math.max(0, maxLeftW - leftContentW, maxRightW - rightContentW),
+  };
+}
+
+function renderSideBySideCell(rawText, lineNum, numW, contentW, totalW, filePath, scrollX) {
+  const num = lineNum != null ? String(lineNum).padStart(numW) : ' '.repeat(numW);
+  const gutter = colors.dim + num + ansi.reset + ' ';
+  const content = rawText
+    ? colorizeDiffLine(rawText, contentW, filePath, scrollX)
+    : ' '.repeat(contentW);
+  return padRight(gutter + content, totalW);
+}
+
+function renderSideBySideDiffLines(layout, filePath, scrollX) {
+  const lines = [];
+  const gap = colors.border + ' \u2502 ' + ansi.reset;
+  const headerGap = colors.border + ' \u2502 ' + ansi.reset;
+  for (const row of layout.rows) {
+    if (row.type === 'side-title') {
+      lines.push(
+        colors.dim + padRight(' HEAD', layout.leftW) + ansi.reset +
+        headerGap +
+        colors.dim + padRight(' STAGED', layout.rightW) + ansi.reset
+      );
+      continue;
+    }
+    if (row.type === 'side-header') {
+      lines.push(
+        colors.border + '\u2500'.repeat(layout.leftW) + ansi.reset +
+        headerGap +
+        colors.border + '\u2500'.repeat(layout.rightW) + ansi.reset
+      );
+      continue;
+    }
+    if (row.type === 'pair') {
+      const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW, layout.leftContentW, layout.leftW, filePath, scrollX);
+      const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW, layout.rightContentW, layout.rightW, filePath, scrollX);
+      lines.push(left + gap + right);
+      continue;
+    }
+    lines.push(' ' + colorizeDiffLine(row.text, layout.innerW - 1, filePath, 0));
+  }
+  return lines;
 }
 
 function annotateDiffLineNumbers(lines) {

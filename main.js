@@ -12,6 +12,7 @@
  *   u       - Unstage selected file
  *   a       - Stage/unstage all
  *   c       - Enter commit mode
+ *   v       - Toggle staged diff side/unified view
  *   Enter   - Execute commit (in commit mode)
  *   Esc     - Cancel commit / close
  *   Tab     - Switch panel focus

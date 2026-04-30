@@ -14,6 +14,7 @@ const state = {
   focusPanel: 'status',  // 'status' | 'diff'
   diffLines: [],
   conflictView: null,      // conflict chunks for unmerged file side-by-side view
+  diffView: 'side',  // 'side' | 'unified' (staged/unstaged 양쪽에 적용)
   diffScrollOffset: 0,
   diffScrollX: 0,
   filesScrollX: 0,

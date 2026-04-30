@@ -309,6 +309,17 @@ async function handleKey(key) {
   }
 
   switch (key) {
+    case 'v':
+    case 'V': {
+      if (state.rightView !== 'diff') break;
+      const sel = selectedItem();
+      if (!sel || (sel.type !== 'staged' && sel.type !== 'unstaged')) break;
+      state.diffView = state.diffView === 'side' ? 'unified' : 'side';
+      state.diffScrollOffset = 0;
+      state.diffScrollX = 0;
+      render();
+      break;
+    }
     case 's': {
       if (state.rightView === 'log') break;
       const fileList = buildFileList();
@@ -1344,9 +1355,8 @@ async function handleMouseData(data) {
         } else {
           // Diff mode: diff scroll
           const prev = state.diffScrollOffset;
-          const maxDiff = Math.max(0, state.diffLines.length - (ui.rightDiffH || 1));
-          const conflictMaxDiff = Math.max(0, (ui.diffMaxScroll || 0));
-          state.diffScrollOffset = Math.max(0, Math.min(state.conflictView ? conflictMaxDiff : maxDiff, state.diffScrollOffset + wheelStep));
+          const maxDiff = Math.max(0, (ui.diffMaxScroll || 0));
+          state.diffScrollOffset = Math.max(0, Math.min(maxDiff, state.diffScrollOffset + wheelStep));
           if (state.diffScrollOffset !== prev) changed = true;
           state.focusPanel = 'diff';
         }
@@ -1379,7 +1389,9 @@ async function handleMouseData(data) {
               render();
               handled = true;
             } else if (zone.action === 'toggleDiff') {
-              ui.rightPanelCollapsed = !ui.rightPanelCollapsed;
+              state.diffView = state.diffView === 'side' ? 'unified' : 'side';
+              state.diffScrollOffset = 0;
+              state.diffScrollX = 0;
               render();
               handled = true;
             } else if (zone.action === 'tab-local') {
