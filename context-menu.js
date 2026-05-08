@@ -14,10 +14,10 @@ const {
   gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
-  gitCherryPickAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
+  gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
-  gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs,
+  gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState } = require('./refresh');
 const { render } = require('./render');
@@ -983,8 +983,18 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'cherry_pick': {
-      startSpinner('Cherry-picking...');
-      gitCherryPickAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Cherry-pick'); });
+      hecaton.dialog.show({
+        type: 'message',
+        title: 'Cherry-pick Commit',
+        message: 'Cherry-pick ' + hash.substring(0, 8) + ' into ' + (state.branch || 'HEAD') + '?',
+        checkboxes: [{ id: 'commit_immediately', label: 'Commit immediately', checked: true }],
+        buttons: [
+          { id: 'cherry_pick', label: 'Cherry-pick', default: true },
+          { id: 'cancel', label: 'Cancel' },
+        ],
+      });
+      state.pendingDialogAction = 'cherry-pick-confirm';
+      state.pendingDialogTarget = hash;
       break;
     }
     case 'revert': {
@@ -1102,6 +1112,13 @@ async function handleDialogResult(params) {
       if (buttonId === 'checkout') {
         startSpinner('Checking out...');
         gitCheckoutRefAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Checkout'); });
+      }
+      return;
+    }
+    if (action === 'cherry-pick-confirm') {
+      if (buttonId === 'cherry_pick') {
+        const commitImmediately = params.checkboxes ? !!params.checkboxes.commit_immediately : true;
+        await runCherryPickFromDialog(target, commitImmediately);
       }
       return;
     }
@@ -1354,6 +1371,45 @@ async function handleDialogResult(params) {
     })();
   } else {
     state.pendingRebaseRef = null;
+  }
+}
+
+async function runCherryPickFromDialog(ref, commitImmediately) {
+  if (commitImmediately) {
+    startSpinner('Cherry-picking...');
+    gitCherryPickAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Cherry-pick'); });
+    return;
+  }
+
+  startSpinner('Cherry-picking without commit...');
+  try {
+    const message = await gitCommitMessage(state.cwd, ref);
+    const err = await gitCherryPickNoCommitAsync(state.cwd, ref);
+    await refreshAsync();
+    stopSpinner();
+
+    if (err && isRebaseConflictError(err)) {
+      if (state.rightView !== 'diff') state.rightView = 'diff';
+      updateDiff();
+      render();
+      return;
+    }
+    if (err) {
+      showError('Cherry-pick failed:\n' + err);
+      return;
+    }
+
+    state.rightView = 'diff';
+    state.mode = 'commit';
+    state.commitMsg = message;
+    state.commitCursor = message.length;
+    state.diffScrollOffset = 0;
+    state.diffScrollX = 0;
+    updateDiff();
+    render();
+  } catch (e) {
+    stopSpinner();
+    showError('Cherry-pick failed:\n' + ((e && e.message) || e || 'Operation failed'));
   }
 }
 

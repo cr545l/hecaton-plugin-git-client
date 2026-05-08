@@ -607,6 +607,7 @@ async function gitRemoteBranches(cwd) {
 }
 
 async function gitCherryPick(cwd, ref) { return await gitRunOrError(['cherry-pick', ref], cwd, 30000, 'Cherry-pick failed'); }
+async function gitCherryPickNoCommit(cwd, ref) { return await gitRunOrError(['cherry-pick', '--no-commit', ref], cwd, 30000, 'Cherry-pick failed'); }
 async function gitRevert(cwd, ref) { return await gitRunOrError(['revert', '--no-edit', ref], cwd, 30000, 'Revert failed'); }
 async function gitCheckoutRef(cwd, ref) { return await gitRunOrError(['checkout', ref], cwd, 10000, 'Checkout failed'); }
 
@@ -681,6 +682,7 @@ async function gitMergeAsync(cwd, ref) { return await gitAsyncWrap(['merge', ref
 async function gitResetAsync(cwd, ref) { return await gitAsyncWrap(['reset', '--hard', ref], cwd); }
 async function gitCheckoutRefAsync(cwd, ref) { return await gitAsyncWrap(['checkout', ref], cwd, 10000); }
 async function gitCherryPickAsync(cwd, ref) { return await gitAsyncWrap(['cherry-pick', ref], cwd); }
+async function gitCherryPickNoCommitAsync(cwd, ref) { return await gitAsyncWrap(['cherry-pick', '--no-commit', ref], cwd); }
 async function gitRevertAsync(cwd, ref) { return await gitAsyncWrap(['revert', '--no-edit', ref], cwd); }
 async function gitStashSaveAsync(cwd) { return await gitAsyncWrap(['stash', 'push'], cwd, 10000); }
 async function gitCommitAsync(cwd, message) { return await gitAsyncWrap(['commit', '-m', message], cwd, 30000); }
@@ -766,6 +768,14 @@ async function gitFormatPatch(cwd, ref) {
 async function gitCommitInfo(cwd, ref) {
   try {
     return (await git(['log', '-1', '--format=%H%n%s%n%an <%ae>%n%ai', ref], cwd)).trim();
+  } catch {
+    return '';
+  }
+}
+
+async function gitCommitMessage(cwd, ref) {
+  try {
+    return (await git(['log', '-1', '--format=%B', ref], cwd)).replace(/\r\n/g, '\n').trim();
   } catch {
     return '';
   }
@@ -1039,8 +1049,8 @@ module.exports = {
   gitRevertContinue, gitRevertAbort, gitRevertSkip, gitWriteRebaseMessage,
   gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
-  gitCherryPick, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
-  gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
+  gitCherryPick, gitCherryPickNoCommit, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
+  gitReset, gitMerge, gitFormatPatch, gitCommitInfo, gitCommitMessage,
   gitAheadBehind, gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
   gitStashApply, gitStashDrop, gitStashRename,
   gitDiscardFile, gitStashFile, gitStashFiles, gitIgnorePattern,
@@ -1052,7 +1062,7 @@ module.exports = {
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
-  gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitRevertAsync,
+  gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
