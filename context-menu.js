@@ -986,10 +986,10 @@ async function handleContextMenuAction(actionId) {
       hecaton.dialog.show({
         type: 'message',
         title: 'Cherry-pick Commit',
-        message: 'Cherry-pick ' + hash.substring(0, 8) + ' into ' + (state.branch || 'HEAD') + '?',
-        checkboxes: [{ id: 'commit_immediately', label: 'Commit immediately', checked: true }],
+        message: 'Cherry-pick ' + hash.substring(0, 8) + ' into ' + (state.branch || 'HEAD') + '?\n\nChoose how to apply it:',
         buttons: [
-          { id: 'cherry_pick', label: 'Cherry-pick', default: true },
+          { id: 'cherry_pick_commit', label: 'Cherry-pick & Commit', default: true },
+          { id: 'cherry_pick_stage', label: 'Stage Only' },
           { id: 'cancel', label: 'Cancel' },
         ],
       });
@@ -1116,9 +1116,10 @@ async function handleDialogResult(params) {
       return;
     }
     if (action === 'cherry-pick-confirm') {
-      if (buttonId === 'cherry_pick') {
-        const commitImmediately = params.checkboxes ? !!params.checkboxes.commit_immediately : true;
-        await runCherryPickFromDialog(target, commitImmediately);
+      if (buttonId === 'cherry_pick_commit') {
+        await runCherryPickFromDialog(target, true);
+      } else if (buttonId === 'cherry_pick_stage') {
+        await runCherryPickFromDialog(target, false);
       }
       return;
     }
