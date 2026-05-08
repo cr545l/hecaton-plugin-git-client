@@ -217,6 +217,21 @@ function encodeSixel(buf, w, h, palette) {
   return out;
 }
 
+function encodeSixelClear(w, h) {
+  w = Math.max(0, Math.floor(w));
+  h = Math.max(0, Math.floor(h));
+  if (w <= 0 || h <= 0) return '';
+  let out = '\x1bP0;0;0q';
+  out += '"1;1;' + w + ';' + h;
+  const emptyRow = w >= 4 ? '!' + w + '?' : '?'.repeat(w);
+  for (let y = 0; y < h; y += 6) {
+    if (y > 0) out += '-';
+    out += emptyRow;
+  }
+  out += '\x1b\\';
+  return out;
+}
+
 const SCROLLBAR_PALETTE = [[100, 110, 130]];
 const SCROLLBAR_HOVER_PALETTE = [[160, 175, 200]];
 const SCROLLBAR_ACTIVE_PALETTE = [[210, 225, 245]];
@@ -273,5 +288,5 @@ module.exports = {
   SIXEL_PALETTE,
   SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE,
   renderScrollbarPixels, renderHScrollbarPixels,
-  renderCombinedGraphPixels, encodeSixel,
+  renderCombinedGraphPixels, encodeSixel, encodeSixelClear,
 };

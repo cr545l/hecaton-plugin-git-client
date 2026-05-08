@@ -1,5 +1,5 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
-const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel } = require('./sixel');
+const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
 const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
@@ -26,8 +26,18 @@ function computeLayoutSig() {
   ].join('|');
 }
 
+function appendLogSixelClear(buf) {
+  if (!SIXEL_ENABLED || !ui.logSixelRegion) return;
+  const r = ui.logSixelRegion;
+  buf.push(ansi.reset + ansi.moveTo(r.screenRow, r.screenCol) + encodeSixelClear(r.pixelW, r.pixelH));
+  ui.logSixelRegion = null;
+}
+
 function render() {
   if (state.minimized) {
+    const clearBuf = [];
+    appendLogSixelClear(clearBuf);
+    if (clearBuf.length > 0) process.stdout.write(clearBuf.join(''));
     renderMinimized();
     _lastLayoutSig = computeLayoutSig();
     return;
@@ -49,6 +59,7 @@ function render() {
     buf.push(CSI + '2J');
     _lastLayoutSig = layoutSig;
   }
+  appendLogSixelClear(buf);
 
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
 
@@ -511,8 +522,17 @@ function render() {
     const graphCol = startCol + leftW + divider1W + 1;
     const screenRow = startRow + titleRows + 1;
     buf.push(ansi.moveTo(screenRow, graphCol) + ui.logSixelOverlay);
+    if (ui.logSixelOverlaySize) {
+      ui.logSixelRegion = {
+        screenRow,
+        screenCol: graphCol,
+        pixelW: ui.logSixelOverlaySize.pixelW,
+        pixelH: ui.logSixelOverlaySize.pixelH,
+      };
+    }
   }
   ui.logSixelOverlay = null;
+  ui.logSixelOverlaySize = null;
 
   // Scrollbar overlays
   ui.scrollbarOverlays = [];
@@ -1517,10 +1537,14 @@ function buildLogPanel(w, h) {
     const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
     const pixBuf = renderCombinedGraphPixels(graphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
     if (pixBuf) {
-      ui.logSixelOverlay = encodeSixel(pixBuf, maxNaturalWidth * ui.cellW, graphRows.length * ui.cellH, SIXEL_PALETTE);
+      const pixelW = maxNaturalWidth * ui.cellW;
+      const pixelH = graphRows.length * ui.cellH;
+      ui.logSixelOverlay = encodeSixel(pixBuf, pixelW, pixelH, SIXEL_PALETTE);
+      ui.logSixelOverlaySize = { pixelW, pixelH };
     }
   } else {
     ui.logSixelOverlay = null;
+    ui.logSixelOverlaySize = null;
   }
 
   // Scroll pct for title

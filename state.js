@@ -73,6 +73,8 @@ const ui = {
   termCols: 80,
   termRows: 24,
   logSixelOverlay: null,
+  logSixelOverlaySize: null,
+  logSixelRegion: null,
   clickableAreas: [],
   hoveredAreaIndex: -1,
   fileLineMap: [],
