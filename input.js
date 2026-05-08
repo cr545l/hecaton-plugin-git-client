@@ -610,6 +610,11 @@ function handleCommitInput(key) {
       render();
       return;
     }
+    if (state.staged.length === 0) {
+      showErrorDialog('Nothing staged to commit');
+      render();
+      return;
+    }
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     state.mode = 'normal';
     if (isRebaseOp) {
@@ -625,8 +630,10 @@ function handleCommitInput(key) {
             return;
           }
           const err = await gitRebaseContinueAsync(state.cwd);
-          state.commitMsg = '';
-          state.commitCursor = 0;
+          if (!err) {
+            state.commitMsg = '';
+            state.commitCursor = 0;
+          }
           await refreshAsync();
           if (state.rightView === 'log') refreshLog();
           stopSpinner();
@@ -1824,7 +1831,7 @@ async function handleMouseData(data) {
 
       // Click on commit button zone
       if (ui.commitButtonZone && cy === ui.commitButtonZone.row && cx >= ui.commitButtonZone.colStart && cx <= ui.commitButtonZone.colEnd) {
-        if (state.mode === 'commit' && state.commitMsg.trim().length > 0) {
+        if (state.mode === 'commit' && state.commitMsg.trim().length > 0 && state.staged.length > 0) {
           // Trigger commit via button click
           handleCommitInput(CSI + '13;5u');
         } else if (state.staged.length > 0 && state.mode !== 'commit') {

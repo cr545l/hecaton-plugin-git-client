@@ -1410,7 +1410,7 @@ function buildDiffCommitPanel(w, h) {
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
     const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : 'Commit';
-    const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0;
+    const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0 && state.staged.length > 0;
     const isHovered = ui.hoveredCommitButton;
     if (canCommit) {
       const style = isHovered ? colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold;
