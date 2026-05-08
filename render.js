@@ -62,6 +62,7 @@ function render() {
   appendLogSixelClear(buf);
 
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
+  const T_DOWN = '\u252c', T_UP = '\u2534', T_RIGHT = '\u251c', T_LEFT = '\u2524';
 
   const leftW = ui.leftPanelCollapsed
     ? 0
@@ -94,6 +95,7 @@ function render() {
   const contentH = Math.max(0, bodyH - 2);
   const hintRow = startRow + height - 1;
   const sepRow = startRow + height - 2;
+  const titleDividerOffsets = [];
 
   // -- Title row (rendered after body so scrollPct is available) --
   function buildTitleRows() {
@@ -121,6 +123,11 @@ function render() {
     // === Left side: Local / Commits tabs ===
     let row1 = ansi.moveTo(startRow, startCol);
     let col1 = startCol;
+    function appendTitleDivider() {
+      titleDividerOffsets.push(col1 + 1 - startCol);
+      row1 += colors.border + ' ' + V + ' ' + ansi.reset;
+      col1 += 3;
+    }
     {
       const totalChanges = state.staged.length + state.unstaged.length + state.untracked.length;
       const isLocal = state.rightView === 'diff';
@@ -159,8 +166,7 @@ function render() {
 
     // === Action buttons or Rebase progress bar ===
     {
-      row1 += colors.border + ' \u2502 ' + ansi.reset;
-      col1 += 3;
+      appendTitleDivider();
 
       const op = state.operationState;
       const isRebaseOp = op && (op.type === 'rebase-merge' || op.type === 'rebase-apply');
@@ -224,8 +230,7 @@ function render() {
       const email = state.committerEmail || '(no email)';
       const nameIsLocal = state.committerNameIsLocal;
       const emailIsLocal = state.committerEmailIsLocal;
-      row1 += colors.border + ' \u2502 ' + ansi.reset;
-      col1 += 3;
+      appendTitleDivider();
       // Name zone
       const nameTag = nameIsLocal ? '[L] ' : '';
       const nameLabel = ' ' + nameTag + name + ' ';
@@ -288,37 +293,59 @@ function render() {
     return row1;
   }
 
+  function horizontalConnectsRight(ch) {
+    return ch === H || ch === CROSS || ch === T_DOWN || ch === T_UP || ch === T_RIGHT;
+  }
+
+  function horizontalConnectsLeft(ch) {
+    return ch === H || ch === CROSS || ch === T_DOWN || ch === T_UP || ch === T_LEFT;
+  }
+
+  function visibleFirstChar(s) {
+    const plain = stripAnsi(s || '');
+    return plain.length > 0 ? plain[0] : ' ';
+  }
+
+  function visibleCharAt(s, idx) {
+    if (idx < 0) return ' ';
+    const plain = stripAnsi(s || '');
+    return idx < plain.length ? plain[idx] : ' ';
+  }
+
+  function dividerJoinChar(leftContent, leftWidth, rightContent) {
+    const leftJoins = horizontalConnectsRight(visibleCharAt(leftContent, leftWidth - 1));
+    const rightJoins = horizontalConnectsLeft(visibleFirstChar(rightContent));
+    if (leftJoins && rightJoins) return CROSS;
+    if (leftJoins) return T_LEFT;
+    if (rightJoins) return T_RIGHT;
+    return V;
+  }
+
+  function activeDividerOffsets() {
+    const offsets = [];
+    if (!ui.leftPanelCollapsed && leftW > 0) offsets.push(leftW);
+    if (state.rightView !== 'log' && state.rightView !== 'fresh' && middleW > 0 && rightW > 0) {
+      offsets.push((!ui.leftPanelCollapsed && leftW > 0 ? leftW + divider1W : 0) + middleW);
+    }
+    return offsets.filter(offset => offset >= 0 && offset < width);
+  }
+
+  function buildFullWidthSeparator(aboveOffsets, belowOffsets) {
+    const chars = new Array(width).fill(H);
+    const hasAbove = new Set((aboveOffsets || []).filter(offset => offset >= 0 && offset < width));
+    const hasBelow = new Set((belowOffsets || []).filter(offset => offset >= 0 && offset < width));
+    for (const offset of hasAbove) {
+      chars[offset] = hasBelow.has(offset) ? CROSS : T_UP;
+    }
+    for (const offset of hasBelow) {
+      if (!hasAbove.has(offset)) chars[offset] = T_DOWN;
+    }
+    return colors.border + chars.join('') + ansi.reset;
+  }
+
   // -- Separator line (with scroll percentages) --
   function buildSeparator() {
-    let sepStr = ansi.moveTo(startRow + titleRows, startCol);
-
-    function sectionLine(w) {
-      if (w <= 0) return '';
-      return colors.border + H.repeat(w) + ansi.reset;
-    }
-
-    if (leftW > 0) {
-      sepStr += sectionLine(leftW);
-      sepStr += colors.border + CROSS + ansi.reset;
-    }
-
-    if (state.rightView === 'log' || state.rightView === 'fresh') {
-      sepStr += sectionLine(rightW);
-    } else {
-      if (middleW > 0 && rightW > 0) {
-        sepStr += sectionLine(middleW);
-        sepStr += colors.border + CROSS + ansi.reset;
-        sepStr += sectionLine(rightW);
-      } else if (middleW > 0) {
-        sepStr += sectionLine(remaining);
-      } else if (rightW > 0) {
-        sepStr += sectionLine(remaining);
-      } else {
-        sepStr += colors.border + H.repeat(remaining) + ansi.reset;
-      }
-    }
-
-    return sepStr;
+    return ansi.moveTo(startRow + titleRows, startCol) + buildFullWidthSeparator(titleDividerOffsets, activeDividerOffsets());
   }
 
   // Vertical divider colors (used in body)
@@ -351,7 +378,7 @@ function render() {
         buf.push(
           ansi.moveTo(row, startCol) +
           padRight(lContent, leftW) +
-          vDiv1Color + V + ansi.reset +
+          vDiv1Color + dividerJoinChar(lContent, leftW, rContent) + ansi.reset +
           padRight(rContent, rightW)
         );
       }
@@ -378,7 +405,7 @@ function render() {
         buf.push(
           ansi.moveTo(row, startCol) +
           padRight(lContent, leftW) +
-          vDiv1Color + V + ansi.reset +
+          vDiv1Color + dividerJoinChar(lContent, leftW, rContent) + ansi.reset +
           padRight(rContent, rightW)
         );
       }
@@ -398,13 +425,13 @@ function render() {
       let line = ansi.moveTo(row, startCol);
       if (hasLeft) {
         line += padRight(i < leftLines.length ? leftLines[i] : '', leftW);
-        line += vDiv1Color + V + ansi.reset;
+        line += vDiv1Color + dividerJoinChar(i < leftLines.length ? leftLines[i] : '', leftW, i < middleLines.length ? middleLines[i] : '') + ansi.reset;
       }
       if (middleW > 0) {
         line += padRight(i < middleLines.length ? middleLines[i] : '', middleW);
       }
       if (middleW > 0 && rightW > 0) {
-        line += vDiv2Color + V + ansi.reset;
+        line += vDiv2Color + dividerJoinChar(i < middleLines.length ? middleLines[i] : '', middleW, i < rightLines.length ? rightLines[i] : '') + ansi.reset;
       }
       if (rightW > 0) {
         line += padRight(i < rightLines.length ? rightLines[i] : '', rightW);
@@ -428,7 +455,7 @@ function render() {
   // -- Bottom separator --
   buf.push(
     ansi.moveTo(sepRow, startCol) +
-    colors.border + H.repeat(width) + ansi.reset
+    buildFullWidthSeparator(activeDividerOffsets(), [])
   );
 
   // -- Hint bar --
