@@ -75,6 +75,8 @@ const ui = {
   logSixelOverlay: null,
   logSixelOverlaySize: null,
   logSixelRegion: null,
+  logSixelAnchorBank: false, // host-owned scroll: graph anchored at overscan bank row
+  hostScrollRegions: [],     // host-owned scroll: per-render region defs from panel builders
   clickableAreas: [],
   hoveredAreaIndex: -1,
   fileLineMap: [],

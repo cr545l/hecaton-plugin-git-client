@@ -5,6 +5,7 @@ const { state, ui } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
+const hostScroll = require('./scroll');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
@@ -40,6 +41,7 @@ function render() {
     if (clearBuf.length > 0) process.stdout.write(clearBuf.join(''));
     renderMinimized();
     _lastLayoutSig = computeLayoutSig();
+    hostScroll.syncRegions([]); // minimized: drop regions so wheel reaches the terminal
     return;
   }
 
@@ -52,6 +54,10 @@ function render() {
 
   const buf = [];
   buf.push(ansi.hideCursor + CSI + '?7l');
+
+  // Host-owned scroll: panel builders register their scrollable areas (plus
+  // overscan bank content) here; banks/acks/regions are emitted after the body.
+  ui.hostScrollRegions = [];
 
   // Layout 전환 시 화면 강제 erase — sixel 잔상 제거
   const layoutSig = computeLayoutSig();
@@ -544,10 +550,58 @@ function render() {
     buf.push(ansi.moveTo(hintRow, startCol) + padRight(hintContent, width));
   }
 
-  // Append Sixel overlay (for log graph)
+  // Host-owned scroll: emit overscan banks (off-screen buffer rows the host
+  // reveals during sub-cell scrolling), in-band render acks, and collect the
+  // region definitions for the post-write RPC sync. The banks/acks ride in the
+  // same stdout write as the frame so the host applies them atomically.
+  // Must come BEFORE the sixel overlays: the logList bank text shares buffer
+  // rows with the bank-anchored graph sixel, and text written after a sixel
+  // invalidates it (PutChar overlap), exactly like the visible list rows.
+  let hostScrollDefs = null;
+  if (hostScroll.isActive()) {
+    hostScrollDefs = [];
+    const midStartCol = startCol + leftW + divider1W;
+    const rightPanelCol = (state.rightView === 'log' || state.rightView === 'fresh')
+      ? midStartCol
+      : midStartCol + middleW + divider2W;
+    const bodyTopRow = startRow + titleRows + 1;
+    for (const r of ui.hostScrollRegions) {
+      if (r.height <= 0 || r.width <= 0) continue;
+      const absCol = r.panel === 'left' ? startCol : r.panel === 'middle' ? midStartCol : rightPanelCol;
+      const absRow = bodyTopRow + r.relRow;
+      const bankTop = hostScroll.bankRow(r.id); // 0-based buffer row
+      // Bank rows live beyond the screen: write them only after the host has
+      // confirmed the region (enlarged buffer); earlier writes would clamp
+      // onto the bottom visible row.
+      if (hostScroll.isReady(r.id)) {
+        for (let i = 0; i < 3; i++) {
+          buf.push(ansi.reset + ansi.moveTo(bankTop + 1 + i, absCol) + padRight(r.bank[i] || '', r.width) + ansi.reset);
+        }
+        buf.push(hostScroll.ackString(r.id, r.off));
+      }
+      hostScrollDefs.push({
+        id: r.id,
+        row: absRow - 1,
+        col: absCol - 1,
+        width: r.width,
+        height: r.height,
+        contentRows: r.contentRows,
+        contentCols: r.width, // horizontal stays plugin-owned (field-level scroll)
+        overscanRow: bankTop,
+        off: r.off,
+      });
+    }
+  }
+
+  // Append Sixel overlay (for log graph). With host-owned scroll the graph is
+  // rendered with overscan and anchored at the logList bank row, which the
+  // host maps to one row above the list viewport (and scrolls/clips it with
+  // the region).
   if (SIXEL_ENABLED && ui.logSixelOverlay && state.rightView === 'log') {
     const graphCol = startCol + leftW + divider1W + 1;
-    const screenRow = startRow + titleRows + 1;
+    const screenRow = ui.logSixelAnchorBank
+      ? hostScroll.bankRow('logList') + 1
+      : startRow + titleRows + 1;
     buf.push(ansi.moveTo(screenRow, graphCol) + ui.logSixelOverlay);
     if (ui.logSixelOverlaySize) {
       ui.logSixelRegion = {
@@ -678,6 +732,7 @@ function render() {
   }
 
   process.stdout.write(buf.join(''));
+  if (hostScrollDefs) hostScroll.syncRegions(hostScrollDefs);
 
   // Record layout
   ui.lastLayout = { startRow, startCol, width, height, leftW, divider1W, middleW, divider2W, rightW, bodyH, titleRows };
@@ -997,6 +1052,14 @@ function buildLeftPanel(w, h) {
   ui.leftPanelClickMap = clickMap.slice(off, off + h);
   const visibleLines = lines.slice(off, off + h);
 
+  if (hostScroll.isActive() && h > 0) {
+    ui.hostScrollRegions.push({
+      id: 'left', panel: 'left', relRow: 0, width: innerW, height: h,
+      contentRows: lines.length, off,
+      bank: [lines[off - 1] || '', lines[off + h] || '', lines[off + h + 1] || ''],
+    });
+  }
+
   // Apply hover highlight
   const hoverRow = ui.hoveredLeftPanelRow;
   if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.leftPanelClickMap[hoverRow]) {
@@ -1220,6 +1283,15 @@ function buildFileListPanel(w, h) {
   ui.fileLineMap = lineToFileIdx.slice(state.scrollOffset, state.scrollOffset + h);
   const visibleLines = lines.slice(state.scrollOffset, state.scrollOffset + h);
 
+  if (hostScroll.isActive() && h > 0) {
+    const off = state.scrollOffset;
+    ui.hostScrollRegions.push({
+      id: 'files', panel: 'middle', relRow: 0, width: innerW, height: h,
+      contentRows: lines.length, off,
+      bank: [lines[off - 1] || '', lines[off + h] || '', lines[off + h + 1] || ''],
+    });
+  }
+
   // Apply hover highlight to file list
   const hoverRow = ui.hoveredFileRow;
   if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.fileLineMap[hoverRow] >= 0) {
@@ -1285,6 +1357,19 @@ function buildDiffCommitPanel(w, h) {
   ui.rightDiffH = diffH;
   ui.commitMsgVisibleLines = maxMsgLines;
 
+  // Host-owned scroll: the diff area (rows 0..diffH) is one region; renderRow
+  // lazily renders the overscan bank rows for content that is only built for
+  // the visible slice (unified mode).
+  function pushDiffRegion(contentLen, off, renderRow) {
+    if (!hostScroll.isActive() || diffH <= 0) return;
+    const pick = (i) => (i >= 0 && i < contentLen) ? renderRow(i) : '';
+    ui.hostScrollRegions.push({
+      id: 'diff', panel: 'right', relRow: 0, width: innerW, height: diffH,
+      contentRows: contentLen, off,
+      bank: [pick(off - 1), pick(off + diffH), pick(off + diffH + 1)],
+    });
+  }
+
   if (diffH > 0) {
     if (isConflictView) {
       const conflictRender = buildConflictDiffLines(innerW);
@@ -1299,6 +1384,7 @@ function buildDiffCommitPanel(w, h) {
       for (const line of visible) lines.push(line);
       ui.scrollPct.diff = maxScroll > 0 ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
       for (let i = visible.length; i < diffH; i++) lines.push('');
+      pushDiffRegion(conflictRender.lines.length, state.diffScrollOffset, (i) => conflictRender.lines[i]);
     } else if (state.diffLines.length === 0) {
       ui.mergeClickZones = [];
       ui.mergeChunkLineMap = {};
@@ -1322,12 +1408,12 @@ function buildDiffCommitPanel(w, h) {
         for (const line of visible) lines.push(line);
         ui.scrollPct.diff = sideBySideLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
         for (let i = visible.length; i < diffH; i++) lines.push('');
+        pushDiffRegion(sideBySideLines.length, state.diffScrollOffset, (i) => sideBySideLines[i]);
       } else {
         const maxScroll = Math.max(0, state.diffLines.length - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
-        const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
-        for (const entry of visible) {
+        const renderUnifiedRow = (entry) => {
           if (entry.inDiff && gutterW > 0) {
             let gutter;
             if (entry.oldNum != null || entry.newNum != null) {
@@ -1337,13 +1423,17 @@ function buildDiffCommitPanel(w, h) {
             } else {
               gutter = ' '.repeat(gutterW);
             }
-            lines.push(gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX));
-          } else {
-            lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX));
+            return gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX);
           }
+          return ' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX);
+        };
+        const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+        for (const entry of visible) {
+          lines.push(renderUnifiedRow(entry));
         }
         ui.scrollPct.diff = state.diffLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
         for (let i = visible.length; i < diffH; i++) lines.push('');
+        pushDiffRegion(annotated.length, state.diffScrollOffset, (i) => renderUnifiedRow(annotated[i]));
       }
       if (hasHScrollbar) lines.push('');
     }
@@ -1479,10 +1569,9 @@ function buildLogPanel(w, h) {
   }
   const graphRows = [];
   let graphWidth = 0;
-  for (let i = 0; i < listH; i++) {
-    const itemIdx = state.logScrollOffset + i;
-    const item = visibleItems[i];
-    if (!item) { lines.push(''); graphRows.push(null); continue; }
+  function renderLogRow(itemIdx) {
+    const item = itemIdx >= 0 ? state.logItems[itemIdx] : null;
+    if (!item) return { text: '', graph: null };
 
     const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
 
@@ -1528,15 +1617,24 @@ function buildLogPanel(w, h) {
       const pad = Math.max(1, innerW - usedLen - 7);
       const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
       const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
-      lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
-      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles, isCursor } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
+      return {
+        text: (isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset,
+        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles, isCursor } : null,
+      };
     } else {
       const graphPart = ' '.repeat(maxNaturalWidth);
-      lines.push(' ' + graphPart);
-      graphRows.push(item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles } : null);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
+      return {
+        text: ' ' + graphPart,
+        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles } : null,
+      };
     }
+  }
+  for (let i = 0; i < listH; i++) {
+    const row = renderLogRow(state.logScrollOffset + i);
+    lines.push(row.text);
+    graphRows.push(row.graph);
   }
 
   // Apply hover highlight to log list
@@ -1556,22 +1654,51 @@ function buildLogPanel(w, h) {
     }
   }
 
-  // Sixel
+  // Host-owned scroll: register the list as a region with 3 overscan bank rows
+  // (row above the viewport + 2 rows below) so the host can reveal partial
+  // rows during sub-cell scrolling.
+  // Region registration only needs isActive(); the bank contents and the
+  // bank-anchored sixel additionally need the host's confirmation (isReady).
+  const useHostScroll = hostScroll.isActive() && listH > 0 && hostScroll.isReady('logList');
+  let logBankRows = null;
+  if (hostScroll.isActive() && listH > 0) {
+    const off = state.logScrollOffset;
+    if (useHostScroll) {
+      logBankRows = [renderLogRow(off - 1), renderLogRow(off + listH), renderLogRow(off + listH + 1)];
+    }
+    ui.hostScrollRegions.push({
+      id: 'logList', panel: 'right', relRow: 0, width: innerW, height: listH,
+      contentRows: state.logItems.length, off,
+      bank: logBankRows ? logBankRows.map(r => r.text) : [],
+    });
+  }
+
+  // Sixel. With host scroll the graph covers the overscan range too
+  // ([off-1, off+listH+1]) and is anchored at the bank row, which the host
+  // maps to one row above the viewport.
   if (SIXEL_ENABLED && graphRows.length > 0 && maxNaturalWidth > 0) {
-    const prevItem = state.logScrollOffset > 0 ? state.logItems[state.logScrollOffset - 1] : null;
-    const nextItem = state.logScrollOffset + listH < state.logItems.length ? state.logItems[state.logScrollOffset + listH] : null;
+    const off = state.logScrollOffset;
+    const sixelGraphRows = useHostScroll
+      ? [logBankRows[0].graph, ...graphRows, logBankRows[1].graph, logBankRows[2].graph]
+      : graphRows;
+    const prevIdx = useHostScroll ? off - 2 : off - 1;
+    const nextIdx = off + listH + (useHostScroll ? 2 : 0);
+    const prevItem = prevIdx >= 0 ? state.logItems[prevIdx] : null;
+    const nextItem = nextIdx < state.logItems.length ? state.logItems[nextIdx] : null;
     const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
     const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
-    const pixBuf = renderCombinedGraphPixels(graphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
+    const pixBuf = renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
     if (pixBuf) {
       const pixelW = maxNaturalWidth * ui.cellW;
-      const pixelH = graphRows.length * ui.cellH;
+      const pixelH = sixelGraphRows.length * ui.cellH;
       ui.logSixelOverlay = encodeSixel(pixBuf, pixelW, pixelH, SIXEL_PALETTE);
       ui.logSixelOverlaySize = { pixelW, pixelH };
+      ui.logSixelAnchorBank = useHostScroll;
     }
   } else {
     ui.logSixelOverlay = null;
     ui.logSixelOverlaySize = null;
+    ui.logSixelAnchorBank = false;
   }
 
   // Scroll pct for title
@@ -1713,20 +1840,19 @@ function buildLogPanel(w, h) {
         cH--;
       }
 
+      const detailRegionRelRow = lines.length;
       const visible = filteredDetail.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       const numW = filteredDetail.maxLine > 0 ? String(filteredDetail.maxLine).length : 0;
       const gutterW = numW > 0 ? numW * 2 + 2 : 0;
-      for (let vi = 0; vi < visible.length; vi++) {
-        const entry = visible[vi];
+      // lineIdx = -1: overscan bank row (skip zone registration / hover)
+      function renderDetailRow(entry, lineIdx) {
         if (entry.isFileHeader) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
           const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
-          lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
-          ui.detailFileHeaderMap.push(entry.file);
+          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset;
         } else if (/^\u2500{3,}$/.test(entry.text)) {
-          lines.push(colorizeDiffLine(entry.text, innerW, entry.file));
-          ui.detailFileHeaderMap.push(null);
+          return colorizeDiffLine(entry.text, innerW, entry.file);
         } else if (entry.inDiff && gutterW > 0) {
           let gutter;
           if (entry.oldNum != null || entry.newNum != null) {
@@ -1736,55 +1862,67 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          lines.push(gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file, state.diffScrollX));
-          ui.detailFileHeaderMap.push(null);
+          return gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file, state.diffScrollX);
         } else {
           const rawText = (entry.text || '').replace(/[\r\n]/g, '');
-          const lineIdx = lines.length;
-          // Register copy zones for metadata lines
-          if (rawText.startsWith('commit ')) {
-            const hash = rawText.substring(7);
-            ui.detailCopyZones.push({ lineIdx, colStart: 8, colEnd: 8 + hash.length - 1, text: hash });
-          } else if (rawText.startsWith('Author: ') || rawText.startsWith('Commit: ')) {
-            const prefix = rawText.startsWith('Author: ') ? 'Author: ' : 'Commit: ';
-            const rest = rawText.substring(prefix.length);
-            // Parse: name <email>  date or name  date
-            const emailMatch = rest.match(/^(.+?) <(.+?)>(  .+)?$/);
-            const noEmailMatch = rest.match(/^(.+?)(  \d{4}-.+)?$/);
-            let col = prefix.length + 1; // +1 for leading space
-            if (emailMatch) {
-              const name = emailMatch[1];
-              const email = emailMatch[2];
-              const dateStr = emailMatch[3] ? emailMatch[3].substring(2) : '';
-              ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + name.length - 1, text: name });
-              const emailStart = col + name.length + 2; // ' <'
-              ui.detailCopyZones.push({ lineIdx, colStart: emailStart, colEnd: emailStart + email.length - 1, text: email });
-              if (dateStr) {
-                const dateStart = emailStart + email.length + 3; // '>  '
-                ui.detailCopyZones.push({ lineIdx, colStart: dateStart, colEnd: dateStart + dateStr.length - 1, text: dateStr });
-              }
-            } else if (noEmailMatch) {
-              const name = noEmailMatch[1];
-              const dateStr = noEmailMatch[2] ? noEmailMatch[2].substring(2) : '';
-              ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + name.length - 1, text: name });
-              if (dateStr) {
-                const dateStart = col + name.length + 2;
-                ui.detailCopyZones.push({ lineIdx, colStart: dateStart, colEnd: dateStart + dateStr.length - 1, text: dateStr });
+          // Register copy zones for metadata lines (visible rows only)
+          if (lineIdx >= 0) {
+            if (rawText.startsWith('commit ')) {
+              const hash = rawText.substring(7);
+              ui.detailCopyZones.push({ lineIdx, colStart: 8, colEnd: 8 + hash.length - 1, text: hash });
+            } else if (rawText.startsWith('Author: ') || rawText.startsWith('Commit: ')) {
+              const prefix = rawText.startsWith('Author: ') ? 'Author: ' : 'Commit: ';
+              const rest = rawText.substring(prefix.length);
+              // Parse: name <email>  date or name  date
+              const emailMatch = rest.match(/^(.+?) <(.+?)>(  .+)?$/);
+              const noEmailMatch = rest.match(/^(.+?)(  \d{4}-.+)?$/);
+              let col = prefix.length + 1; // +1 for leading space
+              if (emailMatch) {
+                const name = emailMatch[1];
+                const email = emailMatch[2];
+                const dateStr = emailMatch[3] ? emailMatch[3].substring(2) : '';
+                ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + name.length - 1, text: name });
+                const emailStart = col + name.length + 2; // ' <'
+                ui.detailCopyZones.push({ lineIdx, colStart: emailStart, colEnd: emailStart + email.length - 1, text: email });
+                if (dateStr) {
+                  const dateStart = emailStart + email.length + 3; // '>  '
+                  ui.detailCopyZones.push({ lineIdx, colStart: dateStart, colEnd: dateStart + dateStr.length - 1, text: dateStr });
+                }
+              } else if (noEmailMatch) {
+                const name = noEmailMatch[1];
+                const dateStr = noEmailMatch[2] ? noEmailMatch[2].substring(2) : '';
+                ui.detailCopyZones.push({ lineIdx, colStart: col, colEnd: col + name.length - 1, text: name });
+                if (dateStr) {
+                  const dateStart = col + name.length + 2;
+                  ui.detailCopyZones.push({ lineIdx, colStart: dateStart, colEnd: dateStart + dateStr.length - 1, text: dateStr });
+                }
               }
             }
           }
           // Render with hover underline
           const hz = ui.hoveredDetailCopyZone;
-          const hoveredZone = hz && hz.lineIdx === lineIdx
+          const hoveredZone = lineIdx >= 0 && hz && hz.lineIdx === lineIdx
             ? ui.detailCopyZones.find(z => z.lineIdx === lineIdx && z.colStart === hz.colStart && z.colEnd === hz.colEnd)
             : null;
           if (hoveredZone) {
-            lines.push(' ' + colorizeDiffLineWithUnderline(rawText, innerW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1));
-          } else {
-            lines.push(' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file, state.diffScrollX));
+            return ' ' + colorizeDiffLineWithUnderline(rawText, innerW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
           }
-          ui.detailFileHeaderMap.push(null);
+          return ' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file, state.diffScrollX);
         }
+      }
+      for (const entry of visible) {
+        const rendered = renderDetailRow(entry, lines.length);
+        lines.push(rendered);
+        ui.detailFileHeaderMap.push(entry.isFileHeader ? entry.file : null);
+      }
+      if (hostScroll.isActive() && cH > 0) {
+        const off = state.diffScrollOffset;
+        const pick = (i) => (i >= 0 && i < filteredDetail.length) ? renderDetailRow(filteredDetail[i], -1) : '';
+        ui.hostScrollRegions.push({
+          id: 'logDetail', panel: 'right', relRow: detailRegionRelRow, width: innerW, height: cH,
+          contentRows: filteredDetail.length, off,
+          bank: [pick(off - 1), pick(off + cH), pick(off + cH + 1)],
+        });
       }
       // Reserve row for horizontal scrollbar
       if (logDetailMaxScrollX > 0) lines.push('');
@@ -1900,10 +2038,9 @@ function buildFreshPanel(w, h) {
   state.freshScrollOffset = Math.max(0, Math.min(state.freshScrollOffset, Math.max(0, state.freshItems.length - fileListH)));
 
   const visibleItems = state.freshItems.slice(state.freshScrollOffset, state.freshScrollOffset + fileListH);
-  for (let i = 0; i < fileListH; i++) {
-    const itemIdx = state.freshScrollOffset + i;
-    const item = visibleItems[i];
-    if (!item) { lines.push(''); lineToFileIdx.push(-1); continue; }
+  function renderFreshRow(itemIdx) {
+    const item = itemIdx >= 0 ? state.freshItems[itemIdx] : null;
+    if (!item) return '';
 
     const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
     const prefix = '   ';
@@ -1919,8 +2056,22 @@ function buildFreshPanel(w, h) {
       + '  ' + colors.dim + padRight(relTime, 4) + resetTo
       + ' ' + colors.dim + authorPart + resetTo;
 
-    lines.push((isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset);
+    return (isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset;
+  }
+  for (let i = 0; i < fileListH; i++) {
+    const itemIdx = state.freshScrollOffset + i;
+    if (itemIdx >= state.freshItems.length) { lines.push(''); lineToFileIdx.push(-1); continue; }
+    lines.push(renderFreshRow(itemIdx));
     lineToFileIdx.push(itemIdx);
+  }
+
+  if (hostScroll.isActive() && fileListH > 0) {
+    const off = state.freshScrollOffset;
+    ui.hostScrollRegions.push({
+      id: 'freshList', panel: 'right', relRow: 1, width: innerW, height: fileListH,
+      contentRows: state.freshItems.length, off,
+      bank: [renderFreshRow(off - 1), renderFreshRow(off + fileListH), renderFreshRow(off + fileListH + 1)],
+    });
   }
 
   // Apply hover highlight to fresh file list (skip header at row 0)
@@ -1999,9 +2150,22 @@ function buildFreshPanel(w, h) {
       const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
       ui.freshDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
+      const renderFreshDetailRow = (rawLine) =>
+        ' ' + colorizeDiffLine(rawLine, innerW - 1, selItem ? selItem.file : null, state.diffScrollX);
+      const detailRegionRelRow = lines.length;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
-        lines.push(' ' + colorizeDiffLine(rawLine, innerW - 1, selItem ? selItem.file : null, state.diffScrollX));
+        lines.push(renderFreshDetailRow(rawLine));
+      }
+      if (hostScroll.isActive() && cH > 0) {
+        const off = state.diffScrollOffset;
+        const pick = (i) => (i >= 0 && i < state.freshDetailLines.length)
+          ? renderFreshDetailRow(state.freshDetailLines[i]) : '';
+        ui.hostScrollRegions.push({
+          id: 'freshDetail', panel: 'right', relRow: detailRegionRelRow, width: innerW, height: cH,
+          contentRows: state.freshDetailLines.length, off,
+          bank: [pick(off - 1), pick(off + cH), pick(off + cH + 1)],
+        });
       }
       // Reserve row for horizontal scrollbar
       if (freshDetailMaxScrollX > 0) lines.push('');

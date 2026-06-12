@@ -1,5 +1,6 @@
 const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
+const hostScroll = require('./scroll');
 const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
@@ -909,15 +910,8 @@ async function handleNameInput(key) {
 }
 
 function applyScrollbarOffset(target, offset) {
-  switch (target) {
-    case 'left': ui.leftPanelScrollOffset = offset; break;
-    case 'files': state.scrollOffset = offset; ui.filesScrollPin = state.cursor; break;
-    case 'diff': state.diffScrollOffset = offset; break;
-    case 'logList': state.logScrollOffset = offset; ui.logScrollPin = state.logCursor; maybeLoadMoreLog(); break;
-    case 'logDetail': state.diffScrollOffset = offset; break;
-    case 'freshList': state.freshScrollOffset = offset; ui.freshScrollPin = state.freshCursor; break;
-    case 'freshDetail': state.diffScrollOffset = offset; break;
-  }
+  hostScroll.applyOffset(target, offset);
+  if (target === 'logList') maybeLoadMoreLog();
 }
 
 async function handleMouseData(data) {
@@ -2263,4 +2257,4 @@ function isRemoteMenuTarget(entry) {
   return false;
 }
 
-module.exports = { handleKey, handleMouseData, actionToKey, cleanup, handleContextMenuRequest };
+module.exports = { handleKey, handleMouseData, actionToKey, cleanup, handleContextMenuRequest, maybeLoadMoreLog };

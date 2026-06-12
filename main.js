@@ -23,8 +23,9 @@
 const { state, ui, init: initState } = require('./state');
 const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
-const { handleKey, handleMouseData, cleanup, handleContextMenuRequest } = require('./input');
+const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
+const hostScroll = require('./scroll');
 const path = require('path');
 
 async function main() {
@@ -67,6 +68,10 @@ async function main() {
   hecaton.on('dialog_resolved', (params) => {
     handleDialogResult(params);
   });
+
+  // Host-owned scroll: subscribe to scroll.update (host momentum → integer
+  // offsets) and re-render. No-op on hosts without the scroll API.
+  hostScroll.init({ render, maybeLoadMoreLog });
 
   process.stdin.on('data', async (data) => {
     // Ignore input while loading or spinner active
