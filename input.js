@@ -2,15 +2,16 @@ const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
 const hostScroll = require('./scroll');
 const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
-  gitCommitAsync, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
+  gitCommitAsync, gitCommitAmendAsync, gitCommitMessage, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
+  buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
-const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
 
 let currentMouseShape = 'default';
 function setMouseShape(shape) {
@@ -116,6 +117,65 @@ function buildResolvedConflictContent() {
   let content = outLines.join('\n');
   if (state.conflictView.hasTrailingNewline) content += '\n';
   return { ok: true, content };
+}
+
+// commit 모드 amend 토글. 켜는 시점에 메시지가 비어 있으면 HEAD 메시지를 채워 넣는다.
+function toggleCommitAmend() {
+  if (state.operationState) return;
+  state.commitAmend = !state.commitAmend;
+  if (state.commitAmend && state.commitMsg.trim() === '') {
+    gitCommitMessage(state.cwd, 'HEAD').then(msg => {
+      if (state.mode === 'commit' && state.commitAmend && state.commitMsg.trim() === '' && msg) {
+        state.commitMsg = msg;
+        state.commitCursor = msg.length;
+        render();
+      }
+    }).catch(() => null);
+  }
+  render();
+}
+
+// amend를 켠 상태로 commit 모드 진입 (staged 없어도 메시지 수정 가능)
+function enterAmendCommitMode() {
+  if (state.operationState) return;
+  state.mode = 'commit';
+  state.commitAmend = true;
+  state.commitMsg = '';
+  state.commitCursor = 0;
+  render();
+  gitCommitMessage(state.cwd, 'HEAD').then(msg => {
+    if (state.mode === 'commit' && state.commitAmend && state.commitMsg === '' && msg) {
+      state.commitMsg = msg;
+      state.commitCursor = msg.length;
+      render();
+    }
+  }).catch(() => null);
+}
+
+// diff 패널의 [Stage hunk]/[Unstage hunk] 버튼 동작
+async function applyHunkAction(hunkIdx) {
+  const item = selectedItem();
+  if (!item || (item.type !== 'staged' && item.type !== 'unstaged')) return;
+  const patch = buildHunkPatchText(state.diffLines, hunkIdx);
+  if (!patch) {
+    showErrorDialog('Failed to build hunk patch');
+    render();
+    return;
+  }
+  const isStagedView = item.type === 'staged';
+  startSpinner(isStagedView ? 'Unstaging hunk...' : 'Staging hunk...');
+  const err = await gitApplyPatchText(state.cwd, patch, { cached: true, reverse: isStagedView });
+  if (err) {
+    stopSpinner();
+    showErrorDialog((isStagedView ? 'Unstage hunk' : 'Stage hunk') + ' failed:\n' + err);
+    render();
+    return;
+  }
+  await refreshAsync({ statusOnly: true });
+  stopSpinner();
+  ui.hoveredDiffHunkIdx = -1;
+  updateDiff();
+  render();
 }
 
 async function applyConflictSelections() {
@@ -384,6 +444,7 @@ async function handleKey(key) {
         break;
       }
       state.mode = 'commit';
+      state.commitAmend = false;
       if (state.operationState && state.rebaseMessage) {
         state.commitMsg = state.rebaseMessage;
         state.commitCursor = state.rebaseMessage.length;
@@ -392,6 +453,11 @@ async function handleKey(key) {
         state.commitCursor = 0;
       }
       render();
+      break;
+    }
+    case 'A': {
+      if (state.operationState) break;
+      enterAmendCommitMode();
       break;
     }
     case 'l':
@@ -601,17 +667,24 @@ function handleCommitInput(key) {
     state.mode = 'normal';
     state.commitMsg = '';
     state.commitCursor = 0;
+    state.commitAmend = false;
     render();
+    return;
+  }
+  // Ctrl+A → toggle amend
+  if (key === '\x01') {
+    toggleCommitAmend();
     return;
   }
   // Ctrl+Enter → submit commit or continue rebase
   if (key === CSI + '13;5u') {
+    const isAmendCommit = state.commitAmend && !state.operationState;
     if (state.commitMsg.trim().length === 0) {
       showErrorDialog('Commit message cannot be empty');
       render();
       return;
     }
-    if (state.staged.length === 0) {
+    if (state.staged.length === 0 && !isAmendCommit) {
       showErrorDialog('Nothing staged to commit');
       render();
       return;
@@ -653,8 +726,11 @@ function handleCommitInput(key) {
         }
       })();
     } else {
-      startSpinner('Committing...');
-      gitCommitAsync(state.cwd, state.commitMsg).then(async err => {
+      startSpinner(isAmendCommit ? 'Amending...' : 'Committing...');
+      const commitPromise = isAmendCommit
+        ? gitCommitAmendAsync(state.cwd, state.commitMsg)
+        : gitCommitAsync(state.cwd, state.commitMsg);
+      commitPromise.then(async err => {
         if (err) {
           stopSpinner();
           showErrorDialog(err);
@@ -663,6 +739,7 @@ function handleCommitInput(key) {
         }
         state.commitMsg = '';
         state.commitCursor = 0;
+        state.commitAmend = false;
         stopSpinner();
         refreshInBackground({}, { refreshLog: true, refreshFresh: true });
       });
@@ -1170,7 +1247,25 @@ async function handleMouseData(data) {
         }
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton) {
+      // Hover: diff hunk stage/unstage buttons
+      let newDiffHunkHover = -1;
+      if (ui.diffHunkZones && ui.diffHunkZones.length > 0 && state.rightView === 'diff' && inBody) {
+        const rpStartCol = L.startCol + L.leftW + L.divider1W + L.middleW + L.divider2W;
+        for (const zone of ui.diffHunkZones) {
+          if (cy === bodyTop + zone.lineIdx && cx >= rpStartCol + zone.colStart && cx <= rpStartCol + zone.colEnd) {
+            newDiffHunkHover = zone.hunkIdx;
+            break;
+          }
+        }
+      }
+
+      // Hover: amend checkbox
+      let newCommitAmendHover = false;
+      if (ui.commitAmendZone && state.mode === 'commit' && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
+        newCommitAmendHover = true;
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
@@ -1187,13 +1282,15 @@ async function handleMouseData(data) {
         ui.hoveredMergeZoneIndex = newMergeZoneHover;
         ui.hoveredDetailCopyZone = newDetailCopyZone;
         ui.hoveredCollapseAllButton = newCollapseAllHover;
+        ui.hoveredDiffHunkIdx = newDiffHunkHover;
+        ui.hoveredCommitAmend = newCommitAmendHover;
         // Update mouse cursor shape
         if (!ui.dragging) {
           if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
             setMouseShape('ew-resize');
           } else if (newDivHover === 'horizontal') {
             setMouseShape('ns-resize');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newDetailCopyZone || newCollapseAllHover) {
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -1823,13 +1920,35 @@ async function handleMouseData(data) {
         continue;
       }
 
+      // Click on diff hunk stage/unstage buttons
+      if (ui.diffHunkZones && ui.diffHunkZones.length > 0 && state.rightView === 'diff') {
+        const rpStartCol = L.startCol + L.leftW + L.divider1W + L.middleW + L.divider2W;
+        let hunkHandled = false;
+        for (const zone of ui.diffHunkZones) {
+          if (cy === bodyTop + zone.lineIdx && cx >= rpStartCol + zone.colStart && cx <= rpStartCol + zone.colEnd) {
+            await applyHunkAction(zone.hunkIdx);
+            hunkHandled = true;
+            break;
+          }
+        }
+        if (hunkHandled) continue;
+      }
+
+      // Click on amend checkbox
+      if (ui.commitAmendZone && state.mode === 'commit' && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
+        toggleCommitAmend();
+        continue;
+      }
+
       // Click on commit button zone
       if (ui.commitButtonZone && cy === ui.commitButtonZone.row && cx >= ui.commitButtonZone.colStart && cx <= ui.commitButtonZone.colEnd) {
-        if (state.mode === 'commit' && state.commitMsg.trim().length > 0 && state.staged.length > 0) {
+        const clickIsAmend = state.commitAmend && !state.operationState;
+        if (state.mode === 'commit' && state.commitMsg.trim().length > 0 && (state.staged.length > 0 || clickIsAmend)) {
           // Trigger commit via button click
           handleCommitInput(CSI + '13;5u');
         } else if (state.staged.length > 0 && state.mode !== 'commit') {
           state.mode = 'commit';
+          state.commitAmend = false;
           if (state.operationState && state.rebaseMessage) {
             state.commitMsg = state.rebaseMessage;
             state.commitCursor = state.rebaseMessage.length;
@@ -1846,6 +1965,7 @@ async function handleMouseData(data) {
       if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= rightStart && cx < L.startCol + L.width) {
         if (state.mode !== 'commit' && state.staged.length > 0) {
           state.mode = 'commit';
+          state.commitAmend = false;
           if (state.operationState && state.rebaseMessage) {
             state.commitMsg = state.rebaseMessage;
             state.commitCursor = state.rebaseMessage.length;
@@ -2159,12 +2279,24 @@ function handleContextMenuRequest(col, row) {
         render();
         return;
       }
+      if (entry && (entry.action === 'goto-worktree' || (entry.action === 'toggle-section' && entry.section === 'worktrees'))) {
+        ui.contextMenuWorktree = entry.action === 'goto-worktree' ? entry.path : null;
+        hecaton.menu.show({ items: buildWorktreeContextMenuItems(ui.contextMenuWorktree) }).catch(() => null);
+        render();
+        return;
+      }
       if (isRemoteMenuTarget(entry)) {
         ui.contextMenuStashRef = null;
         ui.contextMenuFileItem = null;
         ui.contextMenuFileItems = [];
         ui.contextMenuFilePath = '';
-        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
+        // remote 그룹 행이면 remote 이름 추출 → remote 관리 항목 노출
+        let remoteName = null;
+        if (entry.action === 'toggle-group' && typeof entry.group === 'string' && entry.group.startsWith('r:')) {
+          remoteName = entry.group.substring(2).split('/')[0];
+        }
+        ui.contextMenuRemote = remoteName && state.remotes.includes(remoteName) ? remoteName : null;
+        hecaton.menu.show({ items: buildRemotesContextMenuItems(ui.contextMenuRemote) }).catch(() => null);
         render();
         return;
       }

@@ -41,6 +41,7 @@ const state = {
   mode: 'normal',        // 'normal' | 'commit'
   commitMsg: '',
   commitCursor: 0,
+  commitAmend: false,    // commit 모드에서 --amend 여부
   pendingDialogAction: null,  // 'new-branch' | 'new-tag' | 'rename-stash' | 'new-remote' | null
   pendingDialogTarget: null,
   pendingRebaseMenu: false,
@@ -86,6 +87,10 @@ const ui = {
   lastDetailContentH: 0,
   commitInputRow: -1,
   commitButtonZone: null,
+  commitAmendZone: null,      // { row, colStart, colEnd } amend 체크박스 클릭 존
+  hoveredCommitAmend: false,
+  diffHunkZones: [],          // [{ lineIdx, colStart, colEnd, hunkIdx }] hunk 버튼 클릭 존
+  hoveredDiffHunkIdx: -1,
   stashMap: new Map(),
   fileHeaderZones: [],
   verticalDividerRatio: 0.25,
@@ -124,6 +129,8 @@ const ui = {
   contextMenuFilePath: '',
   contextMenuTab: false,
   contextMenuBranch: null,
+  contextMenuRemote: null,    // remote 그룹 우클릭 시 remote 이름
+  contextMenuWorktree: null,  // worktree 행 우클릭 시 worktree 경로
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },

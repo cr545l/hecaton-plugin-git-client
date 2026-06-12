@@ -338,6 +338,19 @@ async function gitCommit(cwd, message) {
   }
 }
 
+// git rev-parse --git-dir 절대경로 해석 (worktree 포함)
+async function resolveGitDirAbs(cwd) {
+  try {
+    const gitDir = (await git(['rev-parse', '--git-dir'], cwd)).trim();
+    if (!gitDir) return '';
+    const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+    const isAbsolute = gitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(gitDir);
+    return isAbsolute ? gitDir : (cwd + sep + gitDir);
+  } catch {
+    return '';
+  }
+}
+
 async function gitStashRefs(cwd) {
   try {
     const raw = (await git(['stash', 'list', '--format=%H\t%h\t%gd'], cwd)).trim();
@@ -686,6 +699,175 @@ async function gitCherryPickNoCommitAsync(cwd, ref) { return await gitAsyncWrap(
 async function gitRevertAsync(cwd, ref) { return await gitAsyncWrap(['revert', '--no-edit', ref], cwd); }
 async function gitStashSaveAsync(cwd) { return await gitAsyncWrap(['stash', 'push'], cwd, 10000); }
 async function gitCommitAsync(cwd, message) { return await gitAsyncWrap(['commit', '-m', message], cwd, 30000); }
+// 일반 amend: staged 변경을 포함해 마지막 커밋을 재작성
+async function gitCommitAmendAsync(cwd, message) { return await gitAsyncWrap(['commit', '--amend', '-m', message], cwd, 30000); }
+// 메시지만 amend: staged 변경은 그대로 두고 메시지만 교체 (--amend --only, pathspec 없음)
+async function gitCommitAmendMessageOnlyAsync(cwd, message) { return await gitAsyncWrap(['commit', '--amend', '--only', '-m', message], cwd, 30000); }
+async function gitResetModeAsync(cwd, ref, mode) {
+  const m = mode === 'soft' || mode === 'mixed' || mode === 'hard' ? mode : 'mixed';
+  return await gitAsyncWrap(['reset', '--' + m, ref], cwd);
+}
+
+// ── Hunk 단위 스테이징 ──
+// 단일 파일 diff 출력(rawLines)을 파일 헤더 + hunk 목록으로 분해
+function parseDiffHunks(rawLines) {
+  const headerLines = [];
+  const hunks = [];
+  let current = null;
+  let inHeader = false;
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = (rawLines[i] || '').replace(/[\r\n]/g, '');
+    if (i === rawLines.length - 1 && line === '') continue;
+    if (line.startsWith('diff --git ')) {
+      inHeader = true;
+      current = null;
+      headerLines.length = 0;
+      headerLines.push(line);
+      continue;
+    }
+    if (line.startsWith('@@ ')) {
+      inHeader = false;
+      current = { header: line, lines: [] };
+      hunks.push(current);
+      continue;
+    }
+    if (inHeader) { headerLines.push(line); continue; }
+    if (current) current.lines.push(line);
+  }
+  return { headerLines, hunks };
+}
+
+// hunkIdx번째 hunk만 담은 독립 패치 텍스트 생성
+function buildHunkPatchText(rawLines, hunkIdx) {
+  const { headerLines, hunks } = parseDiffHunks(rawLines);
+  const hunk = hunks[hunkIdx];
+  if (!hunk || headerLines.length === 0) return '';
+  let patch = headerLines.join('\n') + '\n' + hunk.header + '\n';
+  if (hunk.lines.length > 0) patch += hunk.lines.join('\n') + '\n';
+  return patch;
+}
+
+// 패치 텍스트를 임시 파일로 저장 후 git apply (stdin 미지원 호스트 대응)
+async function gitApplyPatchText(cwd, patchText, opts = {}) {
+  try {
+    const gitDirAbs = await resolveGitDirAbs(cwd);
+    if (!gitDirAbs) return 'Failed to resolve git directory';
+    const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+    const patchPath = gitDirAbs + sep + 'hecaton-hunk.patch';
+    await hecaton.fs.write_file({ path: patchPath, content: patchText });
+    const args = ['apply', '--whitespace=nowarn'];
+    if (opts.cached) args.push('--cached');
+    if (opts.reverse) args.push('-R');
+    args.push(patchPath);
+    return await gitRunOrError(args, cwd, 10000, 'Apply patch failed');
+  } catch (e) {
+    return (e && e.message) || 'Apply patch failed';
+  }
+}
+
+// ── 인터랙티브 리베이스 (todo 자동 생성) ──
+// git이 editor를 shell로 실행할 때 'cp "<src>" <대상파일>' 형태가 되도록 복사 명령 구성
+function buildCopyEditorCommand(srcPath) {
+  if (typeof process !== 'undefined' && process.platform === 'win32') {
+    return 'cmd /c copy /y "' + srcPath + '"';
+  }
+  return 'cp "' + srcPath.replace(/(["\\$`])/g, '\\$1') + '"';
+}
+
+// baseRef..HEAD 커밋을 오래된 순으로 나열 (baseRef가 null이면 루트부터 전체)
+async function listRebaseCommits(cwd, baseRef) {
+  const args = ['rev-list', '--reverse'];
+  if (baseRef) args.push(baseRef + '..HEAD'); else args.push('HEAD');
+  const raw = (await gitExec(args, cwd, 15000)).trim();
+  return raw ? raw.split('\n').map(s => s.trim()).filter(Boolean) : [];
+}
+
+// 준비된 todo 내용으로 rebase -i 실행. sequence.editor를 복사 명령으로 바꿔치기해
+// 에디터 상호작용 없이 진행한다. core.editor=true로 기본 메시지를 그대로 수용
+// (squash의 결합 메시지 등). 참고: reword는 일부 git 버전에서 비대화형 실행 시
+// 에디터를 호출하지 않으므로 edit + amend + continue 방식을 사용해야 한다.
+async function gitRunRebaseTodo(cwd, baseRef, todoContent) {
+  const gitDirAbs = await resolveGitDirAbs(cwd);
+  if (!gitDirAbs) return 'Failed to resolve git directory';
+  const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+  const todoPath = gitDirAbs + sep + 'hecaton-rebase-todo.txt';
+  try {
+    await hecaton.fs.write_file({ path: todoPath, content: todoContent });
+  } catch (e) {
+    return (e && e.message) || 'Failed to write rebase todo';
+  }
+  const args = [
+    '-c', 'sequence.editor=' + buildCopyEditorCommand(todoPath),
+    '-c', 'core.editor=true',
+    'rebase', '-i',
+  ];
+  if (baseRef) args.push(baseRef); else args.push('--root');
+  return await gitAsyncWrap(args, cwd, 60000);
+}
+
+// 커밋 메시지 변경. HEAD면 amend --only.
+// 과거 커밋이면 edit로 해당 커밋에서 멈춘 뒤 amend --only → continue.
+// (reword todo는 비대화형 환경에서 에디터가 호출되지 않아 사용 불가)
+async function gitRewordCommitAsync(cwd, ref, message) {
+  const full = (await gitExec(['rev-parse', ref], cwd)).trim();
+  if (!full) return 'Cannot resolve commit ' + ref;
+  const head = (await gitExec(['rev-parse', 'HEAD'], cwd)).trim();
+  if (head && head === full) {
+    return await gitCommitAmendMessageOnlyAsync(cwd, message);
+  }
+  const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
+  const base = parent ? full + '^' : null;
+  const commits = await listRebaseCommits(cwd, base);
+  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  const todo = commits.map(h => (h === full ? 'edit ' : 'pick ') + h).join('\n') + '\n';
+  const startErr = await gitRunRebaseTodo(cwd, base, todo);
+  if (startErr) return startErr;
+  const amendErr = await gitCommitAmendMessageOnlyAsync(cwd, message);
+  if (amendErr) {
+    await gitAsyncWrap(['rebase', '--abort'], cwd, 30000);
+    return amendErr;
+  }
+  return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--continue'], cwd, 60000);
+}
+
+// 커밋을 부모로 합치기. discardMessage=true면 fixup(메시지 버림), 아니면 squash(메시지 결합).
+async function gitSquashIntoParentAsync(cwd, ref, discardMessage) {
+  const full = (await gitExec(['rev-parse', ref], cwd)).trim();
+  if (!full) return 'Cannot resolve commit ' + ref;
+  const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
+  if (!parent) return 'Commit has no parent to squash into';
+  const grandparent = (await gitExec(['rev-parse', '--verify', '--quiet', parent + '^'], cwd)).trim();
+  const base = grandparent ? full + '^^' : null;
+  const commits = await listRebaseCommits(cwd, base);
+  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  const todo = commits.map(h => (h === full ? (discardMessage ? 'fixup ' : 'squash ') : 'pick ') + h).join('\n') + '\n';
+  return await gitRunRebaseTodo(cwd, base, todo);
+}
+
+// 커밋을 히스토리에서 제거
+async function gitDropCommitAsync(cwd, ref) {
+  const full = (await gitExec(['rev-parse', ref], cwd)).trim();
+  if (!full) return 'Cannot resolve commit ' + ref;
+  const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
+  const base = parent ? full + '^' : null;
+  const commits = await listRebaseCommits(cwd, base);
+  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  const remaining = commits.filter(h => h !== full);
+  const todo = remaining.length > 0 ? remaining.map(h => 'pick ' + h).join('\n') + '\n' : 'noop\n';
+  return await gitRunRebaseTodo(cwd, base, todo);
+}
+
+// 해당 커밋에서 리베이스를 멈춰 내용 수정(amend) 가능 상태로 만든다
+async function gitEditCommitAsync(cwd, ref) {
+  const full = (await gitExec(['rev-parse', ref], cwd)).trim();
+  if (!full) return 'Cannot resolve commit ' + ref;
+  const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
+  const base = parent ? full + '^' : null;
+  const commits = await listRebaseCommits(cwd, base);
+  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  const todo = commits.map(h => (h === full ? 'edit ' : 'pick ') + h).join('\n') + '\n';
+  return await gitRunRebaseTodo(cwd, base, todo);
+}
 async function gitStashPopAsync(cwd) { return await gitAsyncWrap(['stash', 'pop'], cwd, 10000); }
 async function gitStageAsync(cwd, file) {
   const r = await gitResult(['add', '-f', '--', file], cwd, 5000);
@@ -722,6 +904,78 @@ async function gitGetRemoteUrl(cwd, remote) {
 async function gitMergeFastForwardAsync(cwd, ref) { return await gitAsyncWrap(['merge', '--ff-only', ref], cwd); }
 async function gitPushToRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '-u', remote, branch], cwd); }
 async function gitPullFromRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', remote, branch], cwd); }
+async function gitPullRebaseAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', '--rebase', remote, branch], cwd); }
+async function gitForcePushAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '--force-with-lease', remote, branch], cwd); }
+async function gitPushDeleteBranchAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', remote, '--delete', branch], cwd); }
+async function gitPushTagsAsync(cwd, remote) { return await gitAsyncWrap(['push', remote, '--tags'], cwd); }
+async function gitPushTagAsync(cwd, remote, tag) { return await gitAsyncWrap(['push', remote, 'refs/tags/' + tag], cwd); }
+async function gitPushDeleteTagAsync(cwd, remote, tag) { return await gitAsyncWrap(['push', remote, '--delete', 'refs/tags/' + tag], cwd); }
+
+async function gitRemoteRemove(cwd, name) { return await gitRunOrError(['remote', 'remove', name], cwd, 10000, 'Remote remove failed'); }
+async function gitRemoteRename(cwd, oldName, newName) { return await gitRunOrError(['remote', 'rename', oldName, newName], cwd, 30000, 'Remote rename failed'); }
+async function gitRemoteSetUrl(cwd, name, url) { return await gitRunOrError(['remote', 'set-url', name, url], cwd, 10000, 'Remote set-url failed'); }
+async function gitRemotePruneAsync(cwd, name) { return await gitAsyncWrap(['remote', 'prune', name], cwd); }
+
+// ── Worktree 관리 ──
+async function gitWorktreeAdd(cwd, path, branch, createBranch) {
+  const args = ['worktree', 'add'];
+  if (createBranch) args.push('-b', branch, path);
+  else args.push(path, branch);
+  return await gitRunOrError(args, cwd, 30000, 'Worktree add failed');
+}
+async function gitWorktreeRemove(cwd, path, force) {
+  const args = ['worktree', 'remove'];
+  if (force) args.push('--force');
+  args.push(path);
+  return await gitRunOrError(args, cwd, 30000, 'Worktree remove failed');
+}
+async function gitWorktreePruneAsync(cwd) { return await gitAsyncWrap(['worktree', 'prune'], cwd, 30000); }
+async function gitBranchExists(cwd, name) {
+  const r = await gitResult(['rev-parse', '--verify', '--quiet', 'refs/heads/' + name], cwd, 5000);
+  return !!(r && r.ok && r.exit_code === 0);
+}
+
+// 미추적 파일/디렉터리 일괄 삭제 (.gitignore 대상 제외)
+async function gitCleanUntrackedAsync(cwd) { return await gitAsyncWrap(['clean', '-fd'], cwd, 30000); }
+
+// ── 저장소 생성 ──
+async function gitInit(cwd) { return await gitRunOrError(['init'], cwd, 10000, 'Init failed'); }
+async function gitCloneAsync(parentDir, url, dirName) {
+  const args = ['clone', url];
+  if (dirName) args.push(dirName);
+  return await gitAsyncWrap(args, parentDir, 600000);
+}
+
+async function gitDeleteTag(cwd, name) { return await gitRunOrError(['tag', '-d', name], cwd, 10000, 'Delete tag failed'); }
+async function gitCreateTagAnnotated(cwd, name, message, ref) {
+  const args = ['tag', '-a', name, '-m', message];
+  if (ref) args.push(ref);
+  return await gitRunOrError(args, cwd, 10000, 'Create tag failed');
+}
+
+// 클립보드 등 텍스트 패치를 워크트리에 적용. format-patch(mbox) 형식이면 git am으로
+// 커밋까지 복원하고, 일반 diff면 git apply로 워크트리에만 반영한다.
+async function gitApplyPatchFromText(cwd, patchText) {
+  const isMbox = /^From [0-9a-f]{40} /m.test(patchText);
+  const gitDirAbs = await resolveGitDirAbs(cwd);
+  if (!gitDirAbs) return 'Failed to resolve git directory';
+  const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
+  const patchPath = gitDirAbs + sep + 'hecaton-apply.patch';
+  try {
+    await hecaton.fs.write_file({ path: patchPath, content: patchText.endsWith('\n') ? patchText : patchText + '\n' });
+  } catch (e) {
+    return (e && e.message) || 'Failed to write patch file';
+  }
+  if (isMbox) {
+    const err = await gitAsyncWrap(['am', '--whitespace=nowarn', patchPath], cwd, 30000);
+    if (err) {
+      await gitAsyncWrap(['am', '--abort'], cwd, 10000);
+      return err;
+    }
+    return null;
+  }
+  return await gitRunOrError(['apply', '--whitespace=nowarn', patchPath], cwd, 10000, 'Apply patch failed');
+}
 
 async function gitStashSave(cwd) { return await gitRunOrError(['stash', 'push'], cwd, 10000, 'Stash failed'); }
 async function gitStashPop(cwd) { return await gitRunOrError(['stash', 'pop'], cwd, 10000, 'Stash pop failed'); }
@@ -1064,7 +1318,16 @@ module.exports = {
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
+  gitCommitAmendAsync, gitCommitAmendMessageOnlyAsync, gitResetModeAsync,
+  parseDiffHunks, buildHunkPatchText, gitApplyPatchText,
+  gitRewordCommitAsync, gitSquashIntoParentAsync, gitDropCommitAsync, gitEditCommitAsync,
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
+  gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync,
+  gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,
+  gitRemoteRemove, gitRemoteRename, gitRemoteSetUrl, gitRemotePruneAsync,
+  gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,
+  gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
+  gitInit, gitCloneAsync, gitCleanUntrackedAsync,
 };

@@ -473,9 +473,10 @@ function render() {
       + colors.value + '[s]kip' + ansi.reset;
   } else if (state.mode === 'commit') {
     const commitOpRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
-    const commitHintLabel = commitOpRebase ? ' Continue Rebase: ' : ' Commit: ';
+    const commitHintLabel = commitOpRebase ? ' Continue Rebase: ' : (state.commitAmend && !state.operationState) ? ' Amend: ' : ' Commit: ';
+    const amendHint = state.operationState ? '' : '[Ctrl+A]amend  ';
     hintContent = colors.yellow + commitHintLabel + ansi.reset
-      + colors.dim + '[Ctrl+Enter]submit  [Esc]cancel' + ansi.reset;
+      + colors.dim + '[Ctrl+Enter]submit  ' + amendHint + '[Esc]cancel' + ansi.reset;
   } else if (state.mode === 'new-branch') {
     hintContent = colors.yellow + ' New Branch: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
@@ -746,9 +747,21 @@ function render() {
     ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1 + mergeFooterOffset;
     const btnIsRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const btnIsMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    const btnLabelLen = btnIsRebase ? 16 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 13 : state.operationState.type === 'cherry-pick' ? 19 : 14) : 6; // Continue Rebase=16, Commit=6, etc
+    const btnIsAmend = state.mode === 'commit' && state.commitAmend && !state.operationState;
+    const btnLabelLen = btnIsRebase ? 16 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 13 : state.operationState.type === 'cherry-pick' ? 19 : 14) : btnIsAmend ? 5 : 6; // Continue Rebase=16, Commit=6, Amend=5, etc
+    const amendRowOffset = (state.mode === 'commit' && !state.operationState) ? 1 : 0;
+    if (amendRowOffset > 0) {
+      const amendLabelLen = '[x] Amend last commit'.length;
+      ui.commitAmendZone = {
+        row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset,
+        colStart: rpStartCol + 1,
+        colEnd: rpStartCol + amendLabelLen,
+      };
+    } else {
+      ui.commitAmendZone = null;
+    }
     ui.commitButtonZone = {
-      row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset,
+      row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset + amendRowOffset,
       colStart: rpStartCol + 1,
       colEnd: rpStartCol + 1 + btnLabelLen,
     };
@@ -772,6 +785,7 @@ function render() {
   } else {
     ui.commitInputRow = -1;
     ui.commitButtonZone = null;
+    ui.commitAmendZone = null;
     ui.mergeApplyZone = null;
   }
 
@@ -1017,9 +1031,10 @@ function buildLeftPanel(w, h) {
         const line = (wt.isCurrent ? '  ' + colors.green + ansi.bold + '\u2713 ' : '    ')
           + colors.value + truncate(label, Math.max(1, innerW - 6 - visLen(detail))) + ansi.reset
           + (detail ? colors.dim + detail + ansi.reset : '');
-        pushLine(wt.isCurrent ? colors.cursorBg + padRight(line, innerW) + ansi.reset : line);
+        const wtEntry = { action: 'goto-worktree', path: wt.path };
+        pushLine(wt.isCurrent ? colors.cursorBg + padRight(line, innerW) + ansi.reset : line, wtEntry);
         if (wt.path) {
-          pushLine('      ' + colors.dim + truncate(wt.path, innerW - 6) + ansi.reset);
+          pushLine('      ' + colors.dim + truncate(wt.path, innerW - 6) + ansi.reset, wtEntry);
         }
       }
     }
@@ -1321,7 +1336,8 @@ function buildDiffCommitPanel(w, h) {
   }
   const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
   const commitExtraH = state.conflictView ? 1 : 0;
-  const commitAreaH = h >= 5 ? (2 + maxMsgLines + commitExtraH) : 0;
+  const amendRowH = (state.mode === 'commit' && !state.operationState) ? 1 : 0;
+  const commitAreaH = h >= 5 ? (2 + maxMsgLines + commitExtraH + amendRowH) : 0;
   let diffH = h - commitAreaH;
 
   let preMaxScrollX = 0;
@@ -1356,6 +1372,17 @@ function buildDiffCommitPanel(w, h) {
 
   ui.rightDiffH = diffH;
   ui.commitMsgVisibleLines = maxMsgLines;
+
+  // Hunk 단위 스테이징 버튼 (staged/unstaged diff에서만, untracked/conflict 제외)
+  ui.diffHunkZones = [];
+  const canHunk = !isConflictView && diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffLines.length > 0;
+  const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? '[Unstage hunk]' : '[Stage hunk]') : '';
+  const hunkAvail = hunkBtnLabel ? Math.max(8, innerW - hunkBtnLabel.length - 2) : 0;
+  const renderHunkButton = (hunkIdx) => {
+    const hovered = ui.hoveredDiffHunkIdx === hunkIdx;
+    const style = hovered ? colors.green + ansi.bold + CSI + '4m' : colors.dim;
+    return style + hunkBtnLabel + ansi.reset;
+  };
 
   // Host-owned scroll: the diff area (rows 0..diffH) is one region; renderRow
   // lazily renders the overscan bank rows for content that is only built for
@@ -1400,12 +1427,29 @@ function buildDiffCommitPanel(w, h) {
       const scrollX = state.diffScrollX;
 
       if (sideBySideLayout) {
-        const sideBySideLines = renderSideBySideDiffLines(sideBySideLayout, state.currentDiffFile, scrollX);
+        // hunk 행 → hunk 인덱스 매핑 (버튼 렌더/클릭 존용)
+        const sideHunkIdxByRow = new Map();
+        if (hunkBtnLabel) {
+          let hi = 0;
+          for (let ri = 0; ri < sideBySideLayout.rows.length; ri++) {
+            if (sideBySideLayout.rows[ri].type === 'hunk') { sideHunkIdxByRow.set(ri, hi); hi++; }
+          }
+        }
+        const sideHunkOpts = hunkBtnLabel ? { label: hunkBtnLabel, avail: hunkAvail, renderButton: renderHunkButton, idxByRow: sideHunkIdxByRow } : null;
+        const sideBySideLines = renderSideBySideDiffLines(sideBySideLayout, state.currentDiffFile, scrollX, sideHunkOpts);
         const maxScroll = Math.max(0, sideBySideLines.length - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
         const visible = sideBySideLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
         for (const line of visible) lines.push(line);
+        if (hunkBtnLabel) {
+          for (let vi = 0; vi < visible.length; vi++) {
+            const absIdx = state.diffScrollOffset + vi;
+            if (sideHunkIdxByRow.has(absIdx)) {
+              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + hunkBtnLabel.length, hunkIdx: sideHunkIdxByRow.get(absIdx) });
+            }
+          }
+        }
         ui.scrollPct.diff = sideBySideLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
         for (let i = visible.length; i < diffH; i++) lines.push('');
         pushDiffRegion(sideBySideLines.length, state.diffScrollOffset, (i) => sideBySideLines[i]);
@@ -1413,7 +1457,19 @@ function buildDiffCommitPanel(w, h) {
         const maxScroll = Math.max(0, state.diffLines.length - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
-        const renderUnifiedRow = (entry) => {
+        const isHunkEntry = (entry) => entry && entry.inDiff && typeof entry.text === 'string' && entry.text.startsWith('@@');
+        const unifiedHunkIdxByRow = new Map();
+        if (hunkBtnLabel) {
+          let hi = 0;
+          for (let ri = 0; ri < annotated.length; ri++) {
+            if (isHunkEntry(annotated[ri])) { unifiedHunkIdxByRow.set(ri, hi); hi++; }
+          }
+        }
+        const renderUnifiedRow = (entry, absIdx) => {
+          if (hunkBtnLabel && isHunkEntry(entry)) {
+            const base = ' ' + colorizeDiffLine(entry.text, hunkAvail - 1, state.currentDiffFile, scrollX);
+            return padRight(base, hunkAvail + 1) + renderHunkButton(unifiedHunkIdxByRow.get(absIdx));
+          }
           if (entry.inDiff && gutterW > 0) {
             let gutter;
             if (entry.oldNum != null || entry.newNum != null) {
@@ -1428,12 +1484,16 @@ function buildDiffCommitPanel(w, h) {
           return ' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX);
         };
         const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
-        for (const entry of visible) {
-          lines.push(renderUnifiedRow(entry));
+        for (let vi = 0; vi < visible.length; vi++) {
+          const absIdx = state.diffScrollOffset + vi;
+          lines.push(renderUnifiedRow(visible[vi], absIdx));
+          if (hunkBtnLabel && unifiedHunkIdxByRow.has(absIdx)) {
+            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + hunkBtnLabel.length, hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
+          }
         }
         ui.scrollPct.diff = state.diffLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
         for (let i = visible.length; i < diffH; i++) lines.push('');
-        pushDiffRegion(annotated.length, state.diffScrollOffset, (i) => renderUnifiedRow(annotated[i]));
+        pushDiffRegion(annotated.length, state.diffScrollOffset, (i) => renderUnifiedRow(annotated[i], i));
       }
       if (hasHScrollbar) lines.push('');
     }
@@ -1480,6 +1540,13 @@ function buildDiffCommitPanel(w, h) {
           lines.push('');
         }
       }
+      if (amendRowH > 0) {
+        const amendLabel = (state.commitAmend ? '[x]' : '[ ]') + ' Amend last commit';
+        const amendStyle = ui.hoveredCommitAmend
+          ? colors.value + ansi.bold + CSI + '4m'
+          : (state.commitAmend ? colors.yellow : colors.dim);
+        lines.push(' ' + amendStyle + amendLabel + ansi.reset + colors.dim + '  (Ctrl+A)' + ansi.reset);
+      }
     } else {
       const diffViewHint = diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged')
         ? '  [v] ' + (state.diffView === 'side' ? 'unified' : 'side')
@@ -1490,17 +1557,19 @@ function buildDiffCommitPanel(w, h) {
           const opLabel = opIsRebase ? 'continue rebase' : 'commit';
           lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] ' + opLabel + '  [b] menu' + diffViewHint + ansi.reset);
         } else {
-          lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit' + diffViewHint + ansi.reset);
+          lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit  [A] amend' + diffViewHint + ansi.reset);
         }
       } else {
-        lines.push(colors.dim + ' No files staged' + diffViewHint + ansi.reset);
+        const amendHint = state.operationState ? '' : ' \u2014 [A] amend';
+        lines.push(colors.dim + ' No files staged' + amendHint + diffViewHint + ansi.reset);
       }
     }
 
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : 'Commit';
-    const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0 && state.staged.length > 0;
+    const isAmendCommit = state.mode === 'commit' && state.commitAmend && !state.operationState;
+    const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : isAmendCommit ? 'Amend' : 'Commit';
+    const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0 && (state.staged.length > 0 || isAmendCommit);
     const isHovered = ui.hoveredCommitButton;
     if (canCommit) {
       const style = isHovered ? colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold;
@@ -2471,11 +2540,17 @@ function renderSideBySideCell(rawText, lineNum, numW, contentW, totalW, filePath
   return padRight(gutter + content, totalW);
 }
 
-function renderSideBySideDiffLines(layout, filePath, scrollX) {
+function renderSideBySideDiffLines(layout, filePath, scrollX, hunkOpts) {
   const lines = [];
   const gap = colors.border + ' \u2502 ' + ansi.reset;
   const headerGap = colors.border + ' \u2502 ' + ansi.reset;
-  for (const row of layout.rows) {
+  for (let rowIdx = 0; rowIdx < layout.rows.length; rowIdx++) {
+    const row = layout.rows[rowIdx];
+    if (hunkOpts && row.type === 'hunk') {
+      const base = ' ' + colorizeDiffLine(row.text, hunkOpts.avail - 1, filePath, 0);
+      lines.push(padRight(base, hunkOpts.avail + 1) + hunkOpts.renderButton(hunkOpts.idxByRow.get(rowIdx)));
+      continue;
+    }
     if (row.type === 'side-title') {
       lines.push(
         colors.dim + padRight(' HEAD', layout.leftW) + ansi.reset +

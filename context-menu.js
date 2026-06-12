@@ -18,6 +18,14 @@ const {
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
   gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
+  gitExec, gitResetModeAsync, gitRewordCommitAsync, gitSquashIntoParentAsync,
+  gitDropCommitAsync, gitEditCommitAsync,
+  gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync,
+  gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,
+  gitRemoteRemove, gitRemoteRename, gitRemoteSetUrl, gitRemotePruneAsync,
+  gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,
+  gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
+  gitInit, gitCloneAsync, gitCleanUntrackedAsync,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState } = require('./refresh');
 const { render } = require('./render');
@@ -57,6 +65,43 @@ function buildHistoryContextMenuItems() {
     { id: 'revert', label: 'Revert Commit...' },
     { id: 'save_patch', label: 'Save as Patch...', icon: 'save' },
     { type: 'separator' },
+    { id: 'amend_commit', label: 'Amend Last Commit...' },
+    {
+      id: 'interactive_rebase',
+      label: 'Interactive Rebase',
+      children: [
+        { id: 'reword_commit', label: 'Edit Message...' },
+        { id: 'squash_commit', label: 'Squash into Parent...' },
+        { id: 'fixup_commit', label: 'Fixup into Parent...' },
+        { id: 'edit_commit', label: 'Edit Commit (Stop Here)...' },
+        { id: 'drop_commit', label: 'Drop Commit...', icon: 'warning' },
+      ],
+    },
+    { type: 'separator' },
+  );
+
+  // 선택한 커밋에 태그가 달려 있으면 태그 관리 서브메뉴 노출
+  const selectedItem = selectedLogRef();
+  const tagRemote = state.remotes[0] || 'origin';
+  if (selectedItem && selectedItem.decoration) {
+    const tagRe = /tag: ([^,)]+)/g;
+    let tagMatch;
+    while ((tagMatch = tagRe.exec(selectedItem.decoration))) {
+      const tagName = tagMatch[1].trim();
+      items.push({
+        id: 'tag_menu:' + tagName,
+        label: "Tag '" + tagName + "'",
+        icon: 'tag',
+        children: [
+          { id: 'tag_push:' + tagName, label: "Push to '" + tagRemote + "'" },
+          { id: 'tag_delete:' + tagName, label: 'Delete...', icon: 'warning' },
+          { id: 'tag_delete_remote:' + tagName, label: "Delete on '" + tagRemote + "'...", icon: 'warning' },
+        ],
+      });
+    }
+  }
+
+  items.push(
     { id: 'copy_sha', label: 'Copy Commit SHA', icon: 'copy', shortcut: 'Ctrl+C' },
     { id: 'copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   );
@@ -139,8 +184,34 @@ function buildTabContextMenuItems() {
   const items = [
     { id: 'tab_refresh', label: 'Refresh' },
     { type: 'separator' },
+    { id: 'tab_apply_patch', label: 'Apply Patch from Clipboard...' },
+    { id: 'tab_clean', label: 'Remove All Untracked Files...', icon: 'warning' },
+    { type: 'separator' },
     { id: 'tab_change_repo', label: 'Change Repository...' },
+    { id: 'tab_clone', label: 'Clone Repository...' },
   ];
+  if (!state.isGitRepo) {
+    items.push({ id: 'tab_init', label: 'Init Repository Here' });
+  }
+  return items;
+}
+
+function buildWorktreeContextMenuItems(wtPath) {
+  const wt = wtPath ? state.worktrees.find(w => w.path === wtPath) : null;
+  const items = [];
+  if (wt && !wt.isCurrent) {
+    items.push({ id: 'worktree_open', label: 'Open in This Window' });
+  }
+  items.push({ id: 'worktree_new', label: 'New Worktree...', icon: 'add' });
+  items.push({ type: 'separator' });
+  if (wt && !wt.isCurrent && !wt.isBare) {
+    items.push({ id: 'worktree_remove', label: "Remove '" + baseName(wt.path) + "'...", icon: 'warning' });
+  }
+  items.push({ id: 'worktree_prune', label: 'Prune Worktrees' });
+  if (wt) {
+    items.push({ type: 'separator' });
+    items.push({ id: 'worktree_copy_path', label: 'Copy Path', icon: 'copy' });
+  }
   return items;
 }
 
@@ -162,6 +233,7 @@ function buildBranchContextMenuItems(branchName) {
     items.push(
       { id: 'branch_ff', label: "Fast-Forward to '" + upstream + "'" },
       { id: 'branch_pull', label: "Pull '" + upstream + "'..." },
+      { id: 'branch_pull_rebase', label: "Pull '" + upstream + "' with Rebase..." },
     );
   }
 
@@ -169,7 +241,11 @@ function buildBranchContextMenuItems(branchName) {
     items.push(
       { id: 'branch_push', label: "Push '" + branchName + "' to '" + remote + "'..." },
       { id: 'branch_push_pr', label: "Push and Create Pull Request on '" + remote + "'..." },
+      { id: 'branch_force_push', label: "Force Push '" + branchName + "' to '" + remote + "'...", icon: 'warning' },
     );
+  }
+  if (upstream) {
+    items.push({ id: 'branch_delete_remote', label: "Delete '" + upstream + "' on Remote...", icon: 'warning' });
   }
 
   items.push({ type: 'separator' });
@@ -214,16 +290,28 @@ function buildPullRequestUrl(remoteUrl, branch) {
   return null;
 }
 
-function buildRemotesContextMenuItems() {
+function buildRemotesContextMenuItems(remoteName) {
   const mode = ui.remoteSortMode || 'alpha';
   const items = [
     { id: 'remote_add', label: 'Add New Remote...' },
+  ];
+  if (remoteName) {
+    items.push(
+      { type: 'separator' },
+      { id: 'remote_prune', label: "Prune '" + remoteName + "'" },
+      { id: 'remote_push_tags', label: "Push All Tags to '" + remoteName + "'..." },
+      { id: 'remote_rename', label: "Rename '" + remoteName + "'..." },
+      { id: 'remote_set_url', label: "Change URL of '" + remoteName + "'..." },
+      { id: 'remote_remove', label: "Remove '" + remoteName + "'...", icon: 'warning' },
+    );
+  }
+  items.push(
     { type: 'separator' },
     { id: 'remote_sort_title', label: 'Sort Branches:', enabled: false },
     { id: 'remote_sort_alpha', label: 'Alphabetically', checked: mode === 'alpha' },
     { id: 'remote_sort_alpha_desc', label: 'Alphabetically backward', checked: mode === 'alpha_desc' },
     { id: 'remote_sort_recent', label: 'Recently used', checked: mode === 'recent' },
-  ];
+  );
   return items;
 }
 
@@ -241,6 +329,8 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
   }
   items.push(
     { id: 'remotebranch_new_branch', label: 'New Branch from Here...' },
+    { type: 'separator' },
+    { id: 'remotebranch_delete_remote', label: "Delete '" + remoteBranchName + "' on Remote...", icon: 'warning' },
     { type: 'separator' },
     { id: 'remotebranch_copy_name', label: 'Copy Branch Name', icon: 'copy' },
   );
@@ -265,34 +355,25 @@ async function handleContextMenuAction(actionId) {
     return;
   }
 
+  if (actionId === 'tab_apply_patch') {
+    const clip = await hecaton.clipboard.read().catch(() => null);
+    const patchText = clip && clip.text ? clip.text : '';
+    if (!patchText.trim() || !/^(diff --git |From [0-9a-f]{40} |--- )/m.test(patchText)) {
+      showError('Clipboard does not contain a patch.\nCopy a patch (git diff / format-patch output) first.');
+      return;
+    }
+    startSpinner('Applying patch...');
+    const err = await gitApplyPatchFromText(state.cwd, patchText);
+    await afterGitOp(err, 'Apply patch');
+    return;
+  }
+
   if (actionId === 'tab_change_repo') {
     // 기존 워처 정지 (폴링 RPC가 pick_folder 중 큐를 채우는 것 방지)
     if (ui.stopGitWatcher) ui.stopGitWatcher();
     const result = await hecaton.picker.folder({ title: 'Select Git Repository', default_path: state.cwd || '' });
     if (result && result.path) {
-      state.cwd = result.path;
-      state.isGitRepo = false;
-      state.error = null;
-      state.branch = '';
-      state.staged = [];
-      state.unstaged = [];
-      state.untracked = [];
-      state.ignored = [];
-      state.ignoredLoaded = false;
-      state.ignoredLoading = false;
-      state.diffLines = [];
-      state.currentDiffFile = null;
-      state.logEntries = [];
-      state.logCursor = 0;
-      state.logScrollOffset = 0;
-      state.diffScrollOffset = 0;
-      render();
-      await refreshAsync();
-      if (state.rightView === 'log') { refreshLog(); updateLogDetail(); }
-      if (state.rightView === 'fresh') { refreshFresh(); updateFreshDetail(); }
-      render();
-      // 새 cwd로 워처 재시작
-      if (ui.setupGitWatcher) ui.setupGitWatcher();
+      await openRepositoryAt(result.path);
     } else {
       // 취소 시 워처 복원
       if (ui.setupGitWatcher) ui.setupGitWatcher();
@@ -300,8 +381,49 @@ async function handleContextMenuAction(actionId) {
     return;
   }
 
+  if (actionId === 'tab_clean') {
+    const untrackedCount = state.untracked.length;
+    hecaton.dialog.show({
+      type: 'message',
+      title: 'Clean Untracked Files',
+      message: 'Remove ' + (untrackedCount > 0 ? untrackedCount + ' untracked file(s)/folder(s)' : 'all untracked files and folders') + '?\n\nIgnored files are kept. This cannot be undone.',
+      buttons: [
+        { id: 'clean', label: 'Remove', default: true, style: 'danger' },
+        { id: 'cancel', label: 'Cancel' },
+      ],
+    });
+    state.pendingDialogAction = 'clean-confirm';
+    return;
+  }
+
+  if (actionId === 'tab_init') {
+    startSpinner('Initializing repository...');
+    const err = await gitInit(state.cwd);
+    if (err) {
+      stopSpinner();
+      showError('Init failed:\n' + err);
+      return;
+    }
+    stopSpinner();
+    await openRepositoryAt(state.cwd);
+    return;
+  }
+
+  if (actionId === 'tab_clone') {
+    hecaton.dialog.show({
+      type: 'input',
+      title: 'Clone Repository',
+      message: 'Enter repository URL:',
+      defaultValue: '',
+      buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
+    });
+    state.pendingDialogAction = 'clone-url';
+    return;
+  }
+
   // Remotes context menu actions
   if (actionId.startsWith('remote_')) {
+    const targetRemote = ui.contextMenuRemote || '';
     switch (actionId) {
       case 'remote_add':
         hecaton.dialog.show({
@@ -313,22 +435,156 @@ async function handleContextMenuAction(actionId) {
         });
         state.pendingDialogAction = 'new-remote-name';
         break;
+      case 'remote_prune': {
+        if (!targetRemote) break;
+        startSpinner('Pruning...');
+        gitRemotePruneAsync(state.cwd, targetRemote).then(async err => { await afterGitOp(err, 'Prune', { metadataOnly: true }); });
+        break;
+      }
+      case 'remote_push_tags': {
+        if (!targetRemote) break;
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Push Tags',
+          message: "Push all local tags to '" + targetRemote + "'?",
+          buttons: [{ id: 'proceed', label: 'Push Tags', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'push-tags-confirm';
+        state.pendingDialogTarget = targetRemote;
+        break;
+      }
+      case 'remote_rename': {
+        if (!targetRemote) break;
+        hecaton.dialog.show({
+          type: 'input',
+          title: 'Rename Remote',
+          message: "Enter new name for '" + targetRemote + "':",
+          defaultValue: targetRemote,
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'rename-remote';
+        state.pendingDialogTarget = targetRemote;
+        break;
+      }
+      case 'remote_set_url': {
+        if (!targetRemote) break;
+        const currentUrl = await gitGetRemoteUrl(state.cwd, targetRemote);
+        hecaton.dialog.show({
+          type: 'input',
+          title: 'Change Remote URL',
+          message: "Enter new URL for '" + targetRemote + "':",
+          defaultValue: currentUrl,
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'set-remote-url';
+        state.pendingDialogTarget = targetRemote;
+        break;
+      }
+      case 'remote_remove': {
+        if (!targetRemote) break;
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Remove Remote',
+          message: "Remove remote '" + targetRemote + "'?\n\nAll remote-tracking branches for it will be deleted locally.",
+          buttons: [{ id: 'remove', label: 'Remove', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'remove-remote-confirm';
+        state.pendingDialogTarget = targetRemote;
+        break;
+      }
       case 'remote_sort_alpha':
         ui.remoteSortMode = 'alpha';
         render();
-        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
+        hecaton.menu.show({ items: buildRemotesContextMenuItems(ui.contextMenuRemote) }).catch(() => null);
         break;
       case 'remote_sort_alpha_desc':
         ui.remoteSortMode = 'alpha_desc';
         render();
-        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
+        hecaton.menu.show({ items: buildRemotesContextMenuItems(ui.contextMenuRemote) }).catch(() => null);
         break;
       case 'remote_sort_recent':
         ui.remoteSortMode = 'recent';
         render();
-        hecaton.menu.show({ items: buildRemotesContextMenuItems() }).catch(() => null);
+        hecaton.menu.show({ items: buildRemotesContextMenuItems(ui.contextMenuRemote) }).catch(() => null);
         break;
     }
+    return;
+  }
+
+  // Worktree context menu actions
+  if (actionId.startsWith('worktree_')) {
+    const wtPath = ui.contextMenuWorktree || '';
+    switch (actionId) {
+      case 'worktree_open':
+        if (wtPath) await openRepositoryAt(wtPath);
+        break;
+      case 'worktree_new':
+        hecaton.dialog.show({
+          type: 'input',
+          title: 'New Worktree',
+          message: 'Enter path for the new worktree:',
+          defaultValue: state.cwd ? state.cwd + '-wt' : '',
+          buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-worktree-path';
+        break;
+      case 'worktree_remove':
+        if (!wtPath) break;
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Remove Worktree',
+          message: "Remove worktree '" + wtPath + "'?\n\nForce Remove discards uncommitted changes in that worktree.",
+          buttons: [
+            { id: 'remove', label: 'Remove', default: true, style: 'danger' },
+            { id: 'force', label: 'Force Remove', style: 'danger' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+        state.pendingDialogAction = 'remove-worktree-confirm';
+        state.pendingDialogTarget = wtPath;
+        break;
+      case 'worktree_prune': {
+        startSpinner('Pruning worktrees...');
+        const err = await gitWorktreePruneAsync(state.cwd);
+        await afterGitOp(err, 'Worktree prune', { metadataOnly: true });
+        break;
+      }
+      case 'worktree_copy_path':
+        if (wtPath) copyToClipboard(wtPath);
+        break;
+    }
+    return;
+  }
+
+  // Tag context menu actions (history view tag submenu)
+  if (actionId.startsWith('tag_push:') || actionId.startsWith('tag_delete:') || actionId.startsWith('tag_delete_remote:')) {
+    const tagName = actionId.substring(actionId.indexOf(':') + 1);
+    const tagRemote = state.remotes[0] || 'origin';
+    if (!tagName) return;
+    if (actionId.startsWith('tag_push:')) {
+      startSpinner('Pushing tag...');
+      gitPushTagAsync(state.cwd, tagRemote, tagName).then(async err => { await afterGitOp(err, 'Push tag', { metadataOnly: true }); });
+      return;
+    }
+    if (actionId.startsWith('tag_delete_remote:')) {
+      hecaton.dialog.show({
+        type: 'message',
+        title: 'Delete Remote Tag',
+        message: "Delete tag '" + tagName + "' on '" + tagRemote + "'?",
+        buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+      });
+      state.pendingDialogAction = 'delete-remote-tag-confirm';
+      state.pendingDialogTarget = { remote: tagRemote, tag: tagName };
+      return;
+    }
+    hecaton.dialog.show({
+      type: 'message',
+      title: 'Delete Tag',
+      message: "Delete local tag '" + tagName + "'?",
+      buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+    });
+    state.pendingDialogAction = 'delete-tag-confirm';
+    state.pendingDialogTarget = tagName;
     return;
   }
 
@@ -610,6 +866,18 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogAction = 'new-branch';
         state.pendingDialogTarget = remoteBranchName;
         break;
+      case 'remotebranch_delete_remote': {
+        const remoteName = slashIdx >= 0 ? remoteBranchName.substring(0, slashIdx) : (state.remotes[0] || 'origin');
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Delete Remote Branch',
+          message: "Delete '" + remoteBranchName + "' on the remote?\n\nThis cannot be undone from this client.",
+          buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'delete-remote-branch-confirm';
+        state.pendingDialogTarget = { remote: remoteName, branch: localName };
+        break;
+      }
       case 'remotebranch_copy_name':
         copyToClipboard(remoteBranchName);
         break;
@@ -646,6 +914,46 @@ async function handleContextMenuAction(actionId) {
         startSpinner('Pulling...');
         gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Pull'); });
         break;
+      case 'branch_pull_rebase':
+        startSpinner('Pulling with rebase...');
+        gitPullRebaseAsync(state.cwd, remote, branchName).then(async err => {
+          if (err && isRebaseConflictError(err)) {
+            await refreshAsync();
+            stopSpinner();
+            if (state.rightView === 'log') refreshLog();
+            if (state.rightView !== 'diff') {
+              state.rightView = 'diff';
+              updateDiff();
+            }
+            render();
+            return;
+          }
+          await afterGitOp(err, 'Pull (rebase)');
+        });
+        break;
+      case 'branch_force_push':
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Force Push',
+          message: "Force push '" + branchName + "' to '" + remote + "'?\n\nUses --force-with-lease: fails if the remote has commits you haven't fetched.",
+          buttons: [{ id: 'force_push', label: 'Force Push', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'force-push-confirm';
+        state.pendingDialogTarget = { remote, branch: branchName };
+        break;
+      case 'branch_delete_remote': {
+        if (!upstream) break;
+        const remoteBranchPart = upstream.substring(remote.length + 1);
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Delete Remote Branch',
+          message: "Delete '" + upstream + "' on the remote?\n\nThis cannot be undone from this client.",
+          buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'delete-remote-branch-confirm';
+        state.pendingDialogTarget = { remote, branch: remoteBranchPart };
+        break;
+      }
       case 'branch_push':
         startSpinner('Pushing...');
         gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true }); });
@@ -958,9 +1266,14 @@ async function handleContextMenuAction(actionId) {
       hecaton.dialog.show({
         type: 'message',
         title: 'Reset',
-        message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\nThis will discard commits. This cannot be undone.",
+        message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\n"
+          + 'Soft: keep changes staged\n'
+          + 'Mixed: keep changes in working tree\n'
+          + 'Hard: discard all changes (cannot be undone)',
         buttons: [
-          { id: 'reset', label: 'Reset', default: true, style: 'danger' },
+          { id: 'reset_soft', label: 'Soft' },
+          { id: 'reset_mixed', label: 'Mixed', default: true },
+          { id: 'reset_hard', label: 'Hard', style: 'danger' },
           { id: 'cancel', label: 'Cancel' },
         ],
       });
@@ -1000,6 +1313,94 @@ async function handleContextMenuAction(actionId) {
     case 'revert': {
       startSpinner('Reverting...');
       gitRevertAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Revert'); });
+      break;
+    }
+    case 'amend_commit': {
+      const headHash = (await gitExec(['rev-parse', 'HEAD'], state.cwd)).trim();
+      const fullHash = (await gitExec(['rev-parse', hash], state.cwd)).trim();
+      if (!headHash || headHash !== fullHash) {
+        showError('Only the last commit (HEAD) can be amended.\nUse Interactive Rebase > Edit Commit for older commits.');
+        break;
+      }
+      const message = await gitCommitMessage(state.cwd, 'HEAD');
+      state.rightView = 'diff';
+      state.mode = 'commit';
+      state.commitAmend = true;
+      state.commitMsg = message;
+      state.commitCursor = message.length;
+      updateDiff();
+      render();
+      break;
+    }
+    case 'reword_commit': {
+      const message = await gitCommitMessage(state.cwd, hash);
+      hecaton.dialog.show({
+        type: 'input',
+        title: 'Edit Commit Message',
+        message: 'Edit message for ' + hash.substring(0, 8) + ':',
+        defaultValue: message,
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+      });
+      state.pendingDialogAction = 'reword-commit';
+      state.pendingDialogTarget = hash;
+      break;
+    }
+    case 'squash_commit':
+    case 'fixup_commit': {
+      if (hasLocalChanges()) {
+        showError('Cannot rewrite history with uncommitted changes.\nCommit or stash them first.');
+        break;
+      }
+      const isFixup = actionId === 'fixup_commit';
+      hecaton.dialog.show({
+        type: 'message',
+        title: isFixup ? 'Fixup' : 'Squash',
+        message: (isFixup ? 'Fixup ' : 'Squash ') + hash.substring(0, 8) + ' into its parent?\n\n'
+          + (isFixup ? 'The commit message will be discarded.' : 'The commit messages will be combined.'),
+        buttons: [
+          { id: 'proceed', label: isFixup ? 'Fixup' : 'Squash', default: true },
+          { id: 'cancel', label: 'Cancel' },
+        ],
+      });
+      state.pendingDialogAction = isFixup ? 'fixup-commit' : 'squash-commit';
+      state.pendingDialogTarget = hash;
+      break;
+    }
+    case 'edit_commit': {
+      if (hasLocalChanges()) {
+        showError('Cannot rewrite history with uncommitted changes.\nCommit or stash them first.');
+        break;
+      }
+      hecaton.dialog.show({
+        type: 'message',
+        title: 'Edit Commit',
+        message: 'Rebase will stop at ' + hash.substring(0, 8) + ' so you can amend it.\n\n'
+          + 'Stage your changes, amend, then continue the rebase from the [b] menu.',
+        buttons: [
+          { id: 'proceed', label: 'Start', default: true },
+          { id: 'cancel', label: 'Cancel' },
+        ],
+      });
+      state.pendingDialogAction = 'edit-commit';
+      state.pendingDialogTarget = hash;
+      break;
+    }
+    case 'drop_commit': {
+      if (hasLocalChanges()) {
+        showError('Cannot rewrite history with uncommitted changes.\nCommit or stash them first.');
+        break;
+      }
+      hecaton.dialog.show({
+        type: 'message',
+        title: 'Drop Commit',
+        message: 'Drop ' + hash.substring(0, 8) + (logItem.subject ? ' (' + logItem.subject + ')' : '') + ' from history?\n\nDescendant commits will be rebased on top of its parent.',
+        buttons: [
+          { id: 'drop', label: 'Drop', default: true, style: 'danger' },
+          { id: 'cancel', label: 'Cancel' },
+        ],
+      });
+      state.pendingDialogAction = 'drop-commit';
+      state.pendingDialogTarget = hash;
       break;
     }
     case 'save_patch': {
@@ -1063,9 +1464,13 @@ async function handleDialogResult(params) {
       return;
     }
     if (action === 'reset-confirm') {
-      if (buttonId === 'reset') {
-        startSpinner('Resetting...');
-        gitResetAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Reset'); });
+      const resetMode = buttonId === 'reset_soft' ? 'soft'
+        : buttonId === 'reset_mixed' ? 'mixed'
+        : buttonId === 'reset_hard' ? 'hard'
+        : null;
+      if (resetMode) {
+        startSpinner('Resetting (' + resetMode + ')...');
+        gitResetModeAsync(state.cwd, target, resetMode).then(async err => { await afterGitOp(err, 'Reset'); });
       }
       return;
     }
@@ -1120,6 +1525,215 @@ async function handleDialogResult(params) {
         await runCherryPickFromDialog(target, true);
       } else if (buttonId === 'cherry_pick_stage') {
         await runCherryPickFromDialog(target, false);
+      }
+      return;
+    }
+    if (action === 'reword-commit') {
+      if (buttonId === 'ok' && params.value != null) {
+        const newMessage = params.value.replace(/\r\n/g, '\n');
+        if (!newMessage.trim()) {
+          showError('Commit message cannot be empty');
+          return;
+        }
+        await runHistoryRewrite('Reword', () => gitRewordCommitAsync(state.cwd, target, newMessage));
+      }
+      return;
+    }
+    if (action === 'squash-commit' || action === 'fixup-commit') {
+      if (buttonId === 'proceed') {
+        const isFixup = action === 'fixup-commit';
+        await runHistoryRewrite(isFixup ? 'Fixup' : 'Squash', () => gitSquashIntoParentAsync(state.cwd, target, isFixup));
+      }
+      return;
+    }
+    if (action === 'edit-commit') {
+      if (buttonId === 'proceed') {
+        await runHistoryRewrite('Edit commit', () => gitEditCommitAsync(state.cwd, target));
+      }
+      return;
+    }
+    if (action === 'drop-commit') {
+      if (buttonId === 'drop') {
+        await runHistoryRewrite('Drop commit', () => gitDropCommitAsync(state.cwd, target));
+      }
+      return;
+    }
+    // New tag 2단계: 이름 입력 후 메시지 입력 (빈 메시지 = lightweight)
+    if (action === 'new-tag') {
+      if (buttonId === 'ok' && params.value != null) {
+        const tagName = params.value.trim();
+        if (!tagName) {
+          showError('Name cannot be empty');
+          return;
+        }
+        hecaton.dialog.show({
+          type: 'input',
+          title: 'New Tag',
+          message: "Message for '" + tagName + "' (leave empty for a lightweight tag):",
+          defaultValue: '',
+          buttons: [{ id: 'ok', label: 'Create', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-tag-message';
+        state.pendingDialogTarget = { ref: target, name: tagName };
+      }
+      return;
+    }
+    if (action === 'new-tag-message') {
+      if (buttonId === 'ok' && params.value != null && target && target.name) {
+        const tagMessage = params.value.trim();
+        startSpinner('Tag...');
+        const err = tagMessage
+          ? await gitCreateTagAnnotated(state.cwd, target.name, tagMessage, target.ref)
+          : await gitCreateTag(state.cwd, target.name, target.ref);
+        await afterGitOp(err, 'Tag');
+      }
+      return;
+    }
+    if (action === 'force-push-confirm') {
+      if (buttonId === 'force_push' && target) {
+        startSpinner('Force pushing...');
+        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true }); });
+      }
+      return;
+    }
+    if (action === 'delete-remote-branch-confirm') {
+      if (buttonId === 'delete' && target) {
+        startSpinner('Deleting remote branch...');
+        gitPushDeleteBranchAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Delete remote branch', { metadataOnly: true }); });
+      }
+      return;
+    }
+    if (action === 'push-tags-confirm') {
+      if (buttonId === 'proceed' && target) {
+        startSpinner('Pushing tags...');
+        gitPushTagsAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Push tags', { metadataOnly: true }); });
+      }
+      return;
+    }
+    if (action === 'remove-remote-confirm') {
+      if (buttonId === 'remove' && target) {
+        startSpinner('Removing remote...');
+        const err = await gitRemoteRemove(state.cwd, target);
+        await afterGitOp(err, 'Remove remote');
+      }
+      return;
+    }
+    if (action === 'rename-remote') {
+      if (buttonId === 'ok' && params.value != null) {
+        const newName = params.value.trim();
+        if (!newName) {
+          showError('Name cannot be empty');
+          return;
+        }
+        startSpinner('Renaming remote...');
+        const err = await gitRemoteRename(state.cwd, target, newName);
+        await afterGitOp(err, 'Rename remote');
+      }
+      return;
+    }
+    if (action === 'set-remote-url') {
+      if (buttonId === 'ok' && params.value != null) {
+        const newUrl = params.value.trim();
+        if (!newUrl) {
+          showError('URL cannot be empty');
+          return;
+        }
+        startSpinner('Updating remote URL...');
+        const err = await gitRemoteSetUrl(state.cwd, target, newUrl);
+        await afterGitOp(err, 'Set remote URL');
+      }
+      return;
+    }
+    if (action === 'delete-tag-confirm') {
+      if (buttonId === 'delete' && target) {
+        startSpinner('Deleting tag...');
+        const err = await gitDeleteTag(state.cwd, target);
+        await afterGitOp(err, 'Delete tag');
+      }
+      return;
+    }
+    if (action === 'delete-remote-tag-confirm') {
+      if (buttonId === 'delete' && target) {
+        startSpinner('Deleting remote tag...');
+        gitPushDeleteTagAsync(state.cwd, target.remote, target.tag).then(async err => { await afterGitOp(err, 'Delete remote tag', { metadataOnly: true }); });
+      }
+      return;
+    }
+    // New worktree 2단계: 경로 → 브랜치
+    if (action === 'new-worktree-path') {
+      if (buttonId === 'ok' && params.value != null) {
+        const wtPath = params.value.trim();
+        if (!wtPath) {
+          showError('Path cannot be empty');
+          return;
+        }
+        hecaton.dialog.show({
+          type: 'input',
+          title: 'New Worktree',
+          message: 'Enter branch for the worktree:\n(existing branch is checked out, new branch is created)',
+          defaultValue: baseName(wtPath),
+          buttons: [{ id: 'ok', label: 'Create', default: true }, { id: 'cancel', label: 'Cancel' }],
+        });
+        state.pendingDialogAction = 'new-worktree-branch';
+        state.pendingDialogTarget = wtPath;
+      }
+      return;
+    }
+    if (action === 'new-worktree-branch') {
+      if (buttonId === 'ok' && params.value != null) {
+        const branchName = params.value.trim();
+        if (!branchName) {
+          showError('Branch cannot be empty');
+          return;
+        }
+        startSpinner('Creating worktree...');
+        const exists = await gitBranchExists(state.cwd, branchName);
+        const err = await gitWorktreeAdd(state.cwd, target, branchName, !exists);
+        await afterGitOp(err, 'Worktree add', { metadataOnly: true });
+      }
+      return;
+    }
+    if (action === 'remove-worktree-confirm') {
+      if ((buttonId === 'remove' || buttonId === 'force') && target) {
+        startSpinner('Removing worktree...');
+        const err = await gitWorktreeRemove(state.cwd, target, buttonId === 'force');
+        await afterGitOp(err, 'Worktree remove', { metadataOnly: true });
+      }
+      return;
+    }
+    if (action === 'clean-confirm') {
+      if (buttonId === 'clean') {
+        startSpinner('Cleaning...');
+        const err = await gitCleanUntrackedAsync(state.cwd);
+        await afterGitOp(err, 'Clean', { statusOnly: true });
+      }
+      return;
+    }
+    // Clone 2단계: URL → 대상 폴더 선택
+    if (action === 'clone-url') {
+      if (buttonId === 'ok' && params.value != null) {
+        const cloneUrl = params.value.trim();
+        if (!cloneUrl) {
+          showError('URL cannot be empty');
+          return;
+        }
+        if (ui.stopGitWatcher) ui.stopGitWatcher();
+        const result = await hecaton.picker.folder({ title: 'Select Destination Folder', default_path: state.cwd || '' });
+        if (!result || !result.path) {
+          if (ui.setupGitWatcher) ui.setupGitWatcher();
+          return;
+        }
+        const repoName = cloneUrl.replace(/\/+$/, '').split('/').pop().replace(/\.git$/, '') || 'repo';
+        startSpinner('Cloning ' + repoName + '...');
+        const err = await gitCloneAsync(result.path, cloneUrl, repoName);
+        stopSpinner();
+        if (err) {
+          if (ui.setupGitWatcher) ui.setupGitWatcher();
+          showError('Clone failed:\n' + err);
+          return;
+        }
+        const sep = result.path.includes('\\') ? '\\' : '/';
+        await openRepositoryAt(result.path.replace(/[\\/]+$/, '') + sep + repoName);
       }
       return;
     }
@@ -1402,6 +2016,7 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
 
     state.rightView = 'diff';
     state.mode = 'commit';
+    state.commitAmend = false;
     state.commitMsg = message;
     state.commitCursor = message.length;
     state.diffScrollOffset = 0;
@@ -1411,6 +2026,64 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
   } catch (e) {
     stopSpinner();
     showError('Cherry-pick failed:\n' + ((e && e.message) || e || 'Operation failed'));
+  }
+}
+
+function hasLocalChanges() {
+  return state.staged.length > 0 || state.unstaged.length > 0;
+}
+
+// 다른 경로의 저장소로 전환 (탭 변경/worktree 열기/clone 완료 공용)
+async function openRepositoryAt(path) {
+  if (ui.stopGitWatcher) ui.stopGitWatcher();
+  state.cwd = path;
+  state.isGitRepo = false;
+  state.error = null;
+  state.branch = '';
+  state.gitDir = '';
+  state.staged = [];
+  state.unstaged = [];
+  state.untracked = [];
+  state.ignored = [];
+  state.ignoredLoaded = false;
+  state.ignoredLoading = false;
+  state.diffLines = [];
+  state.currentDiffFile = null;
+  state.logEntries = [];
+  state.logCursor = 0;
+  state.logScrollOffset = 0;
+  state.diffScrollOffset = 0;
+  render();
+  await refreshAsync();
+  if (state.rightView === 'log') { refreshLog(); updateLogDetail(); }
+  if (state.rightView === 'fresh') { refreshFresh(); updateFreshDetail(); }
+  render();
+  if (ui.setupGitWatcher) ui.setupGitWatcher();
+}
+
+// 히스토리 재작성(reword/squash/fixup/drop/edit) 공통 실행기.
+// 충돌이 나면 diff 뷰로 전환해 기존 rebase continue/abort UI([b] 메뉴)로 이어간다.
+async function runHistoryRewrite(opName, fn) {
+  startSpinner(opName + '...');
+  let err = null;
+  try {
+    err = await fn();
+  } catch (e) {
+    err = (e && e.message) || 'Operation failed';
+  }
+  await refreshAsync();
+  stopSpinner();
+  if (state.rightView === 'log') refreshLog();
+  if (err && isRebaseConflictError(err)) {
+    if (state.rightView !== 'diff') {
+      state.rightView = 'diff';
+      updateDiff();
+    }
+    render();
+  } else if (err) {
+    showError(opName + ' failed:\n' + err);
+  } else {
+    render();
   }
 }
 
@@ -1501,6 +2174,7 @@ module.exports = {
   buildRemoteBranchContextMenuItems,
   buildBranchContextMenuItems,
   buildTabContextMenuItems,
+  buildWorktreeContextMenuItems,
   handleContextMenuAction,
   handleDialogResult,
 };
