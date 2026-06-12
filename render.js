@@ -1715,14 +1715,17 @@ function buildLogPanel(w, h) {
   const filteredDetail = filterLogDetailLines(state.logDetailLines, ui.collapsedDetailFiles);
   ui.filteredDetailCount = filteredDetail.length;
 
-  // Pre-calculate detail scroll pct for separator
+  // Pre-calculate detail scroll pct for separator. Display only — the
+  // authoritative clamp lives in the detail section below, whose cH also
+  // subtracts the h-scrollbar and sticky-header rows. Clamping state here with
+  // the rough cH squeezed the offset below the host's scroll limit, letting
+  // the trackpad overscroll at the bottom (jitter + revealed blank rows).
   if (detailH > 1 && filteredDetail.length > 0) {
     const cH = detailH - 1;
     const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
-    ui.logDetailMaxScroll = maxDetailScroll;
-    if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
     if (filteredDetail.length > cH) {
-      ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
+      const pctOff = Math.min(state.diffScrollOffset, maxDetailScroll);
+      ui.scrollPct.detail = Math.round((pctOff / Math.max(1, maxDetailScroll)) * 100);
     }
   } else {
     ui.logDetailMaxScroll = 0;
@@ -1817,28 +1820,39 @@ function buildLogPanel(w, h) {
       ui.logDetailMaxScrollX = logDetailMaxScrollX;
       if (state.diffScrollX > logDetailMaxScrollX) state.diffScrollX = logDetailMaxScrollX;
       if (logDetailMaxScrollX > 0 && cH > 1) cH--;
-      ui.lastDetailContentH = cH;
 
-      const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
+      // Sticky file header: pin the file name when scrolled past its header.
+      // The pinned row consumes a viewport row, so the scroll limit depends on
+      // whether the limit position itself shows a sticky (a header landing
+      // exactly on the viewport top suppresses it). Resolve that fixed point
+      // BEFORE clamping so the plugin's limit and the host's contentRows/height
+      // limit agree at every alignment — any mismatch lets the trackpad
+      // overscroll at the bottom (jitter + revealed blank bank rows).
+      const stickyFileAt = (off) => {
+        if (off <= 0 || off >= filteredDetail.length) return null;
+        if (filteredDetail[off].isFileHeader) return null;
+        for (let i = off - 1; i >= 0; i--) {
+          if (filteredDetail[i].isFileHeader) return filteredDetail[i].file;
+          if (!filteredDetail[i].inDiff) return null;
+        }
+        return null;
+      };
+      const stickyCandidate = Math.max(0, filteredDetail.length - (cH - 1));
+      const maxDetailScroll = stickyFileAt(stickyCandidate)
+        ? stickyCandidate
+        : Math.max(0, stickyCandidate - 1);
       ui.logDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
-
-      // Sticky file header: pin file name when scrolled past it
-      let stickyFile = null;
-      if (state.diffScrollOffset > 0 && filteredDetail[state.diffScrollOffset] && !filteredDetail[state.diffScrollOffset].isFileHeader) {
-        for (let i = state.diffScrollOffset - 1; i >= 0; i--) {
-          if (filteredDetail[i].isFileHeader) { stickyFile = filteredDetail[i].file; break; }
-          if (!filteredDetail[i].inDiff) break;
-        }
-      }
+      const stickyFile = stickyFileAt(state.diffScrollOffset);
       if (stickyFile) {
+        cH--;
         const collapsed = ui.collapsedDetailFiles.has(stickyFile);
         const arrow = collapsed ? '+' : '-';
         const label = ' ' + arrow + ' ' + stickyFile;
         lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
         ui.detailFileHeaderMap.push(stickyFile);
-        cH--;
       }
+      ui.lastDetailContentH = cH;
 
       const detailRegionRelRow = lines.length;
       const visible = filteredDetail.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
@@ -1920,7 +1934,10 @@ function buildLogPanel(w, h) {
         const pick = (i) => (i >= 0 && i < filteredDetail.length) ? renderDetailRow(filteredDetail[i], -1) : '';
         ui.hostScrollRegions.push({
           id: 'logDetail', panel: 'right', relRow: detailRegionRelRow, width: innerW, height: cH,
-          contentRows: filteredDetail.length, off,
+          // Not filteredDetail.length: the sticky row makes the viewport height
+          // position-dependent, so report whatever makes the host's limit
+          // (contentRows - height) equal the plugin's true reachable limit.
+          contentRows: maxDetailScroll + cH, off,
           bank: [pick(off - 1), pick(off + cH), pick(off + cH + 1)],
         });
       }
@@ -2096,14 +2113,15 @@ function buildFreshPanel(w, h) {
     ui.scrollPct.history = -1;
   }
 
-  // Pre-calculate detail scroll pct
+  // Pre-calculate detail scroll pct. Display only — the authoritative clamp
+  // lives in the detail section below (its cH also subtracts the h-scrollbar
+  // row); clamping state here would fight the host's scroll limit.
   if (detailH > 1 && state.freshDetailLines.length > 0) {
     const cH = detailH - 1;
     const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
-    ui.freshDetailMaxScroll = maxDetailScroll;
-    if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
     if (state.freshDetailLines.length > cH) {
-      ui.scrollPct.detail = Math.round((state.diffScrollOffset / Math.max(1, maxDetailScroll)) * 100);
+      const pctOff = Math.min(state.diffScrollOffset, maxDetailScroll);
+      ui.scrollPct.detail = Math.round((pctOff / Math.max(1, maxDetailScroll)) * 100);
     }
   } else {
     ui.freshDetailMaxScroll = 0;
