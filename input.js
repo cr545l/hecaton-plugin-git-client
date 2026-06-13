@@ -12,6 +12,7 @@ const { startSpinner, stopSpinner } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
+const { takeCommitDraft } = require('./persist');
 
 let currentMouseShape = 'default';
 function setMouseShape(shape) {
@@ -132,6 +133,20 @@ function toggleCommitAmend() {
       }
     }).catch(() => null);
   }
+  render();
+}
+
+// 일반 commit 모드 진입 ('c' 키 / 커밋 버튼 / 입력행 클릭 공용).
+// rebase 중이면 rebase 메시지를, 아니면 이전 세션에서 복구된 드래프트를 채운다.
+function enterCommitMode() {
+  state.mode = 'commit';
+  state.commitAmend = false;
+  if (state.operationState && state.rebaseMessage) {
+    state.commitMsg = state.rebaseMessage;
+  } else {
+    state.commitMsg = takeCommitDraft() || '';
+  }
+  state.commitCursor = state.commitMsg.length;
   render();
 }
 
@@ -443,16 +458,7 @@ async function handleKey(key) {
         render();
         break;
       }
-      state.mode = 'commit';
-      state.commitAmend = false;
-      if (state.operationState && state.rebaseMessage) {
-        state.commitMsg = state.rebaseMessage;
-        state.commitCursor = state.rebaseMessage.length;
-      } else {
-        state.commitMsg = '';
-        state.commitCursor = 0;
-      }
-      render();
+      enterCommitMode();
       break;
     }
     case 'A': {
@@ -1947,16 +1953,7 @@ async function handleMouseData(data) {
           // Trigger commit via button click
           handleCommitInput(CSI + '13;5u');
         } else if (state.staged.length > 0 && state.mode !== 'commit') {
-          state.mode = 'commit';
-          state.commitAmend = false;
-          if (state.operationState && state.rebaseMessage) {
-            state.commitMsg = state.rebaseMessage;
-            state.commitCursor = state.rebaseMessage.length;
-          } else {
-            state.commitMsg = '';
-            state.commitCursor = 0;
-          }
-          render();
+          enterCommitMode();
         }
         continue;
       }
@@ -1964,16 +1961,7 @@ async function handleMouseData(data) {
       // Click on commit input row -> enter commit mode
       if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= rightStart && cx < L.startCol + L.width) {
         if (state.mode !== 'commit' && state.staged.length > 0) {
-          state.mode = 'commit';
-          state.commitAmend = false;
-          if (state.operationState && state.rebaseMessage) {
-            state.commitMsg = state.rebaseMessage;
-            state.commitCursor = state.rebaseMessage.length;
-          } else {
-            state.commitMsg = '';
-            state.commitCursor = 0;
-          }
-          render();
+          enterCommitMode();
         }
         continue;
       }

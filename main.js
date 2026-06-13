@@ -26,6 +26,7 @@ const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 const hostScroll = require('./scroll');
+const persist = require('./persist');
 const path = require('path');
 
 async function main() {
@@ -87,6 +88,8 @@ async function main() {
 
   // Now safe to await — stdin handler is registered, resize events won't be dropped
   await initState();
+  // 저장된 UI 설정(탭/패널/분할 비율 등)을 첫 본격 render 전에 복원
+  await persist.load();
   state.minimized = hecaton.initialState?.minimized ?? false;
   render();
 
@@ -104,6 +107,7 @@ async function main() {
       state.cwd = process.cwd();
     }
   }
+  persist.attachRepo(state.cwd);
 
   const primedFromDisk = await primeInitialBranchFromDisk();
   if (primedFromDisk) {
@@ -163,10 +167,15 @@ async function main() {
     scheduleStartupBackgroundWork();
   }
 
-  // Graceful shutdown
-  process.on('SIGTERM', () => { stopGitWatcher(); process.exit(0); });
-  process.on('SIGINT', () => { stopGitWatcher(); process.exit(0); });
-  process.stdin.on('end', () => { stopGitWatcher(); process.exit(0); });
+  // Graceful shutdown — 설정 플러시는 best-effort (300ms 내 완료 못 하면 그냥 종료)
+  const shutdown = () => {
+    stopGitWatcher();
+    Promise.resolve(persist.flushNow()).catch(() => null).finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 300);
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.stdin.on('end', shutdown);
 }
 
 async function primeInitialBranchFromDisk() {

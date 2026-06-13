@@ -2037,6 +2037,7 @@ function hasLocalChanges() {
 async function openRepositoryAt(path) {
   if (ui.stopGitWatcher) ui.stopGitWatcher();
   state.cwd = path;
+  require('./persist').attachRepo(path);
   state.isGitRepo = false;
   state.error = null;
   state.branch = '';

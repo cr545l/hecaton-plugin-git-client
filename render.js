@@ -6,6 +6,7 @@ const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = requ
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const hostScroll = require('./scroll');
+const persist = require('./persist');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
@@ -35,6 +36,8 @@ function appendLogSixelClear(buf) {
 }
 
 function render() {
+  // 모든 상태 변경은 render를 거치므로 여기서 영속화 디바운스를 건다
+  persist.schedule();
   if (state.minimized) {
     const clearBuf = [];
     appendLogSixelClear(clearBuf);
