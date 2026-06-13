@@ -9,7 +9,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -2000,6 +2000,16 @@ async function handleMouseData(data) {
                   } else {
                     render();
                   }
+                  headerHandled = true;
+                  break;
+                }
+                if (zone.action === 'unlockIndex') {
+                  startSpinner('Unlocking...');
+                  (async () => {
+                    await removeIndexLock();
+                    stopSpinner();
+                    refreshInBackground({ statusOnly: true });
+                  })();
                   headerHandled = true;
                   break;
                 }

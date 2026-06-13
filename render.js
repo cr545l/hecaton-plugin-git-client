@@ -1149,11 +1149,24 @@ function buildFileListPanel(w, h) {
   const unstagedCount = state.unstaged.length + state.untracked.length;
   {
     const headerLabel = ' Unstaged (' + unstagedCount + ')';
+    const unlockLabel = state.indexLocked ? 'Unlock' : '';
     const allBtnLabel = 'Stage All';
     const btnLabel = 'Stage';
-    const totalBtnLen = allBtnLabel.length + 1 + btnLabel.length;
+    const unlockLen = unlockLabel ? unlockLabel.length + 1 : 0;
+    const totalBtnLen = unlockLen + allBtnLabel.length + 1 + btnLabel.length;
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
+
+    let cursorCol = headerLabelLen + gap;
+    let unlockSeg = '';
+    if (unlockLabel) {
+      const unlockZoneIdx = ui.fileHeaderZones.length;
+      const unlockHovered = ui.hoveredFileHeaderIdx === unlockZoneIdx;
+      const unlockStyle = unlockHovered ? colors.value + ansi.bold + CSI + '4m' : colors.red + ansi.bold;
+      ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: cursorCol, btnColEnd: cursorCol + unlockLabel.length - 1, action: 'unlockIndex' });
+      unlockSeg = unlockStyle + unlockLabel + ansi.reset + ' ';
+      cursorCol += unlockLabel.length + 1;
+    }
 
     const allZoneIdx = ui.fileHeaderZones.length;
     const allHovered = ui.hoveredFileHeaderIdx === allZoneIdx;
@@ -1163,10 +1176,11 @@ function buildFileListPanel(w, h) {
     const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
     const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
 
-    const allBtnStart = headerLabelLen + gap;
+    const allBtnStart = cursorCol;
     const btnStart = allBtnStart + allBtnLabel.length + 1;
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
+      + unlockSeg
       + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
     ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'stageAll' });

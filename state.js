@@ -68,6 +68,7 @@ const state = {
   spinnerFrame: 0,
   refreshing: false,
   refreshMessage: '',
+  indexLocked: false,    // .git/index.lock 존재 여부 — Unlock 버튼 노출 트리거
 };
 
 const ui = {

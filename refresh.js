@@ -542,6 +542,29 @@ function applyStatusSnapshot(snapshot, includeIgnored) {
   updateDiff();
 }
 
+// .git/index.lock 경로 — worktree에서는 per-worktree git dir에 위치하므로 gitDir 우선 사용
+function indexLockPath() {
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const base = state.gitDir || (state.cwd + sep + '.git');
+  return base + sep + 'index.lock';
+}
+
+// index.lock 존재 여부를 확인해 state.indexLocked 갱신 (best-effort, 실패 시 변경 없음)
+async function detectIndexLock() {
+  try {
+    const lockStat = await hecaton.fs.stat({ path: indexLockPath() });
+    state.indexLocked = !!(lockStat && lockStat.exists);
+  } catch { /* ignore — best-effort */ }
+}
+
+// 사용자가 Unlock 버튼을 눌렀을 때 호출 — index.lock 강제 제거
+async function removeIndexLock() {
+  try {
+    await hecaton.fs.delete({ path: indexLockPath() });
+  } catch { /* ignore — 이미 없거나 권한 문제 */ }
+  await detectIndexLock();
+}
+
 async function readBranchNameFast() {
   if (!state.gitDir) {
     return (await gitExec(['--no-optional-locks', 'symbolic-ref', '--short', 'HEAD'], state.cwd, 5000)).trim();
@@ -613,17 +636,21 @@ async function refreshAsync(options = {}) {
   if (!statusOnly && !metadataOnly) {
     // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
     try {
-      const sep = (process.platform === 'win32') ? '\\' : '/';
-      const lockPath = state.cwd + sep + '.git' + sep + 'index.lock';
+      const lockPath = indexLockPath();
       const lockStat = await hecaton.fs.stat({ path: lockPath });
       if (lockStat && lockStat.exists) {
         // 5초 이상 된 lock 파일은 stale로 판단 (git timeout이 5초이므로)
         const age = Date.now() - (lockStat.mtime_ms || 0);
         if (age > 5000) {
-          await hecaton.process.exec({ program: 'rm', args: ['-f', lockPath], cwd: state.cwd, timeout_ms: 2000 });
+          await hecaton.fs.delete({ path: lockPath });
         }
       }
     } catch { /* ignore — lock cleanup is best-effort */ }
+  }
+
+  // index.lock 존재 여부 갱신 — Unstaged/Staged 헤더의 Unlock 버튼 노출 트리거 (metadataOnly 제외)
+  if (!metadataOnly) {
+    await detectIndexLock();
   }
 
   // Pre-check: 이미 git repo로 확인된 상태면 skip (cwd가 바뀌는 경우 isGitRepo를 false로 리셋하는 쪽이 책임짐).
@@ -1619,4 +1646,5 @@ module.exports = {
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
+  removeIndexLock,
 };
