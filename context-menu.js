@@ -779,7 +779,8 @@ async function handleContextMenuAction(actionId) {
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
-          const oneErr = await gitIgnorePattern(state.cwd, item.file.replace(/\\/g, '/'));
+          const relPath = item.file.replace(/\\/g, '/').replace(/^\/+/, '');
+          const oneErr = await gitIgnorePattern(state.cwd, '/' + relPath);
           if (!err && oneErr) err = oneErr;
         }
         await afterGitOp(err, 'Ignore');
