@@ -267,7 +267,7 @@ async function handleKey(key) {
         render();
       } else {
         stopSpinner();
-        refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
+        refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true });
       }
     });
     return;
@@ -1569,7 +1569,7 @@ async function handleMouseData(data) {
                   render();
                 } else {
                   stopSpinner();
-                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
+                  refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true });
                 }
               });
               handled = true;

@@ -788,6 +788,9 @@ async function refreshAsync(options = {}) {
   // git-dir과 fingerprint를 먼저 확정 (메타 캐시 적중 여부 결정)
   const gitDir = await gitDirPromise;
   if (_metaCacheCwd && _metaCacheCwd !== state.cwd) invalidateMetaCache();
+  // push는 원격 추적 ref(refs/remotes/...)만 갱신하는데 fingerprint가 이를 잡지 못해
+  // ahead/behind가 캐시에 묶인다. forceMeta로 명시 무효화한다.
+  if (options.forceMeta) invalidateMetaCache();
   const fingerprint = await computeMetaFingerprint(state.cwd, gitDir);
   const metaHit = !!_metaCache && fingerprint && fingerprint === _metaFingerprint;
 

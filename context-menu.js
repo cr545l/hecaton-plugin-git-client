@@ -957,16 +957,16 @@ async function handleContextMenuAction(actionId) {
       }
       case 'branch_push':
         startSpinner('Pushing...');
-        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true }); });
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }); });
         break;
       case 'branch_push_pr':
         startSpinner('Pushing...');
         gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-          if (err) { await afterGitOp(err, 'Push', { metadataOnly: true }); return; }
+          if (err) { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }); return; }
           const remoteUrl = await gitGetRemoteUrl(state.cwd, remote);
           const prUrl = buildPullRequestUrl(remoteUrl, branchName);
           if (prUrl) await openExternal(prUrl);
-          await afterGitOp(null, 'Push', { metadataOnly: true });
+          await afterGitOp(null, 'Push', { metadataOnly: true, forceMeta: true });
         });
         break;
       case 'branch_new_branch':
@@ -1593,7 +1593,7 @@ async function handleDialogResult(params) {
     if (action === 'force-push-confirm') {
       if (buttonId === 'force_push' && target) {
         startSpinner('Force pushing...');
-        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true }); });
+        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true, forceMeta: true }); });
       }
       return;
     }
