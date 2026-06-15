@@ -51,6 +51,8 @@ const state = {
   pendingStash: false,
   pendingRebaseRef: null,
   pendingDiscardFiles: null,
+  pendingRemoveFiles: null,        // 버전관리 제외 대상 파일 경로 목록
+  pendingRemoveKeepLocal: false,   // true: git rm --cached (로컬 유지), false: git rm (로컬 삭제)
   committerName: '',
   committerEmail: '',
   committerNameIsLocal: false,

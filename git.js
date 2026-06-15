@@ -1044,6 +1044,17 @@ async function gitDiscardFile(cwd, item) {
   return await gitRunOrError(['restore', '--', item.file], cwd, 10000, 'Discard failed');
 }
 
+// 버전관리에서 제외 (TortoiseGit의 Delete / Delete keep local)
+// keepLocal=true  → git rm --cached : 추적 중단, 로컬 파일 유지 (이후 untracked가 됨)
+// keepLocal=false → git rm          : 추적 중단 + 로컬 파일 삭제
+async function gitRemoveFromRepo(cwd, file, keepLocal) {
+  if (!file) return 'No file selected';
+  const args = keepLocal
+    ? ['rm', '--cached', '-r', '-f', '--', file]
+    : ['rm', '-r', '-f', '--', file];
+  return await gitRunOrError(args, cwd, 10000, keepLocal ? 'Remove from repository failed' : 'Delete failed');
+}
+
 async function gitStashFile(cwd, file) {
   if (!file) return 'No file selected';
   return await gitRunOrError(['stash', 'push', '-u', '--', file], cwd, 10000, 'Stash file failed');
@@ -1307,7 +1318,7 @@ module.exports = {
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo, gitCommitMessage,
   gitAheadBehind, gitFetch, gitPull, gitPush, gitStashSave, gitStashPop,
   gitStashApply, gitStashDrop, gitStashRename,
-  gitDiscardFile, gitStashFile, gitStashFiles, gitIgnorePattern,
+  gitDiscardFile, gitRemoveFromRepo, gitStashFile, gitStashFiles, gitIgnorePattern,
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,

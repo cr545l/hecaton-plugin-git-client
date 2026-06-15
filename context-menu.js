@@ -9,7 +9,7 @@ const {
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
   gitRevertContinue, gitRevertAbort, gitRevertSkip,
   gitStashApply, gitStashDrop, gitStashSave, gitStashPop, gitStashRename,
-  gitStage, gitUnstage, gitStageAll, gitDiscardFile,
+  gitStage, gitUnstage, gitStageAll, gitDiscardFile, gitRemoveFromRepo,
   gitStashFile, gitStashFiles, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
   gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
@@ -134,6 +134,8 @@ function buildFileContextMenuItems(fileItem, fileItems) {
   const targets = Array.isArray(fileItems) && fileItems.length > 0 ? fileItems : [fileItem];
   const canStage = targets.some((item) => item && item.type !== 'staged');
   const canUnstage = targets.some((item) => item && item.type === 'staged');
+  // untracked 파일은 추적 대상이 아니므로 버전관리 제외 불가
+  const canRemoveFromRepo = targets.some((item) => item && item.type !== 'untracked');
 
   const items = [
     { id: 'file_open', label: 'Open' },
@@ -153,6 +155,15 @@ function buildFileContextMenuItems(fileItem, fileItems) {
     { id: 'file_stage', label: 'Stage', enabled: canStage },
     { id: 'file_unstage', label: 'Unstage', enabled: canUnstage },
     { id: 'file_discard', label: 'Discard changes...', icon: 'warning' },
+    {
+      id: 'file_remove',
+      label: 'Remove from Version Control',
+      enabled: canRemoveFromRepo,
+      children: [
+        { id: 'file_remove_keep', label: 'Keep Local File...' },
+        { id: 'file_remove_delete', label: 'Delete Local File...', icon: 'warning' },
+      ],
+    },
     ...(isConflictFile(fileItem) ? [
       { type: 'separator' },
       { id: 'file_accept_ours', label: 'Accept Ours (HEAD)' },
@@ -698,6 +709,31 @@ async function handleContextMenuAction(actionId) {
         });
         state.pendingDialogAction = 'discard-confirm';
         state.pendingDiscardFiles = [...fileItems];
+        break;
+      }
+      case 'file_remove_keep':
+      case 'file_remove_delete': {
+        const keepLocal = actionId === 'file_remove_keep';
+        const removeTargets = fileItems.filter(item => item && item.type !== 'untracked');
+        if (removeTargets.length === 0) {
+          showError('No tracked file to remove');
+          break;
+        }
+        const count = removeTargets.length;
+        hecaton.dialog.show({
+          type: 'message',
+          title: keepLocal ? 'Remove from Version Control' : 'Delete from Version Control',
+          message: keepLocal
+            ? 'Stop tracking ' + count + ' file(s)?\n\nThe local file(s) will be kept but removed from version control.'
+            : 'Delete ' + count + ' file(s) and remove from version control?\n\nThe local file(s) will be deleted. This cannot be undone.',
+          buttons: [
+            { id: 'remove', label: keepLocal ? 'Remove' : 'Delete', default: true, style: 'danger' },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+        state.pendingDialogAction = 'remove-from-repo-confirm';
+        state.pendingRemoveFiles = removeTargets.map(item => item.file);
+        state.pendingRemoveKeepLocal = keepLocal;
         break;
       }
       case 'file_accept_ours': {
@@ -1511,6 +1547,23 @@ async function handleDialogResult(params) {
         await afterGitOp(err, 'Discard');
       } else {
         state.pendingDiscardFiles = null;
+      }
+      return;
+    }
+    if (action === 'remove-from-repo-confirm') {
+      const keepLocal = !!state.pendingRemoveKeepLocal;
+      const files = state.pendingRemoveFiles || [];
+      state.pendingRemoveFiles = null;
+      state.pendingRemoveKeepLocal = false;
+      if (buttonId === 'remove') {
+        startSpinner(keepLocal ? 'Removing...' : 'Deleting...');
+        let err = null;
+        for (const file of files) {
+          if (!file) continue;
+          const oneErr = await gitRemoveFromRepo(state.cwd, file, keepLocal);
+          if (!err && oneErr) err = oneErr;
+        }
+        await afterGitOp(err, keepLocal ? 'Remove from version control' : 'Delete');
       }
       return;
     }
