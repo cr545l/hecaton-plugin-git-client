@@ -11,7 +11,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
 const { startSpinner, stopSpinner } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
-const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
 let currentMouseShape = 'default';
@@ -44,6 +44,33 @@ function showErrorDialog(msg) {
     title: 'Error',
     message: msg,
     buttons: [{ id: 'ok', label: 'OK', default: true }],
+  });
+}
+
+// Push current branch. With multiple remotes, let the user pick one via a
+// context menu (handled by 'push_to_remote:' in context-menu.js); otherwise
+// push directly to the tracked/sole remote.
+function pushCurrentBranch() {
+  if (state.remotes.length > 1) {
+    hecaton.menu.show({ items: buildPushRemoteMenuItems() }).catch(() => null);
+    return;
+  }
+  startSpinner('Pushing...');
+  const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
+  const pushPromise = currentBranch && !currentBranch.upstream
+    ? (state.remotes.length > 0
+        ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
+        : Promise.resolve('No remote configured for push'))
+    : gitPushAsync(state.cwd);
+  pushPromise.then(async err => {
+    if (err) {
+      stopSpinner();
+      showErrorDialog(err);
+      render();
+    } else {
+      stopSpinner();
+      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
+    }
   });
 }
 
@@ -259,17 +286,7 @@ async function handleKey(key) {
 
   // Ctrl+Shift+P: push
   if (key === CSI + '112;6u') {
-    startSpinner('Pushing...');
-    gitPushAsync(state.cwd).then(async err => {
-      if (err) {
-        stopSpinner();
-        showErrorDialog(err);
-        render();
-      } else {
-        stopSpinner();
-        refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true });
-      }
-    });
+    pushCurrentBranch();
     return;
   }
 
@@ -1555,23 +1572,7 @@ async function handleMouseData(data) {
               });
               handled = true;
             } else if (zone.action === 'git-push') {
-              startSpinner('Pushing...');
-              const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
-              const pushPromise = currentBranch && !currentBranch.upstream
-                ? (state.remotes.length > 0
-                    ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
-                    : Promise.resolve('No remote configured for push'))
-                : gitPushAsync(state.cwd);
-              pushPromise.then(async err => {
-                if (err) {
-                  stopSpinner();
-                  showErrorDialog(err);
-                  render();
-                } else {
-                  stopSpinner();
-                  refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true });
-                }
-              });
+              pushCurrentBranch();
               handled = true;
             } else if (zone.action === 'git-stash') {
               state.pendingStash = true;

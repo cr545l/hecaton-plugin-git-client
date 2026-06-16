@@ -326,6 +326,24 @@ function buildRemotesContextMenuItems(remoteName) {
   return items;
 }
 
+function buildPushRemoteMenuItems() {
+  const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
+  const upstream = currentBranch ? currentBranch.upstream : '';
+  const upstreamRemote = upstream ? upstream.split('/')[0] : '';
+  const branchLabel = currentBranch ? currentBranch.name : (state.branch || 'HEAD');
+  const items = [
+    { id: 'push_remote_title', label: "Push '" + branchLabel + "' to:", enabled: false },
+  ];
+  for (const r of state.remotes) {
+    items.push({
+      id: 'push_to_remote:' + r,
+      label: r,
+      checked: r === upstreamRemote,
+    });
+  }
+  return items;
+}
+
 function buildRemoteBranchContextMenuItems(remoteBranchName) {
   // Extract local branch name from remote branch (e.g. "origin/feature" -> "feature")
   const slashIdx = remoteBranchName.indexOf('/');
@@ -429,6 +447,22 @@ async function handleContextMenuAction(actionId) {
       buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
     });
     state.pendingDialogAction = 'clone-url';
+    return;
+  }
+
+  // Push-to-remote selection (shown when multiple remotes exist)
+  if (actionId.startsWith('push_to_remote:')) {
+    const remote = actionId.substring('push_to_remote:'.length);
+    const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
+    const branchName = currentBranch ? currentBranch.name : state.branch;
+    if (!branchName) {
+      showError('No branch to push');
+      return;
+    }
+    startSpinner('Pushing to ' + remote + '...');
+    gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
+      await afterGitOp(err, 'Push', { metadataOnly: true });
+    });
     return;
   }
 
@@ -2226,6 +2260,7 @@ module.exports = {
   buildStashContextMenuItems,
   buildFileContextMenuItems,
   buildRemotesContextMenuItems,
+  buildPushRemoteMenuItems,
   buildRemoteBranchContextMenuItems,
   buildBranchContextMenuItems,
   buildTabContextMenuItems,
