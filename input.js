@@ -69,7 +69,7 @@ function pushCurrentBranch() {
       render();
     } else {
       stopSpinner();
-      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
+      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true });
     }
   });
 }

@@ -461,7 +461,7 @@ async function handleContextMenuAction(actionId) {
     }
     startSpinner('Pushing to ' + remote + '...');
     gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-      await afterGitOp(err, 'Push', { metadataOnly: true });
+      await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true });
     });
     return;
   }
