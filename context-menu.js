@@ -313,6 +313,7 @@ function buildRemotesContextMenuItems(remoteName) {
       { id: 'remote_push_tags', label: "Push All Tags to '" + remoteName + "'..." },
       { id: 'remote_rename', label: "Rename '" + remoteName + "'..." },
       { id: 'remote_set_url', label: "Change URL of '" + remoteName + "'..." },
+      { id: 'remote_copy_url', label: 'Copy URL', icon: 'copy' },
       { id: 'remote_remove', label: "Remove '" + remoteName + "'...", icon: 'warning' },
     );
   }
@@ -523,6 +524,16 @@ async function handleContextMenuAction(actionId) {
         });
         state.pendingDialogAction = 'set-remote-url';
         state.pendingDialogTarget = targetRemote;
+        break;
+      }
+      case 'remote_copy_url': {
+        if (!targetRemote) break;
+        const url = await gitGetRemoteUrl(state.cwd, targetRemote);
+        if (url) {
+          copyToClipboard(url);
+        } else {
+          showError("No URL set for remote '" + targetRemote + "'");
+        }
         break;
       }
       case 'remote_remove': {
