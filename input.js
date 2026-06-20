@@ -4,6 +4,7 @@ const hostScroll = require('./scroll');
 const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitCommitAmendAsync, gitCommitMessage, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
+  gitMergeAbort, gitCherryPickAbort, gitCherryPickSkip, gitRevertAbort, gitRevertSkip,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
   buildHunkPatchText, gitApplyPatchText,
@@ -256,6 +257,28 @@ async function applyConflictSelections() {
   stopSpinner();
   updateDiff();
   render();
+}
+
+// 진행 중인 작업(rebase/merge/cherry-pick/revert)의 Continue/Abort/Skip 메뉴를 띄운다.
+// 키보드 'b' 단축키용. (상단 title 행의 Abort/Skip 버튼은 개별 클릭으로 직접 처리)
+function openOperationMenu() {
+  if (!state.operationState) return;
+  const op = state.operationState;
+  const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
+  const typeLabel = isRebase ? 'Rebase' : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
+  const buttons = [
+    { id: 'continue', label: 'Continue', default: true },
+    { id: 'abort', label: 'Abort' },
+  ];
+  if (op.type !== 'merge') buttons.push({ id: 'skip', label: 'Skip' });
+  buttons.push({ id: 'cancel', label: 'Cancel' });
+  hecaton.dialog.show({
+    type: 'message',
+    title: typeLabel,
+    message: 'Choose action:',
+    buttons,
+  });
+  state.pendingRebaseMenu = true;
 }
 
 async function handleKey(key) {
@@ -528,22 +551,7 @@ async function handleKey(key) {
     }
     case 'b': {
       if (state.operationState) {
-        const op = state.operationState;
-        const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
-        const typeLabel = isRebase ? 'Rebase' : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
-        const buttons = [
-          { id: 'continue', label: 'Continue', default: true },
-          { id: 'abort', label: 'Abort' },
-        ];
-        if (op.type !== 'merge') buttons.push({ id: 'skip', label: 'Skip' });
-        buttons.push({ id: 'cancel', label: 'Cancel' });
-        hecaton.dialog.show({
-          type: 'message',
-          title: typeLabel,
-          message: 'Choose action:',
-          buttons,
-        });
-        state.pendingRebaseMenu = true;
+        openOperationMenu();
       } else {
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
@@ -1282,9 +1290,9 @@ async function handleMouseData(data) {
         }
       }
 
-      // Hover: amend checkbox
+      // Hover: amend 토글 (Commit 버튼 오른쪽, 커밋/일반 모드 모두)
       let newCommitAmendHover = false;
-      if (ui.commitAmendZone && state.mode === 'commit' && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
+      if (ui.commitAmendZone && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
         newCommitAmendHover = true;
       }
 
@@ -1586,9 +1594,15 @@ async function handleMouseData(data) {
                 ],
               });
               handled = true;
-            } else if (zone.action === 'rebase-abort') {
-              startSpinner('Aborting rebase...');
-              gitRebaseAbortAsync(state.cwd).then(async err => {
+            } else if (zone.action === 'op-abort') {
+              const opType = state.operationState ? state.operationState.type : null;
+              const opLabel = opType === 'merge' ? 'merge' : opType === 'cherry-pick' ? 'cherry-pick' : opType === 'revert' ? 'revert' : 'rebase';
+              const abortFn = opType === 'merge' ? () => gitMergeAbort(state.cwd)
+                : opType === 'cherry-pick' ? () => gitCherryPickAbort(state.cwd)
+                : opType === 'revert' ? () => gitRevertAbort(state.cwd)
+                : () => gitRebaseAbortAsync(state.cwd);
+              startSpinner('Aborting ' + opLabel + '...');
+              Promise.resolve(abortFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
                 stopSpinner();
@@ -1596,9 +1610,13 @@ async function handleMouseData(data) {
                 render();
               });
               handled = true;
-            } else if (zone.action === 'rebase-skip') {
-              startSpinner('Rebase skip...');
-              gitRebaseSkipAsync(state.cwd).then(async err => {
+            } else if (zone.action === 'op-skip') {
+              const opType = state.operationState ? state.operationState.type : null;
+              const skipFn = opType === 'cherry-pick' ? () => gitCherryPickSkip(state.cwd)
+                : opType === 'revert' ? () => gitRevertSkip(state.cwd)
+                : () => gitRebaseSkipAsync(state.cwd);
+              startSpinner('Skipping...');
+              Promise.resolve(skipFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
                 stopSpinner();
@@ -1941,9 +1959,14 @@ async function handleMouseData(data) {
         if (hunkHandled) continue;
       }
 
-      // Click on amend checkbox
-      if (ui.commitAmendZone && state.mode === 'commit' && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
-        toggleCommitAmend();
+      // Click on amend 토글 (Commit 버튼 오른쪽)
+      if (ui.commitAmendZone && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
+        // 커밋 모드에서는 amend on/off 토글, 일반 모드에서는 amend 커밋 모드로 진입
+        if (state.mode === 'commit') {
+          toggleCommitAmend();
+        } else {
+          enterAmendCommitMode();
+        }
         continue;
       }
 

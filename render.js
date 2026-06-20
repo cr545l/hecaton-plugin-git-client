@@ -179,35 +179,45 @@ function render() {
 
       const op = state.operationState;
       const isRebaseOp = op && (op.type === 'rebase-merge' || op.type === 'rebase-apply');
-      if (isRebaseOp) {
-        // Rebase progress bar (Fork-style)
-        const branch = state.branch || 'HEAD';
-        const rebasedStep = Math.max(0, (op.step || 1) - 1);
-        const totalSteps = op.total || '?';
-        const rebaseBranch = op.headName || branch;
-        const progressLabel = " Rebasing '" + rebaseBranch + "' (rebased " + rebasedStep + '/' + totalSteps + ' commits) ';
+      if (op) {
+        // 진행 중인 작업: 상태 라벨 + Abort (+ Skip). rebase뿐 아니라
+        // merge/cherry-pick/revert도 동일하게 상단에서 취소/건너뛰기를 노출한다.
+        let progressLabel;
+        if (isRebaseOp) {
+          // Rebase progress bar (Fork-style)
+          const branch = state.branch || 'HEAD';
+          const rebasedStep = Math.max(0, (op.step || 1) - 1);
+          const totalSteps = op.total || '?';
+          const rebaseBranch = op.headName || branch;
+          progressLabel = " Rebasing '" + rebaseBranch + "' (rebased " + rebasedStep + '/' + totalSteps + ' commits) ';
+        } else {
+          const opName = op.type === 'merge' ? 'Merging' : op.type === 'cherry-pick' ? 'Cherry-picking' : 'Reverting';
+          progressLabel = ' ' + opName + ' ';
+        }
         row1 += colors.yellow + ansi.bold + progressLabel + ansi.reset;
         col1 += visLen(progressLabel);
 
-        // Abort button
+        // Abort button (모든 작업)
         const abortLabel = ' Abort ';
         const abortIdx = zoneIdx++;
-        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'rebase-abort' });
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'op-abort' });
         const abortStyle = abortIdx === ui.hoveredTitleZoneIndex
           ? colors.cursorBg + colors.red + ansi.bold + CSI + '4m'
           : colors.red + ansi.bold;
         row1 += abortStyle + abortLabel + ansi.reset;
         col1 += visLen(abortLabel);
 
-        // Skip button
-        const skipLabel = ' Skip ';
-        const skipIdx = zoneIdx++;
-        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'rebase-skip' });
-        const skipStyle = skipIdx === ui.hoveredTitleZoneIndex
-          ? colors.cursorBg + colors.orange + ansi.bold + CSI + '4m'
-          : colors.orange;
-        row1 += skipStyle + skipLabel + ansi.reset;
-        col1 += visLen(skipLabel);
+        // Skip button (merge는 skip이 없으므로 제외)
+        if (op.type !== 'merge') {
+          const skipLabel = ' Skip ';
+          const skipIdx = zoneIdx++;
+          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'op-skip' });
+          const skipStyle = skipIdx === ui.hoveredTitleZoneIndex
+            ? colors.cursorBg + colors.orange + ansi.bold + CSI + '4m'
+            : colors.orange;
+          row1 += skipStyle + skipLabel + ansi.reset;
+          col1 += visLen(skipLabel);
+        }
       } else {
         const pullLabel = state.behind > 0 ? 'Pull \u2193' + state.behind : 'Pull';
         const pushLabel = state.ahead > 0 ? 'Push \u2191' + state.ahead : 'Push';
@@ -750,24 +760,23 @@ function render() {
     ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1 + mergeFooterOffset;
     const btnIsRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const btnIsMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    const btnIsAmend = state.mode === 'commit' && state.commitAmend && !state.operationState;
-    const btnLabelLen = btnIsRebase ? 16 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 13 : state.operationState.type === 'cherry-pick' ? 19 : 14) : btnIsAmend ? 5 : 6; // Continue Rebase=16, Commit=6, Amend=5, etc
-    const amendRowOffset = (state.mode === 'commit' && !state.operationState) ? 1 : 0;
-    if (amendRowOffset > 0) {
-      const amendLabelLen = '[x] Amend last commit'.length;
+    const btnLabelLen = btnIsRebase ? 16 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 13 : state.operationState.type === 'cherry-pick' ? 19 : 14) : 6; // Continue Rebase=16, Commit=6, etc
+    const btnRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset;
+    ui.commitButtonZone = {
+      row: btnRow,
+      colStart: rpStartCol + 1,
+      colEnd: rpStartCol + 1 + btnLabelLen,
+    };
+    // Amend 토글: Commit 버튼과 같은 행 오른쪽 (렌더에서 저장한 상대 위치 사용)
+    if (ui.commitAmendBtnOffset >= 0) {
       ui.commitAmendZone = {
-        row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset,
-        colStart: rpStartCol + 1,
-        colEnd: rpStartCol + amendLabelLen,
+        row: btnRow,
+        colStart: rpStartCol + ui.commitAmendBtnOffset,
+        colEnd: rpStartCol + ui.commitAmendBtnOffset + ui.commitAmendBtnLen,
       };
     } else {
       ui.commitAmendZone = null;
     }
-    ui.commitButtonZone = {
-      row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset + amendRowOffset,
-      colStart: rpStartCol + 1,
-      colEnd: rpStartCol + 1 + btnLabelLen,
-    };
     if (state.conflictView) {
       const conflictIndices = state.conflictView.chunks
         .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
@@ -1353,8 +1362,8 @@ function buildDiffCommitPanel(w, h) {
   }
   const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
   const commitExtraH = state.conflictView ? 1 : 0;
-  const amendRowH = (state.mode === 'commit' && !state.operationState) ? 1 : 0;
-  const commitAreaH = h >= 5 ? (2 + maxMsgLines + commitExtraH + amendRowH) : 0;
+  // amend 토글은 별도 행이 아니라 Commit 버튼과 같은 행에 표시하므로 높이 추가 없음
+  const commitAreaH = h >= 5 ? (2 + maxMsgLines + commitExtraH) : 0;
   let diffH = h - commitAreaH;
 
   let preMaxScrollX = 0;
@@ -1389,6 +1398,7 @@ function buildDiffCommitPanel(w, h) {
 
   ui.rightDiffH = diffH;
   ui.commitMsgVisibleLines = maxMsgLines;
+  ui.commitAmendBtnOffset = -1; // commit 영역이 렌더되면 아래에서 다시 설정
 
   // Hunk 단위 스테이징 버튼 (staged/unstaged diff에서만, untracked/conflict 제외)
   ui.diffHunkZones = [];
@@ -1557,44 +1567,38 @@ function buildDiffCommitPanel(w, h) {
           lines.push('');
         }
       }
-      if (amendRowH > 0) {
-        const amendLabel = (state.commitAmend ? '[x]' : '[ ]') + ' Amend last commit';
-        const amendStyle = ui.hoveredCommitAmend
-          ? colors.value + ansi.bold + CSI + '4m'
-          : (state.commitAmend ? colors.yellow : colors.dim);
-        lines.push(' ' + amendStyle + amendLabel + ansi.reset + colors.dim + '  (Ctrl+A)' + ansi.reset);
-      }
     } else {
-      const diffViewHint = diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged')
-        ? '  [v] ' + (state.diffView === 'side' ? 'unified' : 'side')
-        : '';
-      if (state.staged.length > 0) {
-        if (state.operationState) {
-          const opIsRebase = state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply';
-          const opLabel = opIsRebase ? 'continue rebase' : 'commit';
-          lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] ' + opLabel + '  [b] menu' + diffViewHint + ansi.reset);
-        } else {
-          lines.push(colors.dim + ' ' + state.staged.length + ' file(s) staged \u2014 [c] commit  [A] amend' + diffViewHint + ansi.reset);
-        }
-      } else {
-        const amendHint = state.operationState ? '' : ' \u2014 [A] amend';
-        lines.push(colors.dim + ' No files staged' + amendHint + diffViewHint + ansi.reset);
-      }
+      // \uc0c1\ud0dc \uc815\ubcf4 \ud589 (\ub2e8\ucd95\ud0a4 hint \uc5c6\uc774 staged \uac1c\uc218\ub9cc \ud45c\uc2dc)
+      const infoText = state.staged.length > 0
+        ? state.staged.length + ' file(s) staged'
+        : 'No files staged';
+      lines.push(' ' + colors.dim + infoText + ansi.reset);
     }
 
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
     const isAmendCommit = state.mode === 'commit' && state.commitAmend && !state.operationState;
-    const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : isAmendCommit ? 'Amend' : 'Commit';
+    // amend 여부는 오른쪽 토글이 표시하므로 메인 버튼 라벨은 'Commit' 유지(중복 'Amend' 방지)
+    const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : 'Commit';
     const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0 && (state.staged.length > 0 || isAmendCommit);
     const isHovered = ui.hoveredCommitButton;
-    if (canCommit) {
-      const style = isHovered ? colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold;
-      lines.push(' ' + style + commitLabel + ansi.reset);
+    const commitStyle = canCommit
+      ? (isHovered ? colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold)
+      : (isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim);
+    let btnLine = ' ' + commitStyle + commitLabel + ansi.reset;
+    // Amend 토글: 작업(merge/rebase 등) 중이 아니면 Commit 버튼 오른쪽에 항상 표시
+    if (!state.operationState) {
+      const amendLabel = (state.commitAmend ? '[x]' : '[ ]') + ' Amend last commit';
+      const amendStyle = ui.hoveredCommitAmend
+        ? colors.value + ansi.bold + CSI + '4m'
+        : (state.commitAmend ? colors.yellow : colors.dim);
+      ui.commitAmendBtnOffset = 1 + commitLabel.length + 2; // 선행공백 + commitLabel + 간격(2)
+      ui.commitAmendBtnLen = amendLabel.length;
+      btnLine += '  ' + amendStyle + amendLabel + ansi.reset;
     } else {
-      const style = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
-      lines.push(' ' + style + commitLabel + ansi.reset);
+      ui.commitAmendBtnOffset = -1;
     }
+    lines.push(btnLine);
   }
 
   return lines;

@@ -90,8 +90,10 @@ const ui = {
   lastDetailContentH: 0,
   commitInputRow: -1,
   commitButtonZone: null,
-  commitAmendZone: null,      // { row, colStart, colEnd } amend 체크박스 클릭 존
+  commitAmendZone: null,      // { row, colStart, colEnd } amend 토글 클릭 존 (Commit 버튼 오른쪽)
   hoveredCommitAmend: false,
+  commitAmendBtnOffset: -1,   // 렌더 시 commit 버튼 행 내 amend 토글 시작 컬럼(상대), -1이면 미표시
+  commitAmendBtnLen: 0,
   diffHunkZones: [],          // [{ lineIdx, colStart, colEnd, hunkIdx }] hunk 버튼 클릭 존
   hoveredDiffHunkIdx: -1,
   stashMap: new Map(),
