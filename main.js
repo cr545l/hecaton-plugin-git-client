@@ -88,7 +88,7 @@ async function main() {
 
   // Now safe to await — stdin handler is registered, resize events won't be dropped
   await initState();
-  // 저장된 UI 설정(탭/패널/분할 비율 등)을 첫 본격 render 전에 복원
+  // 영속화 게이트만 연다 — 실제 설정 로드는 cwd 확정 후 attachRepo에서
   await persist.load();
   state.minimized = hecaton.initialState?.minimized ?? false;
   render();
@@ -107,7 +107,8 @@ async function main() {
       state.cwd = process.cwd();
     }
   }
-  persist.attachRepo(state.cwd);
+  // 저장된 UI 설정(탭/패널/분할 비율 등)을 프로젝트 파일에서 복원
+  await persist.attachRepo(state.cwd);
 
   const primedFromDisk = await primeInitialBranchFromDisk();
   if (primedFromDisk) {
