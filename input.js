@@ -307,8 +307,8 @@ async function handleKey(key) {
     return;
   }
 
-  // Ctrl+Shift+P: push
-  if (key === CSI + '112;6u') {
+  // Ctrl+Shift+P / Cmd+Shift+P: push
+  if (key === CSI + '112;6u' || key === CSI + '112;10u') {
     pushCurrentBranch();
     return;
   }
@@ -401,8 +401,8 @@ async function handleKey(key) {
     return;
   }
 
-  // Ctrl+A: select all / deselect all in cursor's group (diff view only)
-  if (key === '\x01' && state.rightView !== 'log' && state.rightView !== 'fresh') {
+  // Ctrl+A / Cmd+A: select all / deselect all in cursor's group (diff view only)
+  if ((key === '\x01' || key === CSI + '97;9u') && state.rightView !== 'log' && state.rightView !== 'fresh') {
     const list = buildFileList();
     if (list.length > 0) {
       const unstagedCount = state.unstaged.length + state.untracked.length;
@@ -671,8 +671,8 @@ function nextCharIndex(str, idx) {
 }
 
 function handleCommitInput(key) {
-  // Ctrl+V — Paste from clipboard
-  if (key === '\x16') {
+  // Ctrl+V / Cmd+V — Paste from clipboard
+  if (key === '\x16' || key === CSI + '118;9u') {
     (async () => {
       const result = await hecaton.clipboard.read().catch(() => null);
       if (result && result.text) {
@@ -702,8 +702,8 @@ function handleCommitInput(key) {
     render();
     return;
   }
-  // Ctrl+A → toggle amend
-  if (key === '\x01') {
+  // Ctrl+A / Cmd+A → toggle amend
+  if (key === '\x01' || key === CSI + '97;9u') {
     toggleCommitAmend();
     return;
   }
@@ -775,13 +775,6 @@ function handleCommitInput(key) {
         refreshInBackground({}, { refreshLog: true, refreshFresh: true });
       });
     }
-    return;
-  }
-  // Ctrl+C → clear commit message
-  if (key === '\x03') {
-    state.commitMsg = '';
-    state.commitCursor = 0;
-    render();
     return;
   }
   // Enter → insert newline
@@ -929,8 +922,8 @@ function handleRebaseMenuInput(key) {
 }
 
 async function handleNameInput(key) {
-  // Ctrl+V — Paste from clipboard
-  if (key === '\x16') {
+  // Ctrl+V / Cmd+V — Paste from clipboard
+  if (key === '\x16' || key === CSI + '118;9u') {
     (async () => {
       const result = await hecaton.clipboard.read().catch(() => null);
       if (result && result.text) {
