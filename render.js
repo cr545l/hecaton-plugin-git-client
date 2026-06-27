@@ -488,8 +488,9 @@ function render() {
     const commitOpRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const commitHintLabel = commitOpRebase ? ' Continue Rebase: ' : (state.commitAmend && !state.operationState) ? ' Amend: ' : ' Commit: ';
     const amendHint = state.operationState ? '' : '[Ctrl+A]amend  ';
+    const submitKey = (typeof process !== 'undefined' && process.platform === 'darwin') ? 'Cmd+Enter' : 'Ctrl+Enter';
     hintContent = colors.yellow + commitHintLabel + ansi.reset
-      + colors.dim + '[Ctrl+Enter]submit  ' + amendHint + '[Esc]cancel' + ansi.reset;
+      + colors.dim + '[' + submitKey + ']submit  ' + amendHint + '[Esc]cancel' + ansi.reset;
   } else if (state.mode === 'new-branch') {
     hintContent = colors.yellow + ' New Branch: ' + ansi.reset
       + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '

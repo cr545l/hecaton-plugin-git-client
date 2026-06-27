@@ -707,8 +707,8 @@ function handleCommitInput(key) {
     toggleCommitAmend();
     return;
   }
-  // Ctrl+Enter → submit commit or continue rebase
-  if (key === CSI + '13;5u') {
+  // Ctrl+Enter (13;5u) / Cmd+Enter (13;9u, macOS) → submit commit or continue rebase
+  if (key === CSI + '13;5u' || key === CSI + '13;9u') {
     const isAmendCommit = state.commitAmend && !state.operationState;
     if (state.commitMsg.trim().length === 0) {
       showErrorDialog('Commit message cannot be empty');
