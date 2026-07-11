@@ -25,7 +25,7 @@ const {
   gitRemoteRemove, gitRemoteRename, gitRemoteSetUrl, gitRemotePruneAsync,
   gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,
   gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
-  gitInit, gitCloneAsync, gitCleanUntrackedAsync,
+  gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState } = require('./refresh');
 const { render } = require('./render');
@@ -192,10 +192,12 @@ function buildFileContextMenuItems(fileItem, fileItems) {
 }
 
 function buildTabContextMenuItems() {
+  const hasLocalChanges = state.staged.length > 0 || state.unstaged.length > 0 || state.untracked.length > 0;
   const items = [
     { id: 'tab_refresh', label: 'Refresh' },
     { type: 'separator' },
     { id: 'tab_apply_patch', label: 'Apply Patch from Clipboard...' },
+    { id: 'tab_discard_all', label: 'Discard All Changes...', icon: 'warning', enabled: hasLocalChanges },
     { id: 'tab_clean', label: 'Remove All Untracked Files...', icon: 'warning' },
     { type: 'separator' },
     { id: 'tab_change_repo', label: 'Change Repository...' },
@@ -423,6 +425,28 @@ async function handleContextMenuAction(actionId) {
       ],
     });
     state.pendingDialogAction = 'clean-confirm';
+    return;
+  }
+
+  if (actionId === 'tab_discard_all') {
+    const stagedCount = state.staged.length;
+    const unstagedCount = state.unstaged.length;
+    const untrackedCount = state.untracked.length;
+    const summary = [
+      stagedCount + ' staged',
+      unstagedCount + ' unstaged',
+      untrackedCount + ' untracked',
+    ].join(', ');
+    hecaton.dialog.show({
+      type: 'message',
+      title: 'Discard All Changes',
+      message: 'Discard all local changes (' + summary + ')?\n\nTracked files and submodules will be restored to HEAD. Untracked files/folders, including nested Git repositories, will be removed. Ignored files are kept after the first commit; in a repository with no commits, they are removed too. This cannot be undone.',
+      buttons: [
+        { id: 'discard_all', label: 'Discard All', default: true, style: 'danger' },
+        { id: 'cancel', label: 'Cancel' },
+      ],
+    });
+    state.pendingDialogAction = 'discard-all-confirm';
     return;
   }
 
@@ -1805,6 +1829,14 @@ async function handleDialogResult(params) {
         startSpinner('Cleaning...');
         const err = await gitCleanUntrackedAsync(state.cwd);
         await afterGitOp(err, 'Clean', { statusOnly: true });
+      }
+      return;
+    }
+    if (action === 'discard-all-confirm') {
+      if (buttonId === 'discard_all') {
+        startSpinner('Discarding all changes...');
+        const err = await gitDiscardAllChangesAsync(state.cwd);
+        await afterGitOp(err, 'Discard all changes', { statusOnly: true });
       }
       return;
     }

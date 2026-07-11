@@ -938,6 +938,29 @@ async function gitBranchExists(cwd, name) {
 // 미추적 파일/디렉터리 일괄 삭제 (.gitignore 대상 제외)
 async function gitCleanUntrackedAsync(cwd) { return await gitAsyncWrap(['clean', '-fd'], cwd, 30000); }
 
+// Restore every tracked path to HEAD, then remove untracked files/directories.
+// Ignored paths are intentionally preserved. An unborn repository has no HEAD,
+// so clear its index first; the following clean then removes those former entries.
+async function gitDiscardAllChangesAsync(cwd) {
+  const head = await gitResult(['rev-parse', '--verify', 'HEAD'], cwd, 5000);
+  const hasHead = !!(head && head.ok && head.exit_code === 0);
+  const trackedErr = hasHead
+    ? await gitAsyncWrap(['reset', '--hard', '--recurse-submodules', 'HEAD'], cwd, 30000)
+    : await gitAsyncWrap(['read-tree', '--empty'], cwd, 30000);
+  if (trackedErr) return 'Failed to discard tracked changes: ' + trackedErr;
+
+  // A second force is required for untracked directories that are Git repos.
+  // Before the first commit there is no committed ignore configuration to
+  // restore, so ignored paths must also be removed to guarantee a clean tree.
+  const cleanErr = await gitAsyncWrap(hasHead ? ['clean', '-ffd'] : ['clean', '-ffdx'], cwd, 30000);
+  if (cleanErr) return 'Tracked changes were discarded, but untracked cleanup failed: ' + cleanErr;
+  if (hasHead) {
+    const submoduleCleanErr = await gitAsyncWrap(['submodule', 'foreach', '--recursive', 'git clean -ffd'], cwd, 30000);
+    if (submoduleCleanErr) return 'Top-level changes were discarded, but submodule cleanup failed: ' + submoduleCleanErr;
+  }
+  return null;
+}
+
 // ── 저장소 생성 ──
 async function gitInit(cwd) { return await gitRunOrError(['init'], cwd, 10000, 'Init failed'); }
 async function gitCloneAsync(parentDir, url, dirName) {
@@ -1340,5 +1363,5 @@ module.exports = {
   gitRemoteRemove, gitRemoteRename, gitRemoteSetUrl, gitRemotePruneAsync,
   gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,
   gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
-  gitInit, gitCloneAsync, gitCleanUntrackedAsync,
+  gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
 };
