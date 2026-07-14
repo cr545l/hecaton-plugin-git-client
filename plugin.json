@@ -1,8 +1,8 @@
 {
-  "id": "git-client",
+  "id": "dev.hecaton.git-client",
   "name": "Git Client",
   "icon": "terminal-git-bash",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "entry": "main.js",
   "apiVersion": "1.1",
   "overlay": {

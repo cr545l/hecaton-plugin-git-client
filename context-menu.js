@@ -936,7 +936,7 @@ async function handleContextMenuAction(actionId) {
       }
       case 'file_open_explorer': {
         const dir = fullPath.substring(0, fullPath.replace(/\\/g, '/').lastIndexOf('/')) || state.cwd;
-        hecaton.overlay.open({ plugin_id: 'explorer', params: { path: dir } }).catch(() => null);
+        hecaton.overlay.open({ plugin_id: 'dev.hecaton.explorer', params: { path: dir } }).catch(() => null);
         break;
       }
     }
