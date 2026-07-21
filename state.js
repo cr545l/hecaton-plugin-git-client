@@ -83,6 +83,8 @@ const ui = {
   hostScrollRegions: [],     // host-owned scroll: per-render region defs from panel builders
   clickableAreas: [],
   hoveredAreaIndex: -1,
+  committerClickZones: [],
+  hoveredCommitterAction: null,
   fileLineMap: [],
   lastLayout: { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, divider1W: 0, middleW: 0, divider2W: 0, rightW: 0, bodyH: 0 },
   rightDiffH: 0,
@@ -149,7 +151,6 @@ const ui = {
   freshFileLineMap: [],
   freshWindowZone: null, // { lineIdx, colStart, colEnd }
   hoveredFreshWindow: false,
-  hoveredCommitter: false,
   collapsedDetailFiles: new Set(),
   detailFileHeaderMap: [], // maps visible detail row → file path (or null)
   filteredDetailCount: 0, // filtered logDetailLines count (respecting collapse)

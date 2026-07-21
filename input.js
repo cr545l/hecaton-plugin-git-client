@@ -38,6 +38,38 @@ function actionToKey(action) {
   }
 }
 
+async function handleCommitterAction(action) {
+  if (action === 'reset-committer-name' || action === 'reset-committer-email') {
+    const key = action === 'reset-committer-name' ? 'user.name' : 'user.email';
+    const err = await gitUnsetConfigLocal(state.cwd, key);
+    if (err) {
+      showErrorDialog(err);
+      render();
+    } else {
+      refreshAsync().then(() => render());
+    }
+    return true;
+  }
+
+  if (action === 'committer-name' || action === 'committer-email') {
+    const isName = action === 'committer-name';
+    state.pendingCommitterEdit = isName ? 'name' : 'email';
+    hecaton.dialog.show({
+      type: 'input',
+      title: isName ? 'Committer Name' : 'Committer Email',
+      message: isName ? 'Enter name for local git commits:' : 'Enter email for local git commits:',
+      defaultValue: isName ? (state.committerName || '') : (state.committerEmail || ''),
+      buttons: [
+        { id: 'ok', label: 'OK', default: true },
+        { id: 'cancel', label: 'Cancel' },
+      ],
+    });
+    return true;
+  }
+
+  return false;
+}
+
 function showErrorDialog(msg) {
   state.error = null;
   hecaton.dialog.show({
@@ -1088,6 +1120,13 @@ async function handleMouseData(data) {
           break;
         }
       }
+      let newCommitterHover = null;
+      for (const zone of ui.committerClickZones) {
+        if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
+          newCommitterHover = zone.action;
+          break;
+        }
+      }
       let newTitleHover = -1;
       if (cy >= L.startRow && cy < bodyTop) {
         for (let i = 0; i < ui.titleClickZones.length; i++) {
@@ -1289,8 +1328,9 @@ async function handleMouseData(data) {
         newCommitAmendHover = true;
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend) {
+      if (newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend) {
         ui.hoveredAreaIndex = newHover;
+        ui.hoveredCommitterAction = newCommitterHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
         ui.hoveredFileHeaderIdx = newFileHeaderHover;
@@ -1314,7 +1354,7 @@ async function handleMouseData(data) {
             setMouseShape('ew-resize');
           } else if (newDivHover === 'horizontal') {
             setMouseShape('ns-resize');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover) {
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -1620,50 +1660,6 @@ async function handleMouseData(data) {
                 render();
               });
               handled = true;
-            } else if (zone.action === 'reset-committer-name') {
-              const err = await gitUnsetConfigLocal(state.cwd, 'user.name');
-              if (err) {
-                showErrorDialog(err);
-              } else {
-                refreshAsync().then(() => render());
-              }
-              render();
-              handled = true;
-            } else if (zone.action === 'reset-committer-email') {
-              const err = await gitUnsetConfigLocal(state.cwd, 'user.email');
-              if (err) {
-                showErrorDialog(err);
-              } else {
-                refreshAsync().then(() => render());
-              }
-              render();
-              handled = true;
-            } else if (zone.action === 'committer-name') {
-              state.pendingCommitterEdit = 'name';
-              hecaton.dialog.show({
-                type: 'input',
-                title: 'Committer Name',
-                message: 'Enter name for local git commits:',
-                defaultValue: state.committerName || '',
-                buttons: [
-                  { id: 'ok', label: 'OK', default: true },
-                  { id: 'cancel', label: 'Cancel' },
-                ],
-              });
-              handled = true;
-            } else if (zone.action === 'committer-email') {
-              state.pendingCommitterEdit = 'email';
-              hecaton.dialog.show({
-                type: 'input',
-                title: 'Committer Email',
-                message: 'Enter email for local git commits:',
-                defaultValue: state.committerEmail || '',
-                buttons: [
-                  { id: 'ok', label: 'OK', default: true },
-                  { id: 'cancel', label: 'Cancel' },
-                ],
-              });
-              handled = true;
             }
             break;
           }
@@ -1750,6 +1746,16 @@ async function handleMouseData(data) {
         }
         if (hsbHandled) continue;
       }
+
+      // Click on committer controls at the right edge of the hint bar
+      let committerHandled = false;
+      for (const zone of ui.committerClickZones) {
+        if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
+          committerHandled = await handleCommitterAction(zone.action);
+          break;
+        }
+      }
+      if (committerHandled) continue;
 
       // Click on hint bar buttons
       for (const area of ui.clickableAreas) {

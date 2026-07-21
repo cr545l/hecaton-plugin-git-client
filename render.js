@@ -10,6 +10,71 @@ const persist = require('./persist');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
+function buildCommitterHint(maxWidth) {
+  if (!state.isGitRepo || maxWidth < 12) return { content: '', width: 0, zones: [] };
+
+  const name = state.committerName || '(no name)';
+  const email = state.committerEmail || '(no email)';
+  const nameTag = state.committerNameIsLocal ? '[L] ' : '';
+  const emailTag = state.committerEmailIsLocal ? '[L] ' : '';
+  const prefix = maxWidth >= 32 ? ' Committer: ' : ' ';
+  const nameReset = state.committerNameIsLocal ? '\u00D7' : '';
+  const emailReset = state.committerEmailIsLocal ? '\u00D7' : '';
+  const fixedWidth = visLen(prefix) + visLen(nameTag) + visLen(nameReset)
+    + 1 + 2 + visLen(emailTag) + visLen(emailReset);
+  const fieldBudget = maxWidth - fixedWidth;
+  if (fieldBudget < 4) return { content: '', width: 0, zones: [] };
+
+  const nameWidth = visLen(name);
+  const emailWidth = visLen(email);
+  let nameBudget = Math.min(nameWidth, Math.max(2, Math.floor(fieldBudget * 0.4)));
+  let emailBudget = Math.min(emailWidth, Math.max(2, fieldBudget - nameBudget));
+  let remaining = fieldBudget - nameBudget - emailBudget;
+  if (remaining > 0) {
+    const nameExtra = Math.min(remaining, nameWidth - nameBudget);
+    nameBudget += nameExtra;
+    remaining -= nameExtra;
+    emailBudget += Math.min(remaining, emailWidth - emailBudget);
+  }
+
+  const shownName = truncate(name, nameBudget);
+  const shownEmail = truncate(email, emailBudget);
+  const zones = [];
+  let content = colors.dim + prefix + ansi.reset;
+  let offset = visLen(prefix);
+
+  function appendZone(label, action, normalStyle, hoverStyle) {
+    const labelWidth = visLen(label);
+    const style = ui.hoveredCommitterAction === action ? hoverStyle : normalStyle;
+    zones.push({ offset, width: labelWidth, action });
+    content += style + label + ansi.reset;
+    offset += labelWidth;
+  }
+
+  appendZone(
+    nameTag + shownName,
+    'committer-name',
+    state.committerNameIsLocal ? colors.cyan : colors.dim,
+    colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+  );
+  if (nameReset) {
+    appendZone(nameReset, 'reset-committer-name', colors.red, colors.cursorBg + colors.red + ansi.bold);
+  }
+  content += ' ';
+  offset += 1;
+  appendZone(
+    '<' + emailTag + shownEmail + '>',
+    'committer-email',
+    state.committerEmailIsLocal ? colors.cyan : colors.dim,
+    colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
+  );
+  if (emailReset) {
+    appendZone(emailReset, 'reset-committer-email', colors.red, colors.cursorBg + colors.red + ansi.bold);
+  }
+
+  return { content, width: offset, zones };
+}
+
 // Layout 전환 감지 — sixel은 텍스트 redraw로 지워지지 않아 잔상이 남는다.
 // rightView/minimize/패널 collapse/터미널 크기 변화 시점에 한 번 화면을 erase해서
 // 이전 sixel(그래프, 스크롤바)을 강제로 제거한다. 일반 redraw는 그대로 둬 깜빡임을 피한다.
@@ -240,59 +305,6 @@ function render() {
           row1 += style + label + ansi.reset;
           col1 += visLen(label);
         }
-      }
-    }
-
-    // === Committer info (after Stash separator) ===
-    {
-      const name = state.committerName || '(no name)';
-      const email = state.committerEmail || '(no email)';
-      const nameIsLocal = state.committerNameIsLocal;
-      const emailIsLocal = state.committerEmailIsLocal;
-      appendTitleDivider();
-      // Name zone
-      const nameTag = nameIsLocal ? '[L] ' : '';
-      const nameLabel = ' ' + nameTag + name + ' ';
-      const ni = zoneIdx++;
-      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(nameLabel) - 1, action: 'committer-name' });
-      const nameStyle = ni === ui.hoveredTitleZoneIndex
-        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-        : nameIsLocal ? colors.cyan : colors.dim;
-      row1 += nameStyle + nameLabel + ansi.reset;
-      col1 += visLen(nameLabel);
-      // Name reset button (only if local)
-      if (nameIsLocal) {
-        const resetLabel = '\u00D7';
-        const ri = zoneIdx++;
-        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(resetLabel) - 1, action: 'reset-committer-name' });
-        const resetStyle = ri === ui.hoveredTitleZoneIndex
-          ? colors.cursorBg + colors.red + ansi.bold
-          : colors.red;
-        row1 += resetStyle + resetLabel + ansi.reset;
-        col1 += visLen(resetLabel);
-      }
-      row1 += ' ';
-      col1 += 1;
-      // Email zone
-      const emailTag = emailIsLocal ? '[L] ' : '';
-      const emailLabel = '<' + emailTag + email + '>';
-      const ei = zoneIdx++;
-      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(emailLabel) - 1, action: 'committer-email' });
-      const emailStyle = ei === ui.hoveredTitleZoneIndex
-        ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-        : emailIsLocal ? colors.cyan : colors.dim;
-      row1 += emailStyle + emailLabel + ansi.reset;
-      col1 += visLen(emailLabel);
-      // Email reset button (only if local)
-      if (emailIsLocal) {
-        const resetLabel = '\u00D7';
-        const ri = zoneIdx++;
-        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(resetLabel) - 1, action: 'reset-committer-email' });
-        const resetStyle = ri === ui.hoveredTitleZoneIndex
-          ? colors.cursorBg + colors.red + ansi.bold
-          : colors.red;
-        row1 += resetStyle + resetLabel + ansi.reset;
-        col1 += visLen(resetLabel);
       }
     }
 
@@ -557,13 +569,32 @@ function render() {
   } else {
     hintContent = ' ' + buildHintText();
   }
-  if (isSpinning()) {
-    const spinnerPart = colors.dim + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ansi.reset;
-    const gap = Math.max(0, width - visLen(hintContent) - 1);
-    buf.push(ansi.moveTo(hintRow, startCol) + hintContent + ' '.repeat(gap) + spinnerPart);
-  } else {
-    buf.push(ansi.moveTo(hintRow, startCol) + padRight(hintContent, width));
-  }
+  const spinnerPart = isSpinning()
+    ? colors.dim + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ansi.reset
+    : '';
+  const spinnerWidth = visLen(spinnerPart);
+  const committerMaxWidth = Math.max(0, Math.min(72, Math.floor(width * 0.55) - spinnerWidth));
+  const committerHint = buildCommitterHint(committerMaxWidth);
+  const rightSeparator = spinnerPart && committerHint.width > 0 ? ' ' : '';
+  const rightContent = spinnerPart + rightSeparator + committerHint.content;
+  const rightWidth = visLen(rightContent);
+  const leftMaxWidth = Math.max(0, width - rightWidth - (rightWidth > 0 ? 1 : 0));
+  const leftContent = leftMaxWidth <= 0
+    ? ''
+    : visLen(hintContent) > leftMaxWidth
+      ? truncate(hintContent, leftMaxWidth) + ansi.reset
+      : hintContent;
+  const hintGap = Math.max(0, width - visLen(leftContent) - rightWidth);
+  const rightStartCol = startCol + visLen(leftContent) + hintGap;
+  buf.push(ansi.moveTo(hintRow, startCol) + leftContent + ' '.repeat(hintGap) + rightContent);
+
+  const committerStartCol = rightStartCol + spinnerWidth + visLen(rightSeparator);
+  ui.committerClickZones = committerHint.zones.map(zone => ({
+    row: hintRow,
+    colStart: committerStartCol + zone.offset,
+    colEnd: committerStartCol + zone.offset + zone.width - 1,
+    action: zone.action,
+  }));
 
   // Host-owned scroll: emit overscan banks (off-screen buffer rows the host
   // reveals during sub-cell scrolling), in-band render acks, and collect the
