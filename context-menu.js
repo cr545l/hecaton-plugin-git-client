@@ -9,7 +9,7 @@ const {
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
   gitRevertContinue, gitRevertAbort, gitRevertSkip,
   gitStashApply, gitStashDrop, gitStashSave, gitStashPop, gitStashRename,
-  gitStage, gitUnstage, gitStageAll, gitDiscardFile, gitRemoveFromRepo,
+  gitStageAll, gitDiscardFile, gitRemoveFromRepo,
   gitStashFile, gitStashFiles, gitIgnorePattern, gitFileHistory, gitBlameFile, gitFilePatch,
   gitSetConfig, gitCreateBranch, gitCreateTag, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
@@ -27,7 +27,7 @@ const {
   gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
 } = require('./git');
-const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState } = require('./refresh');
+const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
@@ -734,10 +734,10 @@ async function handleContextMenuAction(actionId) {
           const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
           if (files.length > 0) {
             startSpinner('Staging...');
-            const ok = await gitStageMultiple(state.cwd, files);
-            if (!ok) {
+            const err = await gitStageMultiple(state.cwd, files);
+            if (err) {
               stopSpinner();
-              showError('Stage failed');
+              showError(err);
               render();
             } else {
               stopSpinner();
@@ -752,10 +752,10 @@ async function handleContextMenuAction(actionId) {
           const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
           if (files.length > 0) {
             startSpinner('Unstaging...');
-            const ok = await gitUnstageMultiple(state.cwd, files);
-            if (!ok) {
+            const err = await gitUnstageMultiple(state.cwd, files);
+            if (err) {
               stopSpinner();
-              showError('Unstage failed');
+              showError(err);
               render();
             } else {
               stopSpinner();
@@ -811,8 +811,9 @@ async function handleContextMenuAction(actionId) {
           const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
           for (const f of files) {
             const err = await gitCheckoutOurs(state.cwd, f);
-            if (err) { showError(err); return; }
-            await gitStageAsync(state.cwd, f);
+            if (err) { stopSpinner(); showError(err); render(); return; }
+            const stageErr = await gitStageAsync(state.cwd, f);
+            if (stageErr) { stopSpinner(); showError(stageErr); render(); return; }
           }
           await afterGitOp(null);
         })();
@@ -824,8 +825,9 @@ async function handleContextMenuAction(actionId) {
           const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
           for (const f of files) {
             const err = await gitCheckoutTheirs(state.cwd, f);
-            if (err) { showError(err); return; }
-            await gitStageAsync(state.cwd, f);
+            if (err) { stopSpinner(); showError(err); render(); return; }
+            const stageErr = await gitStageAsync(state.cwd, f);
+            if (stageErr) { stopSpinner(); showError(stageErr); render(); return; }
           }
           await afterGitOp(null);
         })();
@@ -835,10 +837,10 @@ async function handleContextMenuAction(actionId) {
         const allFiles = [...state.unstaged.map(f => f.file), ...state.untracked.map(f => f.file)];
         if (allFiles.length === 0) break;
         startSpinner('Staging all...');
-        const ok = await gitStageAll(state.cwd);
-        if (!ok) {
+        const err = await gitStageAll(state.cwd);
+        if (err) {
           stopSpinner();
-          showError('Stage all failed');
+          showError(err);
           render();
         } else {
           stopSpinner();
@@ -1543,6 +1545,21 @@ async function handleDialogResult(params) {
     const target = state.pendingDialogTarget || '';
     state.pendingDialogAction = null;
     state.pendingDialogTarget = null;
+
+    if (action === 'unlock-index-confirm') {
+      if (buttonId === 'unlock') {
+        startSpinner('Unlocking...');
+        const err = await removeIndexLock();
+        stopSpinner();
+        if (err) {
+          showError(err);
+          render();
+        } else {
+          refreshInBackground({ statusOnly: true });
+        }
+      }
+      return;
+    }
 
     // delete-branch is a message dialog with delete/force/cancel buttons
     if (action === 'delete-branch') {

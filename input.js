@@ -1,7 +1,7 @@
 const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
 const hostScroll = require('./scroll');
-const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
+const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitCommitAmendAsync, gitCommitMessage, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitMergeAbort, gitCherryPickAbort, gitCherryPickSkip, gitRevertAbort, gitRevertSkip,
@@ -10,7 +10,7 @@ const { gitStage, gitUnstage, gitStashSave, gitUnsetConfigLocal,
   buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, removeIndexLock } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -278,9 +278,9 @@ async function applyConflictSelections() {
   }
 
   const stageErr = await gitStageAsync(state.cwd, sel.file);
-  if (stageErr !== true) {
+  if (stageErr) {
     stopSpinner();
-    showErrorDialog(typeof stageErr === 'string' && stageErr ? stageErr : 'Failed to stage resolved file');
+    showErrorDialog(stageErr);
     render();
     return;
   }
@@ -482,10 +482,10 @@ async function handleKey(key) {
         if (filesToStage.length > 0) {
           state.selectedFiles.clear();
           startSpinner('Staging...');
-          const ok = await gitStageMultiple(state.cwd, filesToStage);
-          if (!ok) {
+          const err = await gitStageMultiple(state.cwd, filesToStage);
+          if (err) {
             stopSpinner();
-            showErrorDialog('Stage failed');
+            showErrorDialog(err);
             render();
           } else {
             stopSpinner();
@@ -510,10 +510,10 @@ async function handleKey(key) {
         if (filesToUnstage.length > 0) {
           state.selectedFiles.clear();
           startSpinner('Unstaging...');
-          const ok = await gitUnstageMultiple(state.cwd, filesToUnstage);
-          if (!ok) {
+          const err = await gitUnstageMultiple(state.cwd, filesToUnstage);
+          if (err) {
             stopSpinner();
-            showErrorDialog('Unstage failed');
+            showErrorDialog(err);
             render();
           } else {
             stopSpinner();
@@ -2027,12 +2027,16 @@ async function handleMouseData(data) {
                   break;
                 }
                 if (zone.action === 'unlockIndex') {
-                  startSpinner('Unlocking...');
-                  (async () => {
-                    await removeIndexLock();
-                    stopSpinner();
-                    refreshInBackground({ statusOnly: true });
-                  })();
+                  hecaton.dialog.show({
+                    type: 'message',
+                    title: 'Unlock Git Index',
+                    message: 'Delete index.lock?\n\nOnly continue after confirming no Git command is still running. Deleting an active lock can damage the Git index.',
+                    buttons: [
+                      { id: 'unlock', label: 'Delete Lock', style: 'danger' },
+                      { id: 'cancel', label: 'Cancel', default: true },
+                    ],
+                  });
+                  state.pendingDialogAction = 'unlock-index-confirm';
                   headerHandled = true;
                   break;
                 }
@@ -2040,19 +2044,21 @@ async function handleMouseData(data) {
                   const fileList = buildFileList();
                   const isStage = zone.action === 'stageAll';
                   const files = fileList
-                    .filter(item => isStage ? item.type !== 'staged' : item.type === 'staged')
+                    .filter(item => isStage
+                      ? item.type !== 'staged' && item.type !== 'ignored'
+                      : item.type === 'staged')
                     .map(item => item.file);
                   if (files.length > 0) {
                     const label = isStage ? 'Staging all' : 'Unstaging all';
                     startSpinner(`${label}...`);
                     (async () => {
-                      const ok = isStage
-                        ? await gitStageMultiple(state.cwd, files)
-                        : await gitUnstageMultiple(state.cwd, files);
+                      const err = isStage
+                        ? await gitStageAll(state.cwd)
+                        : await gitUnstageAll(state.cwd);
                       state.selectedFiles.clear();
-                      if (!ok) {
+                      if (err) {
                         stopSpinner();
-                        showErrorDialog(label + ' failed');
+                        showErrorDialog(err);
                         render();
                       } else {
                         stopSpinner();
@@ -2082,13 +2088,13 @@ async function handleMouseData(data) {
                   }
                   startSpinner(`${label}...`);
                   (async () => {
-                    const ok = isStage
+                    const err = isStage
                       ? await gitStageMultiple(state.cwd, files)
                       : await gitUnstageMultiple(state.cwd, files);
                     state.selectedFiles.clear();
-                    if (!ok) {
+                    if (err) {
                       stopSpinner();
-                      showErrorDialog(label + ' failed');
+                      showErrorDialog(err);
                       render();
                     } else {
                       stopSpinner();
@@ -2118,10 +2124,10 @@ async function handleMouseData(data) {
                 const isUnstage = item.type === 'staged';
                 const msg = isUnstage ? 'Unstaging...' : 'Staging...';
                 startSpinner(msg);
-                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(async ok => {
-                  if (!ok) {
+                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(async err => {
+                  if (err) {
                     stopSpinner();
-                    showErrorDialog((isUnstage ? 'Unstage' : 'Stage') + ' failed');
+                    showErrorDialog(err);
                     render();
                     return;
                   }

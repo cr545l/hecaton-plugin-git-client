@@ -559,10 +559,18 @@ async function detectIndexLock() {
 
 // 사용자가 Unlock 버튼을 눌렀을 때 호출 — index.lock 강제 제거
 async function removeIndexLock() {
+  let deleteError = null;
   try {
     await hecaton.fs.delete({ path: indexLockPath() });
-  } catch { /* ignore — 이미 없거나 권한 문제 */ }
+  } catch (e) {
+    deleteError = (e && e.message) || String(e || 'Delete failed');
+  }
   await detectIndexLock();
+  if (state.indexLocked) {
+    return 'Could not delete index.lock'
+      + (deleteError ? ':\n' + deleteError : '. The file may still be in use by another Git process.');
+  }
+  return null;
 }
 
 async function readBranchNameFast() {
@@ -633,22 +641,9 @@ async function refreshAsync(options = {}) {
     state.ignoredLoading = false;
   }
 
-  if (!statusOnly && !metadataOnly) {
-    // Stale index.lock 정리 — 이전 세션에서 타임아웃 등으로 남은 lock 파일 제거
-    try {
-      const lockPath = indexLockPath();
-      const lockStat = await hecaton.fs.stat({ path: lockPath });
-      if (lockStat && lockStat.exists) {
-        // 5초 이상 된 lock 파일은 stale로 판단 (git timeout이 5초이므로)
-        const age = Date.now() - (lockStat.mtime_ms || 0);
-        if (age > 5000) {
-          await hecaton.fs.delete({ path: lockPath });
-        }
-      }
-    } catch { /* ignore — lock cleanup is best-effort */ }
-  }
-
-  // index.lock 존재 여부 갱신 — Unstaged/Staged 헤더의 Unlock 버튼 노출 트리거 (metadataOnly 제외)
+  // index.lock은 오래됐다는 이유만으로 자동 삭제하지 않는다. 타임아웃을 반환한
+  // Git 프로세스가 Windows에서 계속 실행 중일 수 있어, 활성 lock 삭제는 index를
+  // 손상시킬 수 있다. 존재 여부만 표시하고 사용자가 프로세스를 확인한 뒤 Unlock한다.
   if (!metadataOnly) {
     await detectIndexLock();
   }

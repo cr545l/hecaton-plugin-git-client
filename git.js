@@ -26,6 +26,67 @@ async function gitResult(args, cwd, timeout) {
   return await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
 }
 
+const GIT_MUTATION_TIMEOUT_MS = 30000;
+const MAX_GIT_ERROR_DETAIL = 3500;
+
+function resultText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (value.message) return String(value.message);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function truncateGitDetail(text) {
+  if (text.length <= MAX_GIT_ERROR_DETAIL) return text;
+  const half = Math.floor((MAX_GIT_ERROR_DETAIL - 40) / 2);
+  return text.substring(0, half) + '\n... output truncated ...\n' + text.substring(text.length - half);
+}
+
+function formatGitFailure(result, fallback, timeoutMs) {
+  const errorText = resultText(result && result.error);
+  const rpcErrorText = resultText(result && result.__rpcError);
+  const stderrText = resultText(result && result.stderr);
+  const stdoutText = resultText(result && result.stdout);
+  const combined = [errorText, rpcErrorText, stderrText, stdoutText]
+    .filter(Boolean)
+    .join('\n')
+    .replace(/\r\n/g, '\n')
+    .trim();
+
+  let lines = combined.split('\n').map(line => line.trimEnd()).filter(Boolean);
+  const nonWarnings = lines.filter(line => !/^warning:/i.test(line));
+  if (nonWarnings.length > 0) lines = nonWarnings;
+
+  const exitCode = result && (result.exit_code !== undefined ? result.exit_code : result.code);
+  let detail = lines.join('\n').trim();
+  if (!detail && exitCode !== undefined && exitCode !== null) detail = 'Git exited with code ' + exitCode + '.';
+  if (!detail) detail = 'Git did not return an error message.';
+  detail = truncateGitDetail(detail);
+
+  let message = fallback + ':\n' + detail;
+  if (/timed?\s*out|timeout/i.test(combined)) {
+    message += '\n\nThe Git command exceeded ' + Math.round(timeoutMs / 1000)
+      + ' seconds. Wait for any active Git process to finish, then refresh and retry. '
+      + 'For a very large selection, stage fewer files at a time.';
+  } else if (/index\.lock|another git process seems to be running/i.test(combined)) {
+    message += '\n\nAnother Git process may still be using the index. Close or wait for it first. '
+      + 'Use the Unlock button only after confirming no Git process is running.';
+  }
+  return message;
+}
+
+async function gitMutation(args, cwd, timeout, fallback) {
+  const timeoutMs = timeout || GIT_MUTATION_TIMEOUT_MS;
+  let result;
+  try {
+    result = await gitResult(args, cwd, timeoutMs);
+  } catch (e) {
+    result = { ok: false, error: e };
+  }
+  const succeeded = !!(result && result.ok && (result.exit_code === undefined || result.exit_code === 0));
+  return succeeded ? null : formatGitFailure(result, fallback, timeoutMs);
+}
+
 function unquoteGitPath(p) {
   if (p.length >= 2 && p[0] === '"' && p[p.length - 1] === '"') {
     const inner = p.slice(1, -1);
@@ -294,39 +355,21 @@ async function gitDiffUntracked(cwd, file) {
 }
 
 async function gitStage(cwd, file) {
-  try {
-    await git(['add', '-f', '--', file], cwd);
-    return true;
-  } catch {
-    return false;
-  }
+  return await gitMutation(['add', '-f', '--', file], cwd, 10000, 'Could not stage ' + file);
 }
 
 async function gitUnstage(cwd, file) {
-  try {
-    await git(['restore', '--staged', '--', file], cwd);
-    return true;
-  } catch {
-    return false;
-  }
+  return await gitMutation(['restore', '--staged', '--', file], cwd, 10000, 'Could not unstage ' + file);
 }
 
 async function gitStageAll(cwd) {
-  try {
-    await git(['add', '-f', '-A'], cwd);
-    return true;
-  } catch {
-    return false;
-  }
+  // Never force ignored files into the index. `-f -A` can unexpectedly walk
+  // large ignored trees such as node_modules/.venv and make Stage All time out.
+  return await gitMutation(['add', '-A'], cwd, GIT_MUTATION_TIMEOUT_MS, 'Could not stage all files');
 }
 
 async function gitUnstageAll(cwd) {
-  try {
-    await git(['reset', 'HEAD'], cwd);
-    return true;
-  } catch {
-    return false;
-  }
+  return await gitMutation(['reset', 'HEAD'], cwd, GIT_MUTATION_TIMEOUT_MS, 'Could not unstage all files');
 }
 
 async function gitCommit(cwd, message) {
@@ -870,22 +913,30 @@ async function gitEditCommitAsync(cwd, ref) {
 }
 async function gitStashPopAsync(cwd) { return await gitAsyncWrap(['stash', 'pop'], cwd, 10000); }
 async function gitStageAsync(cwd, file) {
-  const r = await gitResult(['add', '-f', '--', file], cwd, 5000);
-  return r && r.ok && r.exit_code === 0;
+  return await gitStage(cwd, file);
 }
 async function gitUnstageAsync(cwd, file) {
-  const r = await gitResult(['restore', '--staged', '--', file], cwd, 5000);
-  return r && r.ok && r.exit_code === 0;
+  return await gitUnstage(cwd, file);
 }
 async function gitStageMultiple(cwd, files) {
-  if (files.length === 0) return true;
+  if (files.length === 0) return null;
   if (files.length === 1) return gitStage(cwd, files[0]);
-  try { await git(['add', '-f', '--', ...files], cwd); return true; } catch { return false; }
+  return await gitMutation(
+    ['add', '-f', '--', ...files],
+    cwd,
+    GIT_MUTATION_TIMEOUT_MS,
+    'Could not stage ' + files.length + ' selected files'
+  );
 }
 async function gitUnstageMultiple(cwd, files) {
-  if (files.length === 0) return true;
+  if (files.length === 0) return null;
   if (files.length === 1) return gitUnstage(cwd, files[0]);
-  try { await git(['restore', '--staged', '--', ...files], cwd); return true; } catch { return false; }
+  return await gitMutation(
+    ['restore', '--staged', '--', ...files],
+    cwd,
+    GIT_MUTATION_TIMEOUT_MS,
+    'Could not unstage ' + files.length + ' selected files'
+  );
 }
 
 async function gitRenameBranch(cwd, oldName, newName) { return await gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, 'Rename branch failed'); }
