@@ -40,6 +40,12 @@ async function main() {
   process.stdin.resume();
   process.stdin.setEncoding('utf-8');
 
+  // Resize/font-change 이벤트는 드래그 한 번에 수십 개가 쏟아진다. 매 이벤트마다
+  // full-screen erase + 무거운 sixel 재인코딩을 돌리면 그래프가 내내 깜빡인다.
+  // 치수는 즉시 반영하되(레이아웃 계산은 최신 값으로), 실제 render는 짧게
+  // 디바운스해 마지막 상태 한 번만 그린다. 트레일링 엣지를 보장해 최종 프레임을 놓치지 않는다.
+  let _resizeTimer = null;
+  const RESIZE_DEBOUNCE_MS = 24;
   hecaton.on('window_resized', (params) => {
     ui.termCols = params.cols || ui.termCols;
     ui.termRows = params.rows || ui.termRows;
@@ -50,7 +56,8 @@ async function main() {
       ui.cellH = newCellH;
       ui.logSixelOverlay = null;
     }
-    render();
+    if (_resizeTimer) clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => { _resizeTimer = null; render(); }, RESIZE_DEBOUNCE_MS);
   });
   hecaton.on('window_minimized', () => {
     state.minimized = true;

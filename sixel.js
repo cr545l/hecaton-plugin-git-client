@@ -66,13 +66,33 @@ function isConnectedChar(ch) {
   return ch && ch !== ' ';
 }
 
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charStyles, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
+// 이웃 셀이 이 셀 쪽으로 수평 획을 뻗는가? (수평 병합선 관통 여부 판정용)
+function connectsRight(ch) { // 오른쪽 가장자리까지 획이 닿는 글자
+  return ch === '─' || ch === '┄' || ch === '┼' || ch === '╌' ||
+         ch === '├' || ch === '╭' || ch === '╰' || ch === '●' || ch === '◌';
+}
+function connectsLeft(ch) { // 왼쪽 가장자리까지 획이 닿는 글자
+  return ch === '─' || ch === '┄' || ch === '┼' || ch === '╌' ||
+         ch === '┤' || ch === '╮' || ch === '╯' || ch === '●' || ch === '◌';
+}
+
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
     if (cc < 0 || ch === ' ') continue;
     const style = charStyles && i < charStyles.length ? charStyles[i] : 0;
     const c = style === 1 ? 9 : (cc % 6) + 1;
+    // 수평 획 전용 색. -1이면 세로색(cc)과 동일. 교차/T 지점에서 수평(병합)선이
+    // 세로 레인색에 묻히지 않고 제 색을 유지하도록 분리해 칠한다.
+    const cch = charColorsH && i < charColorsH.length ? charColorsH[i] : -1;
+    const hc = style === 1 ? 9 : ((cch >= 0 ? cch : cc) % 6) + 1;
+    // 코너(╭╮╯╰)가 수평 병합선 중간에 놓이면 관통선이 한쪽만 이어져 끊어져 보인다.
+    // 좌우 이웃이 모두 이 셀 쪽으로 수평 획을 뻗으면 병합선이 관통하는 것이므로,
+    // 코너 곡선에 더해 수평 브리지를 그려 선을 이어준다.
+    const leftCh = i > 0 ? chars[i - 1] : ' ';
+    const rightCh = (i + 1 < chars.length && i + 1 < numCols) ? chars[i + 1] : ' ';
+    const bridgeH = connectsRight(leftCh) && connectsLeft(rightCh);
     const cx = i * cellW + (cellW >> 1);
     const cy = yOff + (cellH >> 1);
     const top = yOff;
@@ -106,22 +126,26 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charStyles, nu
       // T자 접합 대신 Y자로 합류시킨다.
       case '\u251c':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lineW);
+        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, hc, lineW);
         break;
       case '\u2524':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
+        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, hc, lineW);
         break;
       case '\u256e':
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
         pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
         break;
       case '\u256d':
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
         pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lineW);
         break;
       case '\u256f':
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
         pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, lineW);
         break;
       case '\u2570':
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
         pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, lineW);
         break;
       case '\u2500':
@@ -131,7 +155,7 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charStyles, nu
       case '\u253c':
       case '\u254c':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lineW);
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
         break;
     }
   }
@@ -167,7 +191,7 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
     const next = r < graphRows.length - 1
       ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
       : (nextBoundary ? nextBoundary.chars : null);
-    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charStyles, numCols, prev, next, cellW, cellH, lineW, dotR);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, numCols, prev, next, cellW, cellH, lineW, dotR);
   }
   return buf;
 }

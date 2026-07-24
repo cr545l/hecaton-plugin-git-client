@@ -128,13 +128,18 @@ function render() {
   // overscan bank content) here; banks/acks/regions are emitted after the body.
   ui.hostScrollRegions = [];
 
-  // Layout 전환 시 화면 강제 erase — sixel 잔상 제거
+  // Layout 전환 시 화면 강제 erase — sixel 잔상 제거. 전체 erase(2J)가 화면을 통째로
+  // 지우므로 이전 graph sixel 영역 기록도 버린다(뒤에서 별도 clear를 쏘지 않게).
   const layoutSig = computeLayoutSig();
   if (layoutSig !== _lastLayoutSig) {
     buf.push(CSI + '2J');
     _lastLayoutSig = layoutSig;
+    ui.logSixelRegion = null;
   }
-  appendLogSixelClear(buf);
+  // 매 프레임 무조건 이전 graph sixel을 지우던 코드는 제거했다. 지우개→텍스트→새 sixel을
+  // 프레임마다 반복하면 호스트가 중간 상태를 그릴 때 그래프가 깜빡인다. 실제로 이전 영역을
+  // 지워야 하는 경우(그래프 폭/높이 축소·위치 이동·그래프 사라짐)만 아래 sixel emit에서
+  // 새 지오메트리와 비교해 targeted clear를 쏜다.
 
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
   const T_DOWN = '\u252c', T_UP = '\u2534', T_RIGHT = '\u251c', T_LEFT = '\u2524';
@@ -655,15 +660,27 @@ function render() {
     const screenRow = ui.logSixelAnchorBank
       ? hostScroll.bankRow('logList') + 1
       : startRow + titleRows + 1;
+    const sz = ui.logSixelOverlaySize;
+    const old = ui.logSixelRegion;
+    // 새 sixel이 이전 영역을 완전히 덮으면(같은 위치 + 같거나 큰 크기) 텍스트 레이어가
+    // 그래프 셀을 먼저 다시 칠하고 그 위에 새 sixel을 얹으므로 잔상이 없다 → clear 불필요.
+    // 위치가 바뀌거나 더 작아질 때만 이전 영역을 지워 삐져나온 픽셀을 제거한다.
+    const covers = sz && old
+      && old.screenRow === screenRow && old.screenCol === graphCol
+      && sz.pixelW >= old.pixelW && sz.pixelH >= old.pixelH;
+    if (old && !covers) appendLogSixelClear(buf); // ui.logSixelRegion = null 로 정리됨
     buf.push(ansi.moveTo(screenRow, graphCol) + ui.logSixelOverlay);
-    if (ui.logSixelOverlaySize) {
+    if (sz) {
       ui.logSixelRegion = {
         screenRow,
         screenCol: graphCol,
-        pixelW: ui.logSixelOverlaySize.pixelW,
-        pixelH: ui.logSixelOverlaySize.pixelH,
+        pixelW: sz.pixelW,
+        pixelH: sz.pixelH,
       };
     }
+  } else {
+    // 이번 프레임엔 graph sixel이 없다(뷰 전환·목록 0행 등) — 남아있던 이전 sixel 제거.
+    appendLogSixelClear(buf);
   }
   ui.logSixelOverlay = null;
   ui.logSixelOverlaySize = null;
@@ -1704,7 +1721,13 @@ function buildLogPanel(w, h) {
     if (item.type === 'commit') {
       const prefix = ' ';
       const graphVisLen = maxNaturalWidth;
-      const graphPart = ' '.repeat(graphVisLen) + ' ';
+      // 그래프 칸(sixel이 덮는 영역)에는 공백을 쓰지 않고 커서만 오른쪽으로 건너뛴다(CUF).
+      // 매 프레임 공백으로 지웠다가 sixel을 다시 얹으면 그 사이 순간 그래프가 깜빡인다.
+      // CUF로 셀을 안 건드리면 이전 프레임 sixel이 그대로 남아 있어 깜빡임이 사라진다
+      // (맨 오른쪽 스크롤바가 안 깜빡이는 것과 같은 이유 — 텍스트가 그 칸을 안 건드림).
+      // 커서/호버 배경은 sixel에 이미 baked-in 되어 있어(BG_CURSOR/BG_HOVER) 문제없다.
+      const graphSkip = SIXEL_ENABLED ? CSI + graphVisLen + 'C' : ' '.repeat(graphVisLen);
+      const graphPart = graphSkip + ' ';
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
       const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
@@ -1746,14 +1769,15 @@ function buildLogPanel(w, h) {
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
         text: (isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset,
-        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles, isCursor } : null,
+        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles, isCursor } : null,
       };
     } else {
-      const graphPart = ' '.repeat(maxNaturalWidth);
+      // commit 행과 동일하게 그래프 칸은 CUF로 건너뛴다 (깜빡임 방지).
+      const graphPart = SIXEL_ENABLED ? CSI + maxNaturalWidth + 'C' : ' '.repeat(maxNaturalWidth);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
         text: ' ' + graphPart,
-        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charStyles: item.charStyles } : null,
+        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles } : null,
       };
     }
   }

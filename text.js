@@ -19,10 +19,32 @@ function isWide(cp) {
 }
 
 function visLen(text) {
-  const plain = stripAnsi(text);
   let w = 0;
-  for (const ch of plain) {
-    w += isWide(ch.codePointAt(0)) ? 2 : 1;
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    if (text[i] === '\x1b' && text[i + 1] === '[') {
+      // CSI sequence: ESC [ params ... final(0x40-0x7E)
+      let j = i + 2;
+      while (j < len) {
+        const c = text.charCodeAt(j);
+        if (c >= 0x40 && c <= 0x7e) break; // final byte
+        j++;
+      }
+      if (j < len && text[j] === 'C') {
+        // CUF (cursor forward): advances the cursor N columns (default 1)
+        // without drawing. Counts as N visible columns for layout/padding —
+        // the graph gutter uses it to skip the cells the sixel owns.
+        const n = parseInt(text.slice(i + 2, j), 10);
+        w += Number.isFinite(n) ? n : 1;
+      }
+      // SGR (m) and every other CSI contribute 0 visible width.
+      i = j < len ? j + 1 : len;
+      continue;
+    }
+    const cp = text.codePointAt(i);
+    w += isWide(cp) ? 2 : 1;
+    i += cp > 0xFFFF ? 2 : 1;
   }
   return w;
 }

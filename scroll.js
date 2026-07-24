@@ -94,6 +94,12 @@ function syncRegions(defs) {
       + d.contentRows + ',' + d.contentCols + ',' + d.overscanRow;
     if (_sentRegions.get(d.id) !== sig) {
       _sentRegions.set(d.id, sig);
+      // Geometry changed (resize/font/layout): the previous confirmation no
+      // longer describes the buffer the host holds. Drop it so isReady() is
+      // false until the host confirms the NEW geometry — otherwise bank rows
+      // and the bank-anchored graph sixel get written to off-screen buffer
+      // rows the host hasn't enlarged yet, and the graph vanishes.
+      _confirmed.delete(d.id);
       hecaton.scroll.region({
         id: d.id,
         row: d.row,
@@ -104,7 +110,14 @@ function syncRegions(defs) {
         content_cols: d.contentCols,
         overscan_row: d.overscanRow,
       }).then((res) => {
-        if (res && !res.error) _confirmed.add(d.id);
+        if (res && !res.error) {
+          const wasConfirmed = _confirmed.has(d.id);
+          _confirmed.add(d.id);
+          // First confirmation of this geometry: re-render so the now-safe
+          // bank rows / anchored sixel actually get drawn. Without this the
+          // graph stays hidden until some other event triggers a render.
+          if (!wasConfirmed && _deps && _deps.render) _deps.render();
+        }
       }).catch(() => {});
       // Geometry (re)registration clamps host-side; make sure the host's
       // position matches what this frame actually rendered.
