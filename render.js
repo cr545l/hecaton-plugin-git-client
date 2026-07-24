@@ -1721,13 +1721,10 @@ function buildLogPanel(w, h) {
     if (item.type === 'commit') {
       const prefix = ' ';
       const graphVisLen = maxNaturalWidth;
-      // 그래프 칸(sixel이 덮는 영역)에는 공백을 쓰지 않고 커서만 오른쪽으로 건너뛴다(CUF).
-      // 매 프레임 공백으로 지웠다가 sixel을 다시 얹으면 그 사이 순간 그래프가 깜빡인다.
-      // CUF로 셀을 안 건드리면 이전 프레임 sixel이 그대로 남아 있어 깜빡임이 사라진다
-      // (맨 오른쪽 스크롤바가 안 깜빡이는 것과 같은 이유 — 텍스트가 그 칸을 안 건드림).
-      // 커서/호버 배경은 sixel에 이미 baked-in 되어 있어(BG_CURSOR/BG_HOVER) 문제없다.
-      const graphSkip = SIXEL_ENABLED ? CSI + graphVisLen + 'C' : ' '.repeat(graphVisLen);
-      const graphPart = graphSkip + ' ';
+      // 그래프 칸은 공백으로 채워 밑바탕 텍스트 셀을 매 프레임 비운다. sixel이 그 위에
+      // 그려진다. (예전엔 CUF로 이 칸을 건너뛰어 깜빡임을 줄였으나, 밑바탕 셀이 옛 텍스트를
+      // 계속 들고 있어 빠른 host-scroll 중 sixel이 못 덮는 순간 stale 텍스트가 새어 나왔다.)
+      const graphPart = ' '.repeat(graphVisLen) + ' ';
       const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
       const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
@@ -1772,8 +1769,7 @@ function buildLogPanel(w, h) {
         graph: item.chars ? { chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles, isCursor } : null,
       };
     } else {
-      // commit 행과 동일하게 그래프 칸은 CUF로 건너뛴다 (깜빡임 방지).
-      const graphPart = SIXEL_ENABLED ? CSI + maxNaturalWidth + 'C' : ' '.repeat(maxNaturalWidth);
+      const graphPart = ' '.repeat(maxNaturalWidth);
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
         text: ' ' + graphPart,
