@@ -88,6 +88,7 @@ function computeLayoutSig() {
     ui.rightPanelCollapsed ? '1' : '0',
     ui.rightTopCollapsed ? '1' : '0',
     ui.rightBottomCollapsed ? '1' : '0',
+    ui.logSortMode,
     ui.termCols,
     ui.termRows,
   ].join('|');
@@ -185,8 +186,14 @@ function render() {
     let rightParts = []; // { label, action, collapsed }
     rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', action: 'toggleStatus', collapsed: ui.leftPanelCollapsed });
     if (state.rightView === 'log' || state.rightView === 'fresh') {
-      rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + (state.rightView === 'fresh' ? 'Files' : 'History'), action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
+      // 접기 버튼(Status/Detail)을 먼저, 모드 토글(Sort)은 Diff 토글과 같이 맨 뒤에 둔다.
+      if (state.rightView === 'fresh') {
+        rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
+      }
       rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
+      if (state.rightView === 'log') {
+        rightParts.push({ label: '  Sort: ' + (ui.logSortMode === 'date' ? 'date' : 'branch'), action: 'toggleLogSort', collapsed: false });
+      }
     } else {
       rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Stage', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
       rightParts.push({ label: '  Diff: ' + (state.diffView === 'side' ? 'side' : 'unified'), action: 'toggleDiff', collapsed: false });
@@ -1647,12 +1654,9 @@ function buildLogPanel(w, h) {
   }
 
   const innerW = w - 1;
+  // Commits 탭의 상단 버튼은 정렬 토글이라 접기 버튼이 없다 — 커밋 목록은 항상 펼친 상태로 둔다.
   let listH, detailH, separatorH;
-  if (ui.rightTopCollapsed && ui.rightBottomCollapsed) {
-    listH = 0; separatorH = 0; detailH = 0;
-  } else if (ui.rightTopCollapsed) {
-    listH = 0; separatorH = 0; detailH = h;
-  } else if (ui.rightBottomCollapsed) {
+  if (ui.rightBottomCollapsed) {
     listH = h; separatorH = 0; detailH = 0;
   } else {
     listH = Math.min(Math.max(1, Math.floor(h * ui.logListRatio)), h - 2);

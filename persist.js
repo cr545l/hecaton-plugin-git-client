@@ -4,7 +4,7 @@
 // cwd를 못 구하면 예전 전역 경로(~/.hecaton/data/<plugin-dir>)로 폴백한다.
 //
 // 모든 UI 설정을 리포(폴더)별로 저장한다.
-// 리포별(repos): 레이아웃(탭/diff 뷰·패널 접기·분할 비율·fresh 기간·원격 정렬 모드),
+// 리포별(repos): 레이아웃(탭/diff 뷰·패널 접기·분할 비율·fresh 기간·원격/커밋 정렬 모드),
 //               섹션·그룹 접힘, recent 정렬용 사용 기록, 커밋 메시지 드래프트.
 // 전역(global): 더 이상 사용하지 않음(빈 객체로 유지, 다음 저장 때 정리).
 //
@@ -80,6 +80,7 @@ function applyLayout(src) {
   ui.filesDividerRatio = clamp(src.filesDividerRatio, 0.15, 0.7, ui.filesDividerRatio);
   ui.logListRatio = clamp(src.logListRatio, 0.1, 0.9, ui.logListRatio);
   ui.remoteSortMode = pickEnum(src.remoteSortMode, ['alpha', 'alpha_desc', 'recent'], ui.remoteSortMode);
+  ui.logSortMode = pickEnum(src.logSortMode, ['date', 'branch'], ui.logSortMode);
   if (isPlainObject(src.panels)) {
     if (typeof src.panels.left === 'boolean') ui.leftPanelCollapsed = src.panels.left;
     if (typeof src.panels.rightTop === 'boolean') ui.rightTopCollapsed = src.panels.rightTop;
@@ -98,6 +99,7 @@ function captureLayout() {
     filesDividerRatio: ui.filesDividerRatio,
     logListRatio: ui.logListRatio,
     remoteSortMode: ui.remoteSortMode,
+    logSortMode: ui.logSortMode,
     panels: {
       left: ui.leftPanelCollapsed,
       rightTop: ui.rightTopCollapsed,

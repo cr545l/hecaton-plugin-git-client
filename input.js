@@ -10,7 +10,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -1540,6 +1540,12 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'toggleHistory') {
               ui.rightTopCollapsed = !ui.rightTopCollapsed;
+              render();
+              handled = true;
+            } else if (zone.action === 'toggleLogSort') {
+              ui.logSortMode = ui.logSortMode === 'date' ? 'branch' : 'date';
+              if (!rebuildLogGraphRows()) refreshLog();
+              updateLogDetail();
               render();
               handled = true;
             } else if (zone.action === 'toggleDetail') {

@@ -101,13 +101,16 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charStyles, nu
         }
         break;
       }
+      // ├ ┤ 는 머지 대상 부모가 이미 살아있는 레인에 있을 때 생긴다. 부모는 항상
+      // 아래쪽이므로 세로선은 그대로 두고, 옆으로 빠지는 연결선만 아래로 둥글게 말아
+      // T자 접합 대신 Y자로 합류시킨다.
       case '\u251c':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxHLine(buf, pw, ph, cx, right + 1, cy, c, lineW);
+        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lineW);
         break;
       case '\u2524':
         pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxHLine(buf, pw, ph, left - 1, cx, cy, c, lineW);
+        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
         break;
       case '\u256e':
         pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);

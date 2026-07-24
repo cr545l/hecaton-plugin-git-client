@@ -139,6 +139,9 @@ const ui = {
   contextMenuRemote: null,    // remote 그룹 우클릭 시 remote 이름
   contextMenuWorktree: null,  // worktree 행 우클릭 시 worktree 경로
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'
+  // 커밋 그래프 정렬 — 'date': git --date-order 그대로(날짜 내림차순, 일반 GUI 클라이언트와 동일)
+  //                  'branch': HEAD 기준 first-parent 줄기에 분기 그룹을 붙여 재배치
+  logSortMode: 'date',
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,

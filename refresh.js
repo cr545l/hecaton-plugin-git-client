@@ -1060,7 +1060,14 @@ function parseLogRaw(raw, recovery, recoveryHashSet) {
   });
 }
 
+// 정렬 모드 토글 시 git 재조회 없이 그래프만 다시 만들기 위한 마지막 입력 캐시
+let _lastGraphCommits = null;
+let _lastGraphStashHashes = null;
+
 function buildLogGraphRows(rawCommits, stashFullHashes) {
+  _lastGraphCommits = rawCommits;
+  _lastGraphStashHashes = stashFullHashes;
+
   // Filter stash sub-commits (index, untracked) to keep graph clean.
   const stashSubHashes = new Set();
   for (const c of rawCommits) {
@@ -1109,8 +1116,26 @@ function buildLogGraphRows(rawCommits, stashFullHashes) {
     }
   }
 
-  commits = reorderForkStyle(commits);
+  // 'date' 모드는 git --date-order 결과를 그대로 쓴다 (커밋 날짜 내림차순 + 토폴로지 제약).
+  if (ui.logSortMode !== 'date') commits = reorderForkStyle(commits);
   return calcGraphRows(commits, stashFullHashes, ui.stashMap);
+}
+
+// 정렬 모드 변경용 — 캐시된 커밋으로 그래프 행만 다시 만들고 선택 커밋을 해시로 복원한다.
+// 캐시가 없으면 false를 돌려줘 호출부가 refreshLog()로 폴백하게 한다.
+function rebuildLogGraphRows() {
+  if (!_lastGraphCommits) return false;
+  const selIdx = state.logSelectables[state.logCursor];
+  const selectedHash = (selIdx !== undefined && state.logItems[selIdx]) ? state.logItems[selIdx].hash : null;
+
+  applyLogGraphRows(buildLogGraphRows(_lastGraphCommits, _lastGraphStashHashes || new Set()));
+
+  ui.logScrollPin = undefined;
+  if (selectedHash) {
+    const found = state.logSelectables.findIndex(i => state.logItems[i] && state.logItems[i].hash === selectedHash);
+    if (found >= 0) state.logCursor = found;
+  }
+  return true;
 }
 
 function applyLogGraphRows(graphRows) {
@@ -1640,7 +1665,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  refreshAsync, refreshLog, loadMoreLog, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, updateDiff,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
