@@ -2309,8 +2309,8 @@ async function openExternal(fullPath) {
 
 async function showInExplorer(fullPath) {
   const result = await hecaton.fs.reveal({ path: fullPath }).catch(() => null);
-  if (!result || !result.success) {
-    return 'Failed to show file';
+  if (!result || !result.ok) {
+    return (result && result.error) || 'Failed to show file';
   }
   return null;
 }
