@@ -21,7 +21,7 @@
  */
 
 const { state, ui, init: initState } = require('./state');
-const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime } = require('./refresh');
+const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, computeRefsTreeSignature } = require('./refresh');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
@@ -363,11 +363,15 @@ async function setupGitWatcher() {
       }
     } catch { /* fallback to .git */ }
   }
+  // refs 하위는 mtime만으로 변경을 잡을 수 없어(디렉터리 mtime은 직접 자식만 반영)
+  // computeRefsTreeSignature로 따로 감시한다. 여기 남긴 refs/refs/heads는
+  // read_dir을 제공하지 않는 호스트에서의 폴백이다.
   const pollTargets = [
     gitDir + sep + 'index',
     gitDir + sep + 'HEAD',
     gitDir + sep + 'refs',
     gitDir + sep + 'refs' + sep + 'heads',
+    gitDir + sep + 'packed-refs',
     gitDir + sep + 'logs' + sep + 'HEAD',
     gitDir + sep + 'FETCH_HEAD',
   ];
@@ -425,15 +429,28 @@ async function setupGitWatcher() {
   }
 
   let lastMtimes = await Promise.all(pollTargets.map(statMtime));
+  let lastRefsSig = await computeRefsTreeSignature(gitDir).catch(() => '');
+  let metaPolling = false;
   const pollInterval = setInterval(async () => {
-    const current = await Promise.all(pollTargets.map(statMtime));
-    let changed = false;
-    for (let i = 0; i < current.length; i++) {
-      if (current[i] !== lastMtimes[i]) { changed = true; break; }
-    }
-    if (changed) {
-      lastMtimes = current;
-      triggerRefresh();
+    if (metaPolling) return;
+    metaPolling = true;
+    try {
+      const [current, refsSig] = await Promise.all([
+        Promise.all(pollTargets.map(statMtime)),
+        // 스캔 실패 시 직전 값을 그대로 써서 오탐 refresh를 만들지 않는다.
+        computeRefsTreeSignature(gitDir).catch(() => lastRefsSig),
+      ]);
+      let changed = refsSig !== lastRefsSig;
+      for (let i = 0; !changed && i < current.length; i++) {
+        if (current[i] !== lastMtimes[i]) changed = true;
+      }
+      if (changed) {
+        lastMtimes = current;
+        lastRefsSig = refsSig;
+        triggerRefresh();
+      }
+    } finally {
+      metaPolling = false;
     }
   }, GIT_MTIME_POLL_INTERVAL_MS);
 

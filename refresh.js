@@ -492,6 +492,57 @@ let _metaCache = null;
 let _metaFingerprint = '';
 let _metaCacheCwd = '';
 
+// .git/refs 하위 loose ref 트리의 지문.
+// 디렉터리 mtime은 "직접 자식"이 바뀔 때만 갱신된다. refs/remotes/origin/foo를
+// 지우면 refs/remotes/origin의 mtime만 바뀌고 refs·refs/remotes는 그대로다.
+// 그래서 refs 한 곳만 stat하면 원격 브랜치 삭제/prune, 태그 추가/삭제,
+// 중첩 이름(feature/x) 브랜치 변경을 통째로 놓친다. 트리를 직접 훑어
+// "경로:mtime:size" 목록을 지문으로 만든다. packed-refs에 묶인 ref는
+// packed-refs 파일 mtime으로 별도 추적된다.
+const REFS_SCAN_MAX_ENTRIES = 4000;
+
+async function collectRefEntries(dirPath, relPath, out, budget) {
+  let res = null;
+  try {
+    res = await hecaton.fs.read_dir({ path: dirPath });
+  } catch { return; }
+  if (!res || !res.ok || !Array.isArray(res.entries)) return;
+  budget.scanned = true;
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const subdirs = [];
+  for (const entry of res.entries) {
+    if (!entry || !entry.name) continue;
+    if (budget.remaining <= 0) { budget.truncated = true; break; }
+    budget.remaining--;
+    const rel = relPath ? relPath + '/' + entry.name : entry.name;
+    if (entry.is_dir) {
+      out.push(rel + '/');
+      subdirs.push([dirPath + sep + entry.name, rel]);
+    } else {
+      out.push(rel + ':' + (entry.mtime_ms || 0) + ':' + (entry.size_bytes || 0));
+    }
+  }
+  await Promise.all(subdirs.map(([p, r]) => collectRefEntries(p, r, out, budget)));
+}
+
+// refs 트리 지문 문자열. read_dir을 제공하지 않는 호스트나 스캔 실패 시 ''를
+// 반환해, 호출자가 기존 mtime 지문만으로 판단하도록(= 종전 동작) 폴백한다.
+async function computeRefsTreeSignature(gitDir) {
+  if (!gitDir) return '';
+  if (!hecaton || !hecaton.fs || typeof hecaton.fs.read_dir !== 'function') return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const out = [];
+  const budget = { remaining: REFS_SCAN_MAX_ENTRIES, truncated: false, scanned: false };
+  await collectRefEntries(gitDir + sep + 'refs', '', out, budget);
+  if (!budget.scanned) return '';
+  // read_dir 순서는 플랫폼/파일시스템마다 다르므로 정렬해 안정화한다.
+  out.sort();
+  // ref가 상한을 넘는 저장소는 부분 지문만 남는다. 지문 자체는 안정적이므로
+  // 오탐은 없고, 잘린 구간의 변경만 놓친다(= 종전 동작 수준).
+  if (budget.truncated) out.push('~truncated');
+  return 'refs\n' + out.join('\n');
+}
+
 async function computeMetaFingerprint(cwd, gitDir) {
   if (!gitDir) return '';
   const sep = (process.platform === 'win32') ? '\\' : '/';
@@ -504,13 +555,16 @@ async function computeMetaFingerprint(cwd, gitDir) {
     gitDir + sep + 'worktrees',
     gitDir + sep + 'logs' + sep + 'HEAD',
   ];
-  const stats = await Promise.all(targets.map(async p => {
-    try {
-      const r = await hecaton.fs.stat({ path: p });
-      return (r && r.exists) ? (r.mtime_ms || 0) : -1;
-    } catch { return -1; }
-  }));
-  return stats.join('|');
+  const [stats, refsSig] = await Promise.all([
+    Promise.all(targets.map(async p => {
+      try {
+        const r = await hecaton.fs.stat({ path: p });
+        return (r && r.exists) ? (r.mtime_ms || 0) : -1;
+      } catch { return -1; }
+    })),
+    computeRefsTreeSignature(gitDir).catch(() => ''),
+  ]);
+  return stats.join('|') + '\x1e' + refsSig;
 }
 
 function invalidateMetaCache() {
@@ -1670,4 +1724,5 @@ module.exports = {
   refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
   removeIndexLock,
+  computeRefsTreeSignature,
 };
