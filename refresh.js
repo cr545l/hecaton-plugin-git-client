@@ -543,18 +543,29 @@ async function computeRefsTreeSignature(gitDir) {
   return 'refs\n' + out.join('\n');
 }
 
-async function computeMetaFingerprint(cwd, gitDir) {
-  if (!gitDir) return '';
+// linked worktree에서는 HEAD/logs/HEAD/FETCH_HEAD만 per-worktree git dir에 있고
+// config·packed-refs·refs·worktrees는 공용 git dir(--git-common-dir)에 있다.
+// 두 경로를 구분하지 않으면 워크트리에서 브랜치/원격/워크트리 변경을 영영 놓친다.
+function metaFingerprintTargets(gitDir, commonDir) {
   const sep = (process.platform === 'win32') ? '\\' : '/';
+  const common = commonDir || gitDir;
   const targets = [
     gitDir + sep + 'HEAD',
-    gitDir + sep + 'config',
-    gitDir + sep + 'packed-refs',
     gitDir + sep + 'FETCH_HEAD',
-    gitDir + sep + 'refs',
-    gitDir + sep + 'worktrees',
     gitDir + sep + 'logs' + sep + 'HEAD',
+    common + sep + 'config',
+    common + sep + 'packed-refs',
+    common + sep + 'refs',
+    common + sep + 'worktrees',
   ];
+  if (common !== gitDir) targets.push(gitDir + sep + 'refs');
+  return targets;
+}
+
+async function computeMetaFingerprint(cwd, gitDir, commonDir) {
+  if (!gitDir) return '';
+  const common = commonDir || gitDir;
+  const targets = metaFingerprintTargets(gitDir, common);
   const [stats, refsSig] = await Promise.all([
     Promise.all(targets.map(async p => {
       try {
@@ -562,7 +573,7 @@ async function computeMetaFingerprint(cwd, gitDir) {
         return (r && r.exists) ? (r.mtime_ms || 0) : -1;
       } catch { return -1; }
     })),
-    computeRefsTreeSignature(gitDir).catch(() => ''),
+    computeRefsTreeSignature(common).catch(() => ''),
   ]);
   return stats.join('|') + '\x1e' + refsSig;
 }
@@ -706,10 +717,11 @@ async function refreshAsync(options = {}) {
   // 첫 refresh나 repo 미확인 상태에서만 rev-parse 수행 — status/diff 결과로 실제 repo 여부가 다시 검증됨.
   // is-inside-work-tree와 git-dir을 한 번에 가져와 이후 Promise.all에서 git-dir 호출을 생략한다.
   if (!state.isGitRepo) {
-    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir'], cwd: state.cwd, timeout_ms: 5000 });
+    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir', '--git-common-dir'], cwd: state.cwd, timeout_ms: 5000 });
     const preLines = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').split('\n') : [];
     const insideWorkTree = (preLines[0] || '').trim();
     const preGitDir = (preLines[1] || '').trim();
+    const preCommonDir = (preLines[2] || '').trim();
     if (!preCheck || !preCheck.ok || insideWorkTree !== 'true') {
       if (state.gitDir) {
         state.isGitRepo = true;
@@ -738,13 +750,22 @@ async function refreshAsync(options = {}) {
         parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');
       }
       state.error = parts.join(' | ');
-      state.branch = ''; state.worktrees = []; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.ignoredLoaded = false; state.ignoredLoading = false; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
+      state.branch = ''; state.worktrees = []; state.isLinkedWorktree = false; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.ignoredLoaded = false; state.ignoredLoading = false; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
       return;
     }
     if (preGitDir && !state.gitDir) {
       const sep = (process.platform === 'win32') ? '\\' : '/';
       const isAbsolute = preGitDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(preGitDir);
       state.gitDir = isAbsolute ? preGitDir : (state.cwd + sep + preGitDir);
+    }
+    if (!state.gitCommonDir) {
+      const sep = (process.platform === 'win32') ? '\\' : '/';
+      if (preCommonDir) {
+        const isAbsolute = preCommonDir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(preCommonDir);
+        state.gitCommonDir = isAbsolute ? preCommonDir : (state.cwd + sep + preCommonDir);
+      } else {
+        state.gitCommonDir = state.gitDir;  // --git-common-dir 미지원 git 폴백
+      }
     }
   }
 
@@ -823,15 +844,22 @@ async function refreshAsync(options = {}) {
   // → 캐시 적중: 1 spawn (status), 미스: 8 spawn
   const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)';
   const sepLocal = (process.platform === 'win32') ? '\\' : '/';
-  const gitDirPromise = state.gitDir
+  const gitDirPromise = (state.gitDir && state.gitCommonDir)
     ? Promise.resolve(state.gitDir)
-    : gitExec(['--no-optional-locks', 'rev-parse', '--git-dir'], state.cwd).then(raw => {
-        const trimmed = raw.trim();
-        if (!trimmed) return '';
-        const isAbsolute = trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed);
-        const resolved = isAbsolute ? trimmed : (state.cwd + sepLocal + trimmed);
-        state.gitDir = resolved;
-        return resolved;
+    : gitExec(['--no-optional-locks', 'rev-parse', '--git-dir', '--git-common-dir'], state.cwd).then(raw => {
+        const lines = raw.replace(/\r\n/g, '\n').split('\n');
+        const resolve = (v) => {
+          const trimmed = (v || '').trim();
+          if (!trimmed) return '';
+          const isAbsolute = trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed);
+          return isAbsolute ? trimmed : (state.cwd + sepLocal + trimmed);
+        };
+        const resolvedGitDir = resolve(lines[0]);
+        const resolvedCommon = resolve(lines[1]);
+        if (resolvedGitDir) state.gitDir = resolvedGitDir;
+        // --git-common-dir 미지원(구 git)이면 git-dir로 폴백 — 종전 동작과 동일해진다.
+        state.gitCommonDir = resolvedCommon || resolvedGitDir;
+        return state.gitDir;
       });
 
   // git-dir과 fingerprint를 먼저 확정 (메타 캐시 적중 여부 결정)
@@ -840,7 +868,7 @@ async function refreshAsync(options = {}) {
   // push는 원격 추적 ref(refs/remotes/...)만 갱신하는데 fingerprint가 이를 잡지 못해
   // ahead/behind가 캐시에 묶인다. forceMeta로 명시 무효화한다.
   if (options.forceMeta) invalidateMetaCache();
-  const fingerprint = await computeMetaFingerprint(state.cwd, gitDir);
+  const fingerprint = await computeMetaFingerprint(state.cwd, gitDir, state.gitCommonDir);
   const metaHit = !!_metaCache && fingerprint && fingerprint === _metaFingerprint;
 
   const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
@@ -926,6 +954,10 @@ async function refreshAsync(options = {}) {
   state.remotes = remoteNamesRaw.trim() ? remoteNamesRaw.trim().split('\n').filter(Boolean) : [];
 
   state.worktrees = worktrees;
+  {
+    const currentWt = worktrees.find(w => w.isCurrent);
+    state.isLinkedWorktree = !!(currentWt && !currentWt.isMain);
+  }
 
   // operationState — detect rebase/merge/cherry-pick/revert in progress (병렬화)
   state.operationState = null;

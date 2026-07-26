@@ -916,22 +916,25 @@ function buildLeftPanel(w, h) {
     clickMap.push(action || null);
   }
 
-  // Branch name + rebase state
+  // Branch name + worktree 표기 + rebase state
   {
     const availW = innerW - 1;
     let branchName = state.branch || '...';
     const slashIdx = branchName.lastIndexOf('/');
     if (slashIdx >= 0) branchName = branchName.substring(slashIdx + 1);
+    // 현재 저장소가 메인이 아닌 linked worktree면 브랜치명 옆에 표기한다.
+    const wtTag = state.isLinkedWorktree ? ' [worktree]' : '';
+    const wtPart = wtTag ? colors.cyan + wtTag + ansi.reset : '';
     if (state.operationState) {
       const op = state.operationState;
       const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
       const opLabel = isRebase ? 'rebasing' : op.type === 'merge' ? 'merging' : op.type === 'cherry-pick' ? 'cherry-picking' : 'reverting';
       const suffix = isRebase && op.step ? ' (' + opLabel + ' ' + op.step + '/' + op.total + ')' : ' (' + opLabel + ')';
-      branchName = truncate(branchName, Math.max(3, availW - suffix.length));
-      pushLine(' ' + colors.value + ansi.bold + branchName + colors.yellow + suffix + ansi.reset);
+      branchName = truncate(branchName, Math.max(3, availW - suffix.length - wtTag.length));
+      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + wtPart + colors.yellow + suffix + ansi.reset);
     } else {
-      branchName = truncate(branchName, availW);
-      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset);
+      branchName = truncate(branchName, Math.max(3, availW - wtTag.length));
+      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + wtPart);
     }
   }
 
@@ -959,15 +962,18 @@ function buildLeftPanel(w, h) {
   const ARROW_CLOSED = '+';
   const activeBranch = ui.leftPanelActiveBranch;
 
-  function branchLine(indent, name, fullRef, isCurrent, isRemote) {
+  function branchLine(indent, name, fullRef, isCurrent, isRemote, tag, heldByWorktree) {
     const isActive = activeBranch === fullRef;
-    const maxW = innerW - indent;
+    const tagText = tag || '';
+    const tagPart = tagText ? colors.cyan + tagText + ansi.reset : '';
+    const maxW = Math.max(1, innerW - indent - visLen(tagText));
     if (isCurrent) {
-      const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, maxW - 2) + ansi.reset;
+      const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + tagPart;
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     } else {
-      const clr = isRemote ? colors.red : colors.value;
-      const content = ' '.repeat(indent) + clr + truncate(name, maxW) + ansi.reset;
+      // 다른 워크트리가 점유한 브랜치는 [worktree] 표기와 같은 색으로 구분한다.
+      const clr = isRemote ? colors.red : heldByWorktree ? colors.cyan : colors.value;
+      const content = ' '.repeat(indent) + clr + truncate(name, maxW) + ansi.reset + tagPart;
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     }
   }
@@ -977,6 +983,15 @@ function buildLeftPanel(w, h) {
     const idx = norm.lastIndexOf('/');
     return idx >= 0 ? norm.substring(idx + 1) : norm;
   }
+
+  // 다른 워크트리가 체크아웃 중인 로컬 브랜치 — 태그 대신 이름 색만 바꿔 구분한다.
+  // 현재 브랜치는 현재 워크트리가 점유 중이라 여기 포함되지 않는다.
+  const branchesInOtherWorktrees = new Set();
+  for (const wt of state.worktrees) {
+    if (wt.branch && !wt.isCurrent) branchesInOtherWorktrees.add(wt.branch);
+  }
+  // 저장소 자체가 linked worktree면 현재 브랜치에는 상단 브랜치명과 같은 표기를 붙인다.
+  const currentBranchTag = state.isLinkedWorktree ? ' [worktree]' : '';
 
   // Branches
   {
@@ -1003,12 +1018,14 @@ function buildLeftPanel(w, h) {
         if (!groupCollapsed) {
           for (const item of items) {
             const fullName = prefix + '/' + item.shortName;
-            pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent), { action: 'goto-branch', branch: fullName });
+            pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent, false,
+              item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName)), { action: 'goto-branch', branch: fullName });
           }
         }
       }
       for (const b of topLevel) {
-        pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent), { action: 'goto-branch', branch: b.name });
+        pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
+          b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name)), { action: 'goto-branch', branch: b.name });
       }
     }
   }
@@ -1083,27 +1100,47 @@ function buildLeftPanel(w, h) {
     }
   }
 
-  // Worktrees
-  if (state.worktrees.length > 0) {
+  // Worktrees — 목록 첫 항목은 항상 메인 워크트리이므로,
+  // linked worktree가 하나라도 있을 때(길이 > 1)만 루트 노드를 노출한다.
+  if (state.worktrees.length > 1) {
     const collapsed = !!ui.collapsedSections.worktrees;
-    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Worktrees' + ansi.reset, { action: 'toggle-section', section: 'worktrees' });
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Worktrees (' + state.worktrees.length + ')' + ansi.reset, { action: 'toggle-section', section: 'worktrees' });
     if (!collapsed) {
+      // git은 워크트리에 별도 이름을 주지 않는다(.git/worktrees/<id>는 생성 시점 폴더명에서
+      // 파생된 내부 식별자일 뿐이고 worktree list도 알려주지 않는다). 표시는 폴더명 기준인데,
+      // 부모만 다르고 폴더명이 같으면 경로를 감춘 상태에서 구분이 안 되므로 부모까지 붙인다.
+      const labelCounts = new Map();
+      for (const w of state.worktrees) {
+        const b = basename(w.path || '');
+        if (b) labelCounts.set(b, (labelCounts.get(b) || 0) + 1);
+      }
+      const worktreeLabel = (w) => {
+        const b = basename(w.path || '');
+        if (!b) return w.path || '(unknown)';
+        if ((labelCounts.get(b) || 0) < 2) return b;
+        const parent = basename((w.path || '').replace(/[\\/]+[^\\/]+[\\/]*$/, ''));
+        return parent ? parent + '/' + b : b;
+      };
       for (const wt of state.worktrees) {
         const stateParts = [];
         if (wt.branch) stateParts.push(wt.branch);
         else if (wt.isDetached) stateParts.push('detached');
+        if (wt.isBare) stateParts.push('bare');
         if (wt.isLocked) stateParts.push('locked');
         if (wt.isPrunable) stateParts.push('prunable');
-        const label = basename(wt.path || '') || wt.path || '(unknown)';
+        // 메인/linked 구분은 이름 옆 역할 표기로 — 브랜치명(예: main)과 섞이지 않게 분리한다.
+        const role = wt.isMain ? ' (main)' : '';
+        const label = worktreeLabel(wt);
         const detail = stateParts.length > 0 ? '  ' + stateParts.join(', ') : '';
+        const labelW = Math.max(1, innerW - 6 - visLen(detail) - visLen(role));
         const line = (wt.isCurrent ? '  ' + colors.green + ansi.bold + '\u2713 ' : '    ')
-          + colors.value + truncate(label, Math.max(1, innerW - 6 - visLen(detail))) + ansi.reset
+          + colors.value + truncate(label, labelW) + ansi.reset
+          + (role ? colors.dim + role + ansi.reset : '')
           + (detail ? colors.dim + detail + ansi.reset : '');
+        // 절대경로는 패널을 넘치게 하므로 표시하지 않는다.
+        // 경로 확인/이동은 우클릭 메뉴(Copy Path / Show in Explorer / Open in File Explorer)로 한다.
         const wtEntry = { action: 'goto-worktree', path: wt.path };
         pushLine(wt.isCurrent ? colors.cursorBg + padRight(line, innerW) + ansi.reset : line, wtEntry);
-        if (wt.path) {
-          pushLine('      ' + colors.dim + truncate(wt.path, innerW - 6) + ansi.reset, wtEntry);
-        }
       }
     }
   }
@@ -2836,4 +2873,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons };
+module.exports = { render, hintButtons, buildLeftPanel };

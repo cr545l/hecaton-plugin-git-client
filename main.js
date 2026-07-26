@@ -345,35 +345,48 @@ async function setupGitWatcher() {
   // 폴링으로 .git 상태 변경 감지 (fs.watch 대신 fs_stat 호스트 API 사용)
   // Worktree인 경우 .git은 파일이므로 실제 git 디렉토리를 찾아야 함
   let gitDir = state.cwd + sep + '.git';
+  let commonDir = '';
   // state.gitDir이 이미 캐시되어 있으면 재사용 — refreshAsync가 먼저 채웠을 수 있음
-  if (state.gitDir) {
+  if (state.gitDir && state.gitCommonDir) {
     gitDir = state.gitDir;
+    commonDir = state.gitCommonDir;
   } else {
     try {
       const gitDirResult = await hecaton.process.exec({
-        program: 'git', args: ['rev-parse', '--git-dir'], cwd: state.cwd, timeout_ms: 3000
+        program: 'git', args: ['rev-parse', '--git-dir', '--git-common-dir'], cwd: state.cwd, timeout_ms: 3000
       });
       if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
-        const resolved = gitDirResult.stdout.replace(/\r\n/g, '\n').trim();
+        const lines = gitDirResult.stdout.replace(/\r\n/g, '\n').split('\n');
+        const toAbs = (v) => {
+          const trimmed = (v || '').trim();
+          if (!trimmed) return '';
+          const isAbsolute = trimmed.startsWith('/') || /^[A-Za-z]:[\\/]/.test(trimmed);
+          return isAbsolute ? trimmed : (state.cwd + sep + trimmed);
+        };
+        const resolved = toAbs(lines[0]);
         if (resolved) {
-          const isAbsolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolved);
-          gitDir = isAbsolute ? resolved : (state.cwd + sep + resolved);
+          gitDir = resolved;
           state.gitDir = gitDir;
         }
+        commonDir = toAbs(lines[1]);
+        if (commonDir) state.gitCommonDir = commonDir;
       }
     } catch { /* fallback to .git */ }
   }
+  // linked worktree면 index/HEAD/logs는 per-worktree git dir에, refs/packed-refs는 공용 dir에 있다.
+  if (!commonDir) commonDir = gitDir;
   // refs 하위는 mtime만으로 변경을 잡을 수 없어(디렉터리 mtime은 직접 자식만 반영)
   // computeRefsTreeSignature로 따로 감시한다. 여기 남긴 refs/refs/heads는
   // read_dir을 제공하지 않는 호스트에서의 폴백이다.
   const pollTargets = [
     gitDir + sep + 'index',
     gitDir + sep + 'HEAD',
-    gitDir + sep + 'refs',
-    gitDir + sep + 'refs' + sep + 'heads',
-    gitDir + sep + 'packed-refs',
     gitDir + sep + 'logs' + sep + 'HEAD',
     gitDir + sep + 'FETCH_HEAD',
+    commonDir + sep + 'refs',
+    commonDir + sep + 'refs' + sep + 'heads',
+    commonDir + sep + 'packed-refs',
+    commonDir + sep + 'worktrees',
   ];
 
   async function statMtime(filePath) {
@@ -429,7 +442,7 @@ async function setupGitWatcher() {
   }
 
   let lastMtimes = await Promise.all(pollTargets.map(statMtime));
-  let lastRefsSig = await computeRefsTreeSignature(gitDir).catch(() => '');
+  let lastRefsSig = await computeRefsTreeSignature(commonDir).catch(() => '');
   let metaPolling = false;
   const pollInterval = setInterval(async () => {
     if (metaPolling) return;
@@ -438,7 +451,7 @@ async function setupGitWatcher() {
       const [current, refsSig] = await Promise.all([
         Promise.all(pollTargets.map(statMtime)),
         // 스캔 실패 시 직전 값을 그대로 써서 오탐 refresh를 만들지 않는다.
-        computeRefsTreeSignature(gitDir).catch(() => lastRefsSig),
+        computeRefsTreeSignature(commonDir).catch(() => lastRefsSig),
       ]);
       let changed = refsSig !== lastRefsSig;
       for (let i = 0; !changed && i < current.length; i++) {

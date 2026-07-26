@@ -551,12 +551,13 @@ async function gitWorktrees(cwd) {
     if (!raw) return [];
     const currentPath = normalizePathForCompare(cwd);
     const blocks = raw.split(/\n\s*\n/).filter(Boolean);
-    return blocks.map(block => {
+    const items = blocks.map((block, idx) => {
       const item = {
         path: '',
         head: '',
         branch: '',
         isCurrent: false,
+        isMain: idx === 0,   // porcelain 출력의 첫 블록은 항상 메인 워크트리
         isDetached: false,
         isBare: false,
         isLocked: false,
@@ -571,9 +572,20 @@ async function gitWorktrees(cwd) {
         else if (line.startsWith('locked')) item.isLocked = true;
         else if (line.startsWith('prunable')) item.isPrunable = true;
       }
-      item.isCurrent = normalizePathForCompare(item.path) === currentPath;
       return item;
     });
+    // cwd가 워크트리 하위 디렉터리일 수 있으므로 가장 긴 경로 접두사를 현재 워크트리로 본다.
+    let bestIdx = -1, bestLen = -1;
+    for (let i = 0; i < items.length; i++) {
+      const p = normalizePathForCompare(items[i].path);
+      if (!p) continue;
+      if ((currentPath === p || currentPath.startsWith(p + '/')) && p.length > bestLen) {
+        bestLen = p.length;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0) items[bestIdx].isCurrent = true;
+    return items;
   } catch {
     return [];
   }

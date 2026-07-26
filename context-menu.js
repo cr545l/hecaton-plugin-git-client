@@ -222,7 +222,10 @@ function buildWorktreeContextMenuItems(wtPath) {
   }
   items.push({ id: 'worktree_prune', label: 'Prune Worktrees' });
   if (wt) {
+    // 목록에 절대경로를 표시하지 않으므로 경로 확인/이동은 여기서 한다.
     items.push({ type: 'separator' });
+    items.push({ id: 'worktree_show_in_explorer', label: 'Show in Explorer' });
+    items.push({ id: 'worktree_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' });
     items.push({ id: 'worktree_copy_path', label: 'Copy Path', icon: 'copy' });
   }
   return items;
@@ -266,6 +269,9 @@ function buildBranchContextMenuItems(branchName) {
     { id: 'branch_new_branch', label: 'New Branch...', shortcut: 'Ctrl+Shift+B' },
     { id: 'branch_new_tag', label: 'New Tag...', shortcut: 'Ctrl+Shift+T' },
   );
+  // Worktrees 노드는 linked worktree가 있을 때만 보이므로, 첫 워크트리를 만들 진입점을
+  // 브랜치 메뉴에도 둔다. worktree_new는 대상 경로를 쓰지 않아 여기서도 안전하다.
+  items.push({ id: 'worktree_new', label: 'New Worktree...' });
 
   const trackingChildren = state.remoteBranches.map(rb => ({
     id: 'branch_track:' + rb,
@@ -629,6 +635,17 @@ async function handleContextMenuAction(actionId) {
         await afterGitOp(err, 'Worktree prune', { metadataOnly: true });
         break;
       }
+      case 'worktree_show_in_explorer':
+        if (wtPath) {
+          showInExplorer(wtPath).then(err => {
+            if (err) showError('Show in Explorer failed:\n' + err);
+          });
+        }
+        break;
+      case 'worktree_open_explorer':
+        // 워크트리 경로는 파일이 아니라 디렉터리이므로 그대로 연다.
+        if (wtPath) hecaton.overlay.open({ plugin_id: 'dev.hecaton.explorer', params: { path: wtPath } }).catch(() => null);
+        break;
       case 'worktree_copy_path':
         if (wtPath) copyToClipboard(wtPath);
         break;
@@ -2190,6 +2207,9 @@ async function openRepositoryAt(path) {
   state.error = null;
   state.branch = '';
   state.gitDir = '';
+  state.gitCommonDir = '';
+  state.worktrees = [];
+  state.isLinkedWorktree = false;
   state.staged = [];
   state.unstaged = [];
   state.untracked = [];

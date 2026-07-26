@@ -2345,6 +2345,7 @@ function handleContextMenuRequest(col, row) {
       if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
         ui.leftPanelActiveBranch = entry.branch;
         ui.contextMenuBranch = entry.branch;
+        ui.contextMenuWorktree = null;  // 브랜치 메뉴의 New Worktree는 대상 워크트리가 없다
         hecaton.menu.show({ items: buildBranchContextMenuItems(entry.branch) }).catch(() => null);
         render();
         return;

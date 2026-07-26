@@ -2,6 +2,7 @@ const state = {
   cwd: '',
   isGitRepo: false,
   gitDir: '',           // cached resolved git-dir absolute path (invalidated on cwd change)
+  gitCommonDir: '',     // cached resolved git-common-dir — linked worktree에서 공용 .git (refs/config/packed-refs/worktrees)
   branch: '',
   staged: [],
   unstaged: [],
@@ -32,7 +33,8 @@ const state = {
   branches: [],           // [{ name, isCurrent }]
   remoteBranches: [],     // ['origin/main', ...]
   remotes: [],            // ['origin', 'upstream', ...]
-  worktrees: [],          // [{ path, branch, head, isCurrent, isDetached, isBare, isLocked, isPrunable }]
+  worktrees: [],          // [{ path, branch, head, isCurrent, isMain, isDetached, isBare, isLocked, isPrunable }]
+  isLinkedWorktree: false, // 현재 저장소가 메인이 아닌 linked worktree인지
   stashes: [],            // [{ hash, shortHash, ref }]
   recoveryRefs: {},       // { [hash]: { selector, subject } }
   operationState: null,  // null | { type: 'rebase-merge'|'rebase-apply'|'merge'|'cherry-pick'|'revert', step?, total? }
