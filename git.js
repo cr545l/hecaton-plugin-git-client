@@ -358,8 +358,12 @@ async function gitStage(cwd, file) {
   return await gitMutation(['add', '-f', '--', file], cwd, 10000, 'Could not stage ' + file);
 }
 
+// unstage는 커밋 하나 없는 저장소(unborn HEAD)에서도 동작해야 한다.
+// 'restore --staged'나 'reset HEAD'는 HEAD를 해석하지 못해 fatal로 죽으므로,
+// HEAD를 생략한 'reset'을 쓴다. HEAD가 있으면 'reset HEAD'와 동작이 같고,
+// 없으면 인덱스에서 항목을 지워 untracked로 되돌린다. 워킹트리는 어느 쪽이든 그대로다.
 async function gitUnstage(cwd, file) {
-  return await gitMutation(['restore', '--staged', '--', file], cwd, 10000, 'Could not unstage ' + file);
+  return await gitMutation(['reset', '--', file], cwd, 10000, 'Could not unstage ' + file);
 }
 
 async function gitStageAll(cwd) {
@@ -369,7 +373,7 @@ async function gitStageAll(cwd) {
 }
 
 async function gitUnstageAll(cwd) {
-  return await gitMutation(['reset', 'HEAD'], cwd, GIT_MUTATION_TIMEOUT_MS, 'Could not unstage all files');
+  return await gitMutation(['reset'], cwd, GIT_MUTATION_TIMEOUT_MS, 'Could not unstage all files');
 }
 
 async function gitCommit(cwd, message) {
@@ -944,7 +948,7 @@ async function gitUnstageMultiple(cwd, files) {
   if (files.length === 0) return null;
   if (files.length === 1) return gitUnstage(cwd, files[0]);
   return await gitMutation(
-    ['restore', '--staged', '--', ...files],
+    ['reset', '--', ...files],
     cwd,
     GIT_MUTATION_TIMEOUT_MS,
     'Could not unstage ' + files.length + ' selected files'

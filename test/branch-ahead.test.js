@@ -1,4 +1,5 @@
-// Status(왼쪽) 패널 상단 브랜치명 옆의 푸시 대기 표기(↑N) 검증.
+// Branches 목록의 현재 브랜치(✓) 옆 푸시 대기 표기(↑N) 검증.
+// 상단 브랜치명 줄에는 붙이지 않는다.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -36,62 +37,6 @@ function resetState({ branch = 'main', ahead = 0, behind = 0, isLinkedWorktree =
   ui.hoveredLeftPanelRow = -1;
   ui.hostScrollRegions = [];
 }
-
-test('푸시 대기 커밋이 있으면 브랜치명 옆에 ↑N을 표기한다', () => {
-  resetState({ ahead: 3 });
-  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
-  assert.match(out[0], /^ main \u21913\s*$/);
-});
-
-test('푸시 대기 커밋이 없으면 표기하지 않는다', () => {
-  resetState({ ahead: 0 });
-  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
-  assert.match(out[0], /^ main\s*$/);
-  assert.equal(out[0].includes('\u2191'), false);
-});
-
-test('behind만 있을 때는 ↑ 표기가 붙지 않는다', () => {
-  resetState({ ahead: 0, behind: 5 });
-  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
-  assert.equal(out[0].includes('\u2191'), false);
-});
-
-test('↑N은 Push 버튼과 같은 orange로 칠한다', () => {
-  resetState({ ahead: 2 });
-  const raw = buildLeftPanel(PANEL_W, PANEL_H);
-  const idx = raw[0].indexOf('\u2191');
-  assert.ok(idx > 0, '화살표가 있어야 한다');
-  const codes = raw[0].substring(0, idx).match(/\x1b\[[0-9;]*m/g);
-  assert.ok(codes.includes(ORANGE), 'orange가 적용돼야 한다');
-});
-
-test('worktree 표기와 함께 나올 때 순서는 브랜치 → ↑N → [worktree]', () => {
-  resetState({ branch: 'feature/login', ahead: 4, isLinkedWorktree: true });
-  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
-  assert.match(out[0], /^ login \u21914 \[worktree\]\s*$/);
-});
-
-test('rebase 진행 중에도 ↑N과 작업 표기가 함께 보인다', () => {
-  resetState({ ahead: 7 });
-  state.operationState = { type: 'rebase-merge', step: 2, total: 5 };
-  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
-  assert.match(out[0], /\u21917/);
-  assert.match(out[0], /rebasing 2\/5/);
-});
-
-test('좁은 패널에서도 ↑N 때문에 줄 너비가 넘치지 않는다', () => {
-  resetState({ branch: 'a-very-long-branch-name-that-overflows', ahead: 128 });
-  const narrow = 20;
-  for (const line of plain(buildLeftPanel(narrow, PANEL_H))) {
-    assert.ok(line.length <= narrow - 1, `줄이 패널 폭을 넘음: [${line}] (${line.length} > ${narrow - 1})`);
-  }
-});
-
-test('좁은 패널에서 ↑N은 잘리지 않고 브랜치명이 먼저 줄어든다', () => {
-  resetState({ branch: 'a-very-long-branch-name-that-overflows', ahead: 9 });
-  const out = plain(buildLeftPanel(24, PANEL_H));
-  assert.match(out[0], /\u21919\s*$/);
-});
 
 // ── Branches 섹션(✓ 표시된 현재 브랜치) ──
 
@@ -163,4 +108,62 @@ test('좁은 패널에서 현재 브랜치 줄도 폭을 넘지 않는다', () =
   for (const line of plain(buildLeftPanel(narrow, PANEL_H))) {
     assert.ok(line.length <= narrow - 1, '줄이 패널 폭을 넘음: [' + line + '] (' + line.length + ' > ' + (narrow - 1) + ')');
   }
+});
+
+// ── 상단 브랜치명 줄에는 붙지 않는다 ──
+
+test('상단 브랜치명 줄에는 ↑N을 붙이지 않는다', () => {
+  resetState({ ahead: 3 });
+  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
+  assert.match(out[0], /^ main\s*$/);
+  assert.equal(out[0].includes('\u2191'), false);
+});
+
+test('linked worktree여도 상단 줄은 [worktree]만 유지한다', () => {
+  resetState({
+    branch: 'feature/login',
+    ahead: 4,
+    isLinkedWorktree: true,
+    branches: [{ name: 'feature/login', isCurrent: true }],
+  });
+  const raw = buildLeftPanel(PANEL_W, PANEL_H);
+  assert.match(plain(raw)[0], /^ login \[worktree\]\s*$/);
+  // 현재 브랜치 줄에는 그대로 붙는다
+  assert.match(currentRow(raw), /^\s*\u2713 login \u21914 \[worktree\]\s*$/);
+});
+
+test('rebase 진행 중에도 현재 브랜치에만 ↑N이 붙는다', () => {
+  resetState({ ahead: 7 });
+  state.operationState = { type: 'rebase-merge', step: 2, total: 5 };
+  const raw = buildLeftPanel(PANEL_W, PANEL_H);
+  assert.match(currentRow(raw), /\u21917/);
+  const top = plain(raw)[0];
+  assert.match(top, /rebasing 2\/5/);
+  assert.equal(top.includes('\u2191'), false);
+});
+
+// ── 색상 / behind ──
+
+test('behind만 있을 때는 ↑ 표기가 어디에도 붙지 않는다', () => {
+  resetState({ ahead: 0, behind: 5 });
+  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
+  assert.equal(out.some(l => l.includes('\u2191')), false);
+});
+
+test('↑N은 Push 버튼과 같은 orange로 칠한다', () => {
+  resetState({ ahead: 2 });
+  const raw = buildLeftPanel(PANEL_W, PANEL_H).find(l => l.includes('\u2713'));
+  const idx = raw.indexOf('\u2191');
+  assert.ok(idx > 0, '화살표가 있어야 한다');
+  const codes = raw.substring(0, idx).match(/\x1b\[[0-9;]*m/g);
+  assert.ok(codes.includes(ORANGE), 'orange가 적용돼야 한다');
+});
+
+test('좁은 패널에서 ↑N은 잘리지 않고 브랜치명이 먼저 줄어든다', () => {
+  resetState({
+    branch: 'a-very-long-branch-name-that-overflows',
+    ahead: 9,
+    branches: [{ name: 'a-very-long-branch-name-that-overflows', isCurrent: true }],
+  });
+  assert.match(currentRow(buildLeftPanel(24, PANEL_H)), /\u21919\s*$/);
 });
