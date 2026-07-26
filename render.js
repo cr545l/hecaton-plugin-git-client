@@ -907,6 +907,10 @@ function buildLeftPanel(w, h) {
   const lines = [];
   const clickMap = [];
   const innerW = w - 1;
+  // 푸시 대기 커밋 수 — 타이틀바 Push 버튼과 같은 화살표 표기를 쓴다.
+  // Branches 목록의 현재 브랜치에만 붙는다 (상단 브랜치명은 그대로 둔다).
+  const aheadTag = state.ahead > 0 ? ' \u2191' + state.ahead : '';
+  const aheadPart = aheadTag ? colors.orange + ansi.bold + aheadTag + ansi.reset : '';
 
   function pushLine(content, action) {
     if (visLen(content) > innerW) {
@@ -922,9 +926,6 @@ function buildLeftPanel(w, h) {
     let branchName = state.branch || '...';
     const slashIdx = branchName.lastIndexOf('/');
     if (slashIdx >= 0) branchName = branchName.substring(slashIdx + 1);
-    // 푸시 대기 커밋 수 — 타이틀바 Push 버튼과 같은 화살표 표기를 쓴다.
-    const aheadTag = state.ahead > 0 ? ' \u2191' + state.ahead : '';
-    const aheadPart = aheadTag ? colors.orange + ansi.bold + aheadTag + ansi.reset : '';
     // 현재 저장소가 메인이 아닌 linked worktree면 브랜치명 옆에 표기한다.
     const wtTag = state.isLinkedWorktree ? ' [worktree]' : '';
     const wtPart = wtTag ? colors.cyan + wtTag + ansi.reset : '';
@@ -933,11 +934,11 @@ function buildLeftPanel(w, h) {
       const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
       const opLabel = isRebase ? 'rebasing' : op.type === 'merge' ? 'merging' : op.type === 'cherry-pick' ? 'cherry-picking' : 'reverting';
       const suffix = isRebase && op.step ? ' (' + opLabel + ' ' + op.step + '/' + op.total + ')' : ' (' + opLabel + ')';
-      branchName = truncate(branchName, Math.max(3, availW - suffix.length - wtTag.length - aheadTag.length));
-      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + aheadPart + wtPart + colors.yellow + suffix + ansi.reset);
+      branchName = truncate(branchName, Math.max(3, availW - suffix.length - wtTag.length));
+      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + wtPart + colors.yellow + suffix + ansi.reset);
     } else {
-      branchName = truncate(branchName, Math.max(3, availW - wtTag.length - aheadTag.length));
-      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + aheadPart + wtPart);
+      branchName = truncate(branchName, Math.max(3, availW - wtTag.length));
+      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + wtPart);
     }
   }
 
@@ -969,9 +970,12 @@ function buildLeftPanel(w, h) {
     const isActive = activeBranch === fullRef;
     const tagText = tag || '';
     const tagPart = tagText ? colors.cyan + tagText + ansi.reset : '';
-    const maxW = Math.max(1, innerW - indent - visLen(tagText));
+    // ahead는 HEAD가 올라탄 브랜치에만 의미가 있으므로 현재 브랜치에만 붙인다.
+    const abText = isCurrent ? aheadTag : '';
+    const abPart = isCurrent ? aheadPart : '';
+    const maxW = Math.max(1, innerW - indent - visLen(tagText) - visLen(abText));
     if (isCurrent) {
-      const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + tagPart;
+      const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + abPart + tagPart;
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     } else {
       // 다른 워크트리가 점유한 브랜치는 [worktree] 표기와 같은 색으로 구분한다.

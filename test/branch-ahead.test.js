@@ -15,13 +15,13 @@ function plain(lines) {
   return lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, ''));
 }
 
-function resetState({ branch = 'main', ahead = 0, behind = 0, isLinkedWorktree = false } = {}) {
+function resetState({ branch = 'main', ahead = 0, behind = 0, isLinkedWorktree = false, branches } = {}) {
   state.loading = false;
   state.isGitRepo = true;
   state.gitNotFound = false;
   state.operationState = null;
   state.branch = branch;
-  state.branches = [{ name: branch, isCurrent: true }];
+  state.branches = branches || [{ name: branch, isCurrent: true }];
   state.remoteBranches = [];
   state.remotes = ['origin'];
   state.stashes = [];
@@ -91,4 +91,76 @@ test('좁은 패널에서 ↑N은 잘리지 않고 브랜치명이 먼저 줄어
   resetState({ branch: 'a-very-long-branch-name-that-overflows', ahead: 9 });
   const out = plain(buildLeftPanel(24, PANEL_H));
   assert.match(out[0], /\u21919\s*$/);
+});
+
+// ── Branches 섹션(✓ 표시된 현재 브랜치) ──
+
+function currentRow(rawLines) {
+  return plain(rawLines).find(l => l.includes('\u2713'));
+}
+
+test('Branches의 현재 브랜치에도 ↑N을 표기한다', () => {
+  resetState({
+    ahead: 3,
+    branches: [{ name: 'main', isCurrent: true }, { name: 'hotfix', isCurrent: false }],
+  });
+  assert.match(currentRow(buildLeftPanel(PANEL_W, PANEL_H)), /^\s*\u2713 main \u21913\s*$/);
+});
+
+test('Branches의 다른 브랜치에는 ↑N이 붙지 않는다', () => {
+  resetState({
+    ahead: 3,
+    branches: [{ name: 'main', isCurrent: true }, { name: 'hotfix', isCurrent: false }],
+  });
+  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
+  const hotfixRow = out.find(l => /^\s*hotfix\s*$/.test(l));
+  assert.ok(hotfixRow, 'hotfix 줄이 있어야 한다');
+  assert.equal(hotfixRow.includes('\u2191'), false);
+});
+
+test('그룹(feature/) 안의 현재 브랜치에도 ↑N을 표기한다', () => {
+  resetState({
+    branch: 'feature/login',
+    ahead: 5,
+    branches: [{ name: 'feature/login', isCurrent: true }, { name: 'feature/signup', isCurrent: false }],
+  });
+  assert.match(currentRow(buildLeftPanel(PANEL_W, PANEL_H)), /^\s*\u2713 login \u21915\s*$/);
+});
+
+test('현재 브랜치의 ↑N과 [worktree]가 함께 나온다', () => {
+  resetState({
+    branch: 'feature/login',
+    ahead: 2,
+    isLinkedWorktree: true,
+    branches: [{ name: 'feature/login', isCurrent: true }],
+  });
+  assert.match(currentRow(buildLeftPanel(PANEL_W, PANEL_H)), /^\s*\u2713 login \u21912 \[worktree\]\s*$/);
+});
+
+test('Remotes 목록의 브랜치에는 ↑N이 붙지 않는다', () => {
+  resetState({ ahead: 4 });
+  state.remoteBranches = ['origin/main', 'origin/hotfix'];
+  const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
+  const remoteIdx = out.findIndex(l => /^\s*[-+] Remotes/.test(l));
+  assert.ok(remoteIdx >= 0, 'Remotes 섹션이 있어야 한다');
+  for (const line of out.slice(remoteIdx)) {
+    assert.equal(line.includes('\u2191'), false, '리모트 줄에 화살표가 붙음: [' + line + ']');
+  }
+});
+
+test('ahead가 0이면 Branches의 현재 브랜치도 그대로다', () => {
+  resetState({ ahead: 0, branches: [{ name: 'main', isCurrent: true }] });
+  assert.match(currentRow(buildLeftPanel(PANEL_W, PANEL_H)), /^\s*\u2713 main\s*$/);
+});
+
+test('좁은 패널에서 현재 브랜치 줄도 폭을 넘지 않는다', () => {
+  resetState({
+    branch: 'a-very-long-branch-name-that-overflows',
+    ahead: 128,
+    branches: [{ name: 'a-very-long-branch-name-that-overflows', isCurrent: true }],
+  });
+  const narrow = 20;
+  for (const line of plain(buildLeftPanel(narrow, PANEL_H))) {
+    assert.ok(line.length <= narrow - 1, '줄이 패널 폭을 넘음: [' + line + '] (' + line.length + ' > ' + (narrow - 1) + ')');
+  }
 });
