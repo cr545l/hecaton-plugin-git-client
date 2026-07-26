@@ -1766,10 +1766,12 @@ function buildLogPanel(w, h) {
       const available = innerW - fixedLen;
       const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
       const isHead = /(?:^|,\s*)HEAD(?:\s*->|,|\s*$)/.test(decoRawOrig);
-      const decoRaw = decoRawOrig.split(', ').map(r =>
+      const decoTokens = buildDecoTokens(decoRawOrig.split(', ').map(r =>
         r.startsWith('HEAD -> ') ? r.substring(8) : r
-      ).join(', ');
-      const decoColorized = decoRaw ? colorizeDecoration(decoRaw, state.branch, isHead) : '';
+      ).join(', '));
+      // 폭 계산은 축약된 표기 기준이어야 subject 잘림 위치가 어긋나지 않는다
+      const decoRaw = decoPlainText(decoTokens);
+      const decoColorized = decoRaw ? colorizeDecoTokens(decoTokens, state.branch, isHead) : '';
       const safeSubject = (item.subject || '').replace(/[\r\n]/g, '');
       let subjStr, decoPart;
       if (available <= 0) {
@@ -2379,28 +2381,105 @@ function buildFreshPanel(w, h) {
 
 // ── Helpers ──
 
-function colorizeDecoration(plainDeco, currentBranch, isHead) {
-  if (!plainDeco) return '';
-  const refs = plainDeco.split(', ').filter(r => !r.endsWith('/HEAD'));
-  const parts = [];
-  for (const ref of refs) {
-    if (ref === 'HEAD') {
-      parts.push(colors.green + ansi.bold + 'HEAD' + ansi.reset);
-    } else if (ref === currentBranch) {
-      parts.push(colors.green + (isHead ? ansi.bold : '') + ref + ansi.reset);
-    } else if (ref === 'recovery') {
-      parts.push(RECOVERY_TEXT + 'recovery' + ansi.reset);
-    } else if (ref === 'refs/stash' || ref.startsWith('stash@{')) {
-      parts.push(STASH_TEXT + ref + ansi.reset);
-    } else if (ref.startsWith('tag:')) {
-      parts.push(colors.yellow + ref + ansi.reset);
-    } else if (ref.includes('/')) {
-      parts.push(colors.red + ref + ansi.reset);
-    } else {
-      parts.push(colors.cyan + ref + ansi.reset);
+// 리모트 추적 브랜치 접미 표기. "main, origin/main" → "main@origin"
+const REMOTE_MARK = '@';
+
+// ref가 리모트 추적 브랜치면 { remote, branch }를, 아니면 null을 돌려준다.
+// state.remotes를 기준으로 판정하므로 "feature/foo" 같은 슬래시 포함 로컬 브랜치를
+// 리모트로 오인하지 않는다.
+function splitRemoteRef(ref) {
+  const remotes = state.remotes || [];
+  let best = null;
+  for (const r of remotes) {
+    if (ref.length > r.length + 1 && ref.startsWith(r + '/')) {
+      // 리모트명이 겹칠 때(origin, origin/sub)는 더 긴 쪽이 맞다
+      if (!best || r.length > best.remote.length) {
+        best = { remote: r, branch: ref.substring(r.length + 1) };
+      }
     }
   }
+  if (best) return best;
+  // remotes가 아직 로드되지 않은 동안만 첫 '/' 기준으로 추정한다.
+  if (remotes.length === 0 && ref.includes('/') && !state.branches.some(b => b.name === ref)) {
+    const slash = ref.indexOf('/');
+    return { remote: ref.substring(0, slash), branch: ref.substring(slash + 1) };
+  }
+  return null;
+}
+
+// decoration 문자열을 토큰으로 쪼개고, 같은 커밋에 있는 동명의 리모트 추적 브랜치를
+// 로컬 브랜치의 접미로 흡수한다. 로컬에 짝이 없는 리모트 ref는 원래대로 "origin/foo"를
+// 유지해 로컬 브랜치와 헷갈리지 않게 둔다.
+function buildDecoTokens(plainDeco) {
+  const refs = plainDeco.split(', ').map(r => r.trim()).filter(r => r && !r.endsWith('/HEAD'));
+  const tokens = [];
+  const localAt = new Map();
+  for (const ref of refs) {
+    if (ref === 'HEAD') {
+      tokens.push({ kind: 'head', name: ref, remotes: [] });
+    } else if (ref === 'recovery') {
+      tokens.push({ kind: 'recovery', name: ref, remotes: [] });
+    } else if (ref === 'refs/stash' || ref.startsWith('stash@{')) {
+      tokens.push({ kind: 'stash', name: ref, remotes: [] });
+    } else if (ref.startsWith('tag:')) {
+      tokens.push({ kind: 'tag', name: ref, remotes: [] });
+    } else {
+      const split = splitRemoteRef(ref);
+      if (split) {
+        tokens.push({ kind: 'remote', name: ref, branch: split.branch, remote: split.remote, remotes: [] });
+      } else {
+        localAt.set(ref, tokens.length);
+        tokens.push({ kind: 'local', name: ref, remotes: [] });
+      }
+    }
+  }
+  const merged = [];
+  for (const token of tokens) {
+    if (token.kind === 'remote' && localAt.has(token.branch)) {
+      tokens[localAt.get(token.branch)].remotes.push(token.remote);
+      continue;
+    }
+    merged.push(token);
+  }
+  return merged;
+}
+
+function decoPlainText(tokens) {
+  return tokens
+    .map(t => t.name + (t.remotes.length ? REMOTE_MARK + t.remotes.join(',') : ''))
+    .join(', ');
+}
+
+function colorizeDecoTokens(tokens, currentBranch, isHead) {
+  const parts = [];
+  for (const token of tokens) {
+    let part;
+    if (token.kind === 'head') {
+      part = colors.green + ansi.bold + token.name + ansi.reset;
+    } else if (token.kind === 'recovery') {
+      part = RECOVERY_TEXT + token.name + ansi.reset;
+    } else if (token.kind === 'stash') {
+      part = STASH_TEXT + token.name + ansi.reset;
+    } else if (token.kind === 'tag') {
+      part = colors.yellow + token.name + ansi.reset;
+    } else if (token.kind === 'remote') {
+      part = colors.red + token.name + ansi.reset;
+    } else if (token.name === currentBranch) {
+      part = colors.green + (isHead ? ansi.bold : '') + token.name + ansi.reset;
+    } else {
+      part = colors.cyan + token.name + ansi.reset;
+    }
+    if (token.remotes.length) {
+      part += colors.red + REMOTE_MARK + token.remotes.join(',') + ansi.reset;
+    }
+    parts.push(part);
+  }
   return parts.join(colors.dim + ', ' + ansi.reset);
+}
+
+function colorizeDecoration(plainDeco, currentBranch, isHead) {
+  if (!plainDeco) return '';
+  return colorizeDecoTokens(buildDecoTokens(plainDeco), currentBranch, isHead);
 }
 
 function buildConflictDiffLines(innerW) {
@@ -2873,4 +2952,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons, buildLeftPanel };
+module.exports = { render, hintButtons, buildLeftPanel, buildDecoTokens, decoPlainText };
