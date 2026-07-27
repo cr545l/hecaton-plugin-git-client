@@ -771,8 +771,6 @@ async function gitIsRebaseNoop(cwd, ref) {
   const r = await gitResult(['merge-base', '--is-ancestor', ref, 'HEAD'], cwd, 10000);
   return !!(r && r.ok && r.exit_code === 0);
 }
-// --no-ff: 조상 커밋 위로도 커밋을 강제로 재적용한다(해시가 바뀐다).
-async function gitRebaseForceAsync(cwd, ref) { return await gitAsyncWrap(['rebase', '--no-ff', ref], cwd); }
 async function gitRebaseContinueAsync(cwd) { return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--continue'], cwd); }
 async function gitRebaseAbortAsync(cwd) { return await gitAsyncWrap(['rebase', '--abort'], cwd); }
 async function gitRebaseSkipAsync(cwd) { return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--skip'], cwd); }
@@ -1447,7 +1445,7 @@ module.exports = {
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
-  gitIsRebaseNoop, gitRebaseForceAsync,
+  gitIsRebaseNoop,
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
   gitCommitAmendAsync, gitCommitAmendMessageOnlyAsync, gitResetModeAsync,
