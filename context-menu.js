@@ -17,7 +17,8 @@ const {
   gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync,
-  gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
+  gitCheckRebaseConflicts, gitIsRebaseNoop, gitRebaseForceAsync,
+  gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
   gitExec, gitResetModeAsync, gitRewordCommitAsync, gitSquashIntoParentAsync,
   gitDropCommitAsync, gitEditCommitAsync,
   gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync,
@@ -1145,6 +1146,11 @@ async function handleContextMenuAction(actionId) {
         copyToClipboard(branchName);
         break;
       case 'branch_rebase_onto': {
+        // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
+        if (await gitIsRebaseNoop(state.cwd, branchName)) {
+          showRebaseNoopDialog(branchName);
+          break;
+        }
         // Pre-check for conflicts
         const conflictCheck = await gitCheckRebaseConflicts(state.cwd, branchName);
         if (conflictCheck.willConflict) {
@@ -1152,6 +1158,7 @@ async function handleContextMenuAction(actionId) {
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = branchName;
+          state.pendingRebaseForce = false;
           hecaton.dialog.show({
             type: 'message',
             title: 'Rebase',
@@ -1325,8 +1332,14 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'rebase': {
+      // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
+      if (await gitIsRebaseNoop(state.cwd, hash)) {
+        showRebaseNoopDialog(hash);
+        break;
+      }
       if (state.staged.length > 0 || state.unstaged.length > 0) {
         state.pendingRebaseRef = hash;
+        state.pendingRebaseForce = false;
         hecaton.dialog.show({
           type: 'message',
           title: 'Rebase',
@@ -1344,6 +1357,7 @@ async function handleContextMenuAction(actionId) {
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = hash;
+          state.pendingRebaseForce = false;
           hecaton.dialog.show({
             type: 'message',
             title: 'Rebase',
@@ -2054,6 +2068,66 @@ async function handleDialogResult(params) {
     state.pendingStash = false;
     return;
   }
+  // no-op 안내에서 고른 강제 재작성 — 조상 커밋 위로도 커밋을 새로 적는다.
+  if (state.pendingRebaseRef && buttonId === 'rebase_force') {
+    const ref = state.pendingRebaseRef;
+    // rebase 는 clean tree 를 요구하므로 로컬 변경이 있으면 stash 경로를 먼저 거친다.
+    if (state.staged.length > 0 || state.unstaged.length > 0) {
+      state.pendingRebaseForce = true;
+      hecaton.dialog.show({
+        type: 'message',
+        title: 'Rebase',
+        message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
+        buttons: [
+          { id: 'stash_rebase', label: 'Stash & Rebase', default: true },
+          { id: 'cancel', label: 'Cancel' },
+        ],
+      });
+      render();
+      return;
+    }
+    state.pendingRebaseRef = null;
+    state.pendingRebaseForce = false;
+    startSpinner('Rebasing (forced)...');
+    gitRebaseForceAsync(state.cwd, ref).then(async err => {
+      await refreshAsync();
+      stopSpinner();
+      if (state.rightView === 'log') refreshLog();
+      if (err && isStaleRebaseError(err)) {
+        state.pendingRebaseRef = ref;
+        state.pendingRebaseForce = true;
+        hecaton.dialog.show({
+          type: 'message',
+          title: 'Rebase',
+          message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+          buttons: [
+            { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
+            { id: 'cancel', label: 'Cancel' },
+          ],
+        });
+      } else if (err && isRebaseConflictError(err)) {
+        if (state.rightView !== 'diff') {
+          state.rightView = 'diff';
+          updateDiff();
+        }
+        render();
+      } else if (err) {
+        showError('Rebase failed:\n' + err);
+      } else {
+        render();
+      }
+    });
+    return;
+  }
+  // no-op 안내에서 고른 되돌리기 — 브랜치를 그 리비전으로 옮긴다(앞선 커밋은 버려진다).
+  if (state.pendingRebaseRef && buttonId === 'rebase_reset_hard') {
+    const ref = state.pendingRebaseRef;
+    state.pendingRebaseRef = null;
+    state.pendingRebaseForce = false;
+    startSpinner('Resetting...');
+    gitResetAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Reset'); });
+    return;
+  }
   if (state.pendingRebaseRef && buttonId === 'rebase_proceed') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
@@ -2089,12 +2163,16 @@ async function handleDialogResult(params) {
   }
   if (state.pendingRebaseRef && buttonId === 'abort_retry_rebase') {
     const ref = state.pendingRebaseRef;
+    const force = state.pendingRebaseForce;
     state.pendingRebaseRef = null;
+    state.pendingRebaseForce = false;
     (async () => {
       startSpinner('Aborting stale rebase...');
       await gitRebaseAbort(state.cwd);
       state.error = 'Retrying rebase...';
-      const retryErr = await gitRebaseAsync(state.cwd, ref);
+      const retryErr = force
+        ? await gitRebaseForceAsync(state.cwd, ref)
+        : await gitRebaseAsync(state.cwd, ref);
       await refreshAsync();
       stopSpinner();
       if (state.rightView === 'log') refreshLog();
@@ -2114,7 +2192,10 @@ async function handleDialogResult(params) {
   }
   if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
     const ref = state.pendingRebaseRef;
+    const force = state.pendingRebaseForce;
     state.pendingRebaseRef = null;
+    state.pendingRebaseForce = false;
+    const runRebase = () => (force ? gitRebaseForceAsync(state.cwd, ref) : gitRebaseAsync(state.cwd, ref));
     (async () => {
       startSpinner('Stash & Rebase... (1/3) Stashing');
       const stashErr = await gitStashSaveAsync(state.cwd);
@@ -2124,11 +2205,11 @@ async function handleDialogResult(params) {
         return;
       }
       state.error = 'Stash & Rebase... (2/3) Rebasing';
-      let rebaseErr = await gitRebaseAsync(state.cwd, ref);
+      let rebaseErr = await runRebase();
       if (rebaseErr && isStaleRebaseError(rebaseErr)) {
         state.error = 'Stash & Rebase... (2/3) Aborting stale rebase & retrying';
         await gitRebaseAbort(state.cwd);
-        rebaseErr = await gitRebaseAsync(state.cwd, ref);
+        rebaseErr = await runRebase();
       }
       if (rebaseErr && isRebaseConflictError(rebaseErr)) {
         await refreshAsync();
@@ -2163,6 +2244,7 @@ async function handleDialogResult(params) {
     })();
   } else {
     state.pendingRebaseRef = null;
+    state.pendingRebaseForce = false;
   }
 }
 
@@ -2292,6 +2374,35 @@ function showError(msg) {
 
 function isStaleRebaseError(err) {
   return err && (err.includes('rebase-merge') || err.includes('rebase-apply'));
+}
+
+// 해시는 짧게, 브랜치/태그 이름은 그대로 보여준다.
+function shortRefLabel(ref) {
+  return /^[0-9a-f]{20,40}$/i.test(ref) ? ref.substring(0, 8) : ref;
+}
+
+// 대상이 이미 HEAD 의 조상이면 git rebase 는 "up to date" 만 남기고 조용히 끝난다.
+// 사용자 눈에는 스피너만 돌다 아무 일도 안 일어난 것으로 보이므로,
+// 실행하지 않고 이유를 알린 뒤 실제로 쓸 만한 대안을 제시한다.
+function showRebaseNoopDialog(ref) {
+  const short = shortRefLabel(ref);
+  const branch = state.branch || 'HEAD';
+  state.pendingRebaseRef = ref;
+  state.pendingRebaseForce = false;
+  hecaton.dialog.show({
+    type: 'message',
+    title: 'Rebase',
+    message: "'" + short + "' is already an ancestor of '" + branch + "'.\n"
+      + 'There are no commits to move, so rebase would do nothing.\n\n'
+      + 'Force Rewrite: replay the commits on top of it (--no-ff, hashes change)\n'
+      + 'Reset: move ' + branch + ' back to ' + short + ' (--hard, discards the commits ahead)',
+    buttons: [
+      { id: 'rebase_force', label: 'Force Rewrite', default: true },
+      { id: 'rebase_reset_hard', label: 'Reset' },
+      { id: 'cancel', label: 'Cancel' },
+    ],
+  });
+  render();
 }
 
 function isRebaseConflictError(err) {

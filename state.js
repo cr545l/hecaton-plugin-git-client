@@ -52,6 +52,7 @@ const state = {
   minimized: false,
   pendingStash: false,
   pendingRebaseRef: null,
+  pendingRebaseForce: false,       // true: rebase --no-ff (조상 커밋 위로 강제 재작성)
   pendingDiscardFiles: null,
   pendingRemoveFiles: null,        // 버전관리 제외 대상 파일 경로 목록
   pendingRemoveKeepLocal: false,   // true: git rm --cached (로컬 유지), false: git rm (로컬 삭제)

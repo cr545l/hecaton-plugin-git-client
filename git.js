@@ -735,7 +735,11 @@ async function gitPush(cwd) { return await gitRunOrError(['push'], cwd, 30000, '
 async function gitAsyncWrap(args, cwd, timeout) {
   const r = await gitResult(args, cwd, timeout || 30000);
   if (r && r.ok && r.exit_code === 0) return null;
-  return (r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '') || 'Operation failed';
+  // rebase/merge 계열은 실패 사유를 stdout 으로만 내보내는 경우가 있다.
+  // stderr 가 비었다고 'Operation failed' 로 뭉개지 말고 stdout 을 쓴다.
+  const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';
+  const stdout = r && r.stdout ? r.stdout.replace(/\r\n/g, '\n').trim() : '';
+  return stderr || stdout || 'Operation failed';
 }
 
 async function gitCheckRebaseConflicts(cwd, targetRef) {
@@ -760,6 +764,15 @@ async function gitFetchAsync(cwd) { return await gitAsyncWrap(['fetch', '--all',
 async function gitPullAsync(cwd) { return await gitAsyncWrap(['pull'], cwd); }
 async function gitPushAsync(cwd) { return await gitAsyncWrap(['push'], cwd); }
 async function gitRebaseAsync(cwd, ref) { return await gitAsyncWrap(['rebase', ref], cwd); }
+// ref 가 이미 HEAD 의 조상이면 옮길 커밋이 없어 rebase 는 아무 일도 하지 않는다.
+// 이때 git 은 "Current branch X is up to date." 를 stdout 에 찍고 exit 0 으로 끝내므로
+// 호출부에서 성공과 구분되지 않는다. 실행 전에 미리 판별해 안내에 쓴다.
+async function gitIsRebaseNoop(cwd, ref) {
+  const r = await gitResult(['merge-base', '--is-ancestor', ref, 'HEAD'], cwd, 10000);
+  return !!(r && r.ok && r.exit_code === 0);
+}
+// --no-ff: 조상 커밋 위로도 커밋을 강제로 재적용한다(해시가 바뀐다).
+async function gitRebaseForceAsync(cwd, ref) { return await gitAsyncWrap(['rebase', '--no-ff', ref], cwd); }
 async function gitRebaseContinueAsync(cwd) { return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--continue'], cwd); }
 async function gitRebaseAbortAsync(cwd) { return await gitAsyncWrap(['rebase', '--abort'], cwd); }
 async function gitRebaseSkipAsync(cwd) { return await gitAsyncWrap(['-c', 'core.editor=true', 'rebase', '--skip'], cwd); }
@@ -1434,6 +1447,7 @@ module.exports = {
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
+  gitIsRebaseNoop, gitRebaseForceAsync,
   gitMergeAsync, gitResetAsync, gitCheckoutRefAsync, gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync,
   gitCommitAsync, gitStashSaveAsync, gitStashPopAsync,
   gitCommitAmendAsync, gitCommitAmendMessageOnlyAsync, gitResetModeAsync,
