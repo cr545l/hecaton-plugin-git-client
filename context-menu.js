@@ -16,7 +16,7 @@ const {
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
   gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync,
   gitCheckRebaseConflicts, gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
   gitExec, gitResetModeAsync, gitRewordCommitAsync, gitSquashIntoParentAsync,
   gitDropCommitAsync, gitEditCommitAsync,
@@ -1750,6 +1750,18 @@ async function handleDialogResult(params) {
       if (buttonId === 'force_push' && target) {
         startSpinner('Force pushing...');
         gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true, forceMeta: true }); });
+      }
+      return;
+    }
+    // Renamed branch: upstream name no longer matches the local name, so the
+    // user picked which remote branch to update.
+    if (action === 'push-name-mismatch') {
+      if (target && (buttonId === 'push_local' || buttonId === 'push_upstream')) {
+        startSpinner('Pushing...');
+        const pushPromise = buttonId === 'push_local'
+          ? gitPushToRemoteAsync(state.cwd, target.remote, target.local)
+          : gitPushHeadToBranchAsync(state.cwd, target.remote, target.upstreamBranch);
+        pushPromise.then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }); });
       }
       return;
     }

@@ -531,6 +531,19 @@ async function gitLogCommits(cwd, extraRefs, maxCount) {
   }
 }
 
+// Split an upstream ref such as "origin/hecaton/render" into its remote and
+// branch parts. Remote names never contain '/' but branch names do, so match
+// against the known remotes first and fall back to the leading segment.
+function splitUpstreamRef(upstream, remotes) {
+  if (!upstream) return { remote: '', branch: '' };
+  for (const r of (remotes || [])) {
+    if (r && upstream.startsWith(r + '/')) return { remote: r, branch: upstream.substring(r.length + 1) };
+  }
+  const idx = upstream.indexOf('/');
+  if (idx < 0) return { remote: '', branch: upstream };
+  return { remote: upstream.substring(0, idx), branch: upstream.substring(idx + 1) };
+}
+
 async function gitBranches(cwd) {
   try {
     const raw = (await git(['branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], cwd)).trim();
@@ -970,6 +983,10 @@ async function gitGetRemoteUrl(cwd, remote) {
 
 async function gitMergeFastForwardAsync(cwd, ref) { return await gitAsyncWrap(['merge', '--ff-only', ref], cwd); }
 async function gitPushToRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '-u', remote, branch], cwd); }
+// Push HEAD onto a differently named remote branch. Needed when a local branch
+// was renamed: its upstream still points at the old name and plain `git push`
+// refuses that under push.default=simple.
+async function gitPushHeadToBranchAsync(cwd, remote, remoteBranch) { return await gitAsyncWrap(['push', remote, 'HEAD:refs/heads/' + remoteBranch], cwd); }
 async function gitPullFromRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', remote, branch], cwd); }
 async function gitPullRebaseAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', '--rebase', remote, branch], cwd); }
 async function gitForcePushAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '--force-with-lease', remote, branch], cwd); }
@@ -1424,8 +1441,9 @@ module.exports = {
   gitRewordCommitAsync, gitSquashIntoParentAsync, gitDropCommitAsync, gitEditCommitAsync,
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPullFromRemoteAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync,
   gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync,
+  splitUpstreamRef,
   gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,
   gitRemoteRemove, gitRemoteRename, gitRemoteSetUrl, gitRemotePruneAsync,
   gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,

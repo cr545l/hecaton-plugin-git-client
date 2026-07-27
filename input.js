@@ -3,6 +3,7 @@ const { state, ui } = require('./state');
 const hostScroll = require('./scroll');
 const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitCommitAmendAsync, gitCommitMessage, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
+  splitUpstreamRef,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitMergeAbort, gitCherryPickAbort, gitCherryPickSkip, gitRevertAbort, gitRevertSkip,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
@@ -80,6 +81,38 @@ function showErrorDialog(msg) {
   });
 }
 
+// Detect a branch whose upstream carries a different name, which is what a
+// rename leaves behind: `git branch -m` keeps branch.<name>.merge pointing at
+// the old remote branch, and a bare `git push` then aborts under the default
+// push.default=simple. Returns the parts needed to offer both targets.
+function getUpstreamNameMismatch(branch) {
+  if (!branch || !branch.upstream) return null;
+  const parts = splitUpstreamRef(branch.upstream, state.remotes);
+  if (!parts.remote || !parts.branch || parts.branch === branch.name) return null;
+  return { remote: parts.remote, local: branch.name, upstream: branch.upstream, upstreamBranch: parts.branch };
+}
+
+function shortRefLabel(name) {
+  return name.length > 24 ? name.substring(0, 23) + '…' : name;
+}
+
+function showPushNameMismatchDialog(info) {
+  hecaton.dialog.show({
+    type: 'message',
+    title: 'Push',
+    message: "Local branch '" + info.local + "' tracks '" + info.upstream + "', which has a different name.\n\n"
+      + "Push as '" + info.local + "': updates '" + info.remote + '/' + info.local + "' and retargets the upstream.\n"
+      + "Push to '" + info.upstreamBranch + "': updates the tracked branch and keeps the current upstream.",
+    buttons: [
+      { id: 'push_local', label: "Push as '" + shortRefLabel(info.local) + "'", default: true },
+      { id: 'push_upstream', label: "Push to '" + shortRefLabel(info.upstreamBranch) + "'" },
+      { id: 'cancel', label: 'Cancel' },
+    ],
+  });
+  state.pendingDialogAction = 'push-name-mismatch';
+  state.pendingDialogTarget = info;
+}
+
 // Push current branch. With multiple remotes, let the user pick one via a
 // context menu (handled by 'push_to_remote:' in context-menu.js); otherwise
 // push directly to the tracked/sole remote.
@@ -88,8 +121,13 @@ function pushCurrentBranch() {
     hecaton.menu.show({ items: buildPushRemoteMenuItems() }).catch(() => null);
     return;
   }
-  startSpinner('Pushing...');
   const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
+  const mismatch = getUpstreamNameMismatch(currentBranch);
+  if (mismatch) {
+    showPushNameMismatchDialog(mismatch);
+    return;
+  }
+  startSpinner('Pushing...');
   const pushPromise = currentBranch && !currentBranch.upstream
     ? (state.remotes.length > 0
         ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
