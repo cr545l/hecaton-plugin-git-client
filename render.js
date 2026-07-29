@@ -921,8 +921,14 @@ function buildLeftPanel(w, h) {
   }
 
   // Branch name + worktree 표기 + rebase state
+  // Branches 목록의 현재 브랜치와 같은 표기(✓ + green)를 쓰고, 클릭하면 목록의 그 줄로 스크롤한다.
+  // detached HEAD면 목록에도 ✓ 줄이 없으므로 표기도 클릭도 붙이지 않는다.
+  const currentBranchEntry = state.branches.find(b => b.isCurrent) || null;
   {
-    const availW = innerW - 1;
+    const mark = currentBranchEntry ? '✓ ' : '';
+    const nameColor = currentBranchEntry ? colors.green : colors.value;
+    const revealEntry = currentBranchEntry ? { action: 'reveal-current-branch', branch: currentBranchEntry.name } : null;
+    const availW = innerW - 1 - mark.length;
     let branchName = state.branch || '...';
     const slashIdx = branchName.lastIndexOf('/');
     if (slashIdx >= 0) branchName = branchName.substring(slashIdx + 1);
@@ -935,10 +941,10 @@ function buildLeftPanel(w, h) {
       const opLabel = isRebase ? 'rebasing' : op.type === 'merge' ? 'merging' : op.type === 'cherry-pick' ? 'cherry-picking' : 'reverting';
       const suffix = isRebase && op.step ? ' (' + opLabel + ' ' + op.step + '/' + op.total + ')' : ' (' + opLabel + ')';
       branchName = truncate(branchName, Math.max(3, availW - suffix.length - wtTag.length));
-      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + wtPart + colors.yellow + suffix + ansi.reset);
+      pushLine(' ' + nameColor + ansi.bold + mark + branchName + ansi.reset + wtPart + colors.yellow + suffix + ansi.reset, revealEntry);
     } else {
       branchName = truncate(branchName, Math.max(3, availW - wtTag.length));
-      pushLine(' ' + colors.value + ansi.bold + branchName + ansi.reset + wtPart);
+      pushLine(' ' + nameColor + ansi.bold + mark + branchName + ansi.reset + wtPart, revealEntry);
     }
   }
 
@@ -947,6 +953,7 @@ function buildLeftPanel(w, h) {
   if (state.loading) {
     pushLine(colors.dim + ' Loading...' + ansi.reset);
     ui.leftTabInfo = null;
+    ui.leftCurrentBranchLineIdx = -1;
     ui.leftPanelClickMap = clickMap.slice(0, h);
     return lines.slice(0, h);
   }
@@ -958,6 +965,7 @@ function buildLeftPanel(w, h) {
       pushLine(colors.red + ' Not a git repository' + ansi.reset);
     }
     ui.leftTabInfo = null;
+    ui.leftCurrentBranchLineIdx = -1;
     ui.leftPanelClickMap = clickMap.slice(0, h);
     return lines.slice(0, h);
   }
@@ -1001,6 +1009,8 @@ function buildLeftPanel(w, h) {
   const currentBranchTag = state.isLinkedWorktree ? ' [worktree]' : '';
 
   // Branches
+  // 상단 브랜치명 클릭 시 스크롤 대상 — 목록에 그려진 현재 브랜치 줄의 인덱스.
+  let currentBranchLineIdx = -1;
   {
     const collapsed = !!ui.collapsedSections.branches;
     pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Branches' + ansi.reset, { action: 'toggle-section', section: 'branches' });
@@ -1025,12 +1035,14 @@ function buildLeftPanel(w, h) {
         if (!groupCollapsed) {
           for (const item of items) {
             const fullName = prefix + '/' + item.shortName;
+            if (item.isCurrent) currentBranchLineIdx = lines.length;
             pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent, false,
               item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName)), { action: 'goto-branch', branch: fullName });
           }
         }
       }
       for (const b of topLevel) {
+        if (b.isCurrent) currentBranchLineIdx = lines.length;
         pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
           b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name)), { action: 'goto-branch', branch: b.name });
       }
@@ -1170,6 +1182,21 @@ function buildLeftPanel(w, h) {
   const maxScroll = Math.max(0, lines.length - h);
   ui.leftMaxScroll = maxScroll;
   if (ui.leftPanelScrollOffset > maxScroll) ui.leftPanelScrollOffset = maxScroll;
+
+  // 상단 브랜치명 클릭 → Branches 목록의 현재 브랜치 줄이 보이도록 최소한만 스크롤한다.
+  // 위아래 여유(margin)를 둬서 뷰포트 가장자리에 딱 붙지 않게 한다.
+  // 오프셋만 바꾸면 프레임 끝의 scroll.set(scroll.js)으로 호스트 스크롤도 따라온다.
+  ui.leftCurrentBranchLineIdx = currentBranchLineIdx;
+  if (ui.leftRevealCurrentBranch) {
+    ui.leftRevealCurrentBranch = false;
+    if (currentBranchLineIdx >= 0 && h > 0) {
+      const margin = Math.min(2, Math.max(0, (h - 1) >> 1));
+      let off = ui.leftPanelScrollOffset;
+      if (currentBranchLineIdx - margin < off) off = currentBranchLineIdx - margin;
+      else if (currentBranchLineIdx + margin > off + h - 1) off = currentBranchLineIdx + margin - h + 1;
+      ui.leftPanelScrollOffset = Math.max(0, Math.min(maxScroll, off));
+    }
+  }
   if (maxScroll > 0) {
     ui.scrollPct.status = Math.round((ui.leftPanelScrollOffset / maxScroll) * 100);
   } else {
@@ -1194,6 +1221,16 @@ function buildLeftPanel(w, h) {
   }
 
   return visibleLines;
+}
+
+// 상단 브랜치명 클릭 처리 — Branches 목록의 현재 브랜치 줄을 화면에 드러낸다.
+// 섹션/그룹이 접혀 있으면 그 줄 자체가 없으므로 먼저 펼치고, 실제 스크롤은
+// 다음 buildLeftPanel에서 (펼친 뒤의) 줄 인덱스를 알 때 수행한다.
+function revealCurrentBranch(branchName) {
+  ui.collapsedSections.branches = false;
+  const slashIdx = branchName ? branchName.indexOf('/') : -1;
+  if (slashIdx > 0) ui.collapsedGroups['b:' + branchName.substring(0, slashIdx)] = false;
+  ui.leftRevealCurrentBranch = true;
 }
 
 // ── Middle panel (diff mode): file list ──
@@ -2959,4 +2996,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons, buildLeftPanel, buildDecoTokens, decoPlainText };
+module.exports = { render, hintButtons, buildLeftPanel, revealCurrentBranch, buildDecoTokens, decoPlainText };

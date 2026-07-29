@@ -12,7 +12,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
-const { render } = require('./render');
+const { render, revealCurrentBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
@@ -1387,12 +1387,14 @@ async function handleMouseData(data) {
         ui.hoveredDiffHunkIdx = newDiffHunkHover;
         ui.hoveredCommitAmend = newCommitAmendHover;
         // Update mouse cursor shape
+        // 호버 시 밑줄이 그어지는 요소(= 클릭 가능한 버튼/메뉴)는 모두 손가락 커서로 맞춘다.
+        // Status 패널의 브랜치명·섹션 헤더·브랜치/워크트리/스태시 줄(leftPanelClickMap)도 포함된다.
         if (!ui.dragging) {
           if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
             setMouseShape('ew-resize');
           } else if (newDivHover === 'horizontal') {
             setMouseShape('ns-resize');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover) {
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -1842,6 +1844,10 @@ async function handleMouseData(data) {
               updateFreshDetail();
       
               state.focusPanel = 'status';
+              render();
+            } else if (entry.action === 'reveal-current-branch') {
+              // 상단 브랜치명 클릭 — Branches 목록의 현재 브랜치 줄로 스크롤한다.
+              revealCurrentBranch(entry.branch);
               render();
             } else if (entry.action === 'toggle-section') {
               ui.collapsedSections[entry.section] = !ui.collapsedSections[entry.section];

@@ -1,5 +1,5 @@
 // Branches 목록의 현재 브랜치(✓) 옆 푸시 대기 표기(↑N) 검증.
-// 상단 브랜치명 줄에는 붙이지 않는다.
+// 상단 브랜치명 줄에도 ✓가 붙으므로 Branches 섹션 아래에서만 찾는다.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -40,8 +40,20 @@ function resetState({ branch = 'main', ahead = 0, behind = 0, isLinkedWorktree =
 
 // ── Branches 섹션(✓ 표시된 현재 브랜치) ──
 
+// 상단 브랜치명 줄에도 ✓가 붙으므로 Branches 섹션 아래에서만 찾는다.
+function currentRawRow(rawLines) {
+  const flat = plain(rawLines);
+  const start = flat.findIndex(l => /^\s*[-+] Branches/.test(l));
+  if (start < 0) return undefined;
+  for (let i = start + 1; i < flat.length; i++) {
+    if (flat[i].includes('\u2713')) return rawLines[i];
+  }
+  return undefined;
+}
+
 function currentRow(rawLines) {
-  return plain(rawLines).find(l => l.includes('\u2713'));
+  const raw = currentRawRow(rawLines);
+  return raw === undefined ? undefined : plain([raw])[0];
 }
 
 test('Branches의 현재 브랜치에도 ↑N을 표기한다', () => {
@@ -115,7 +127,7 @@ test('좁은 패널에서 현재 브랜치 줄도 폭을 넘지 않는다', () =
 test('상단 브랜치명 줄에는 ↑N을 붙이지 않는다', () => {
   resetState({ ahead: 3 });
   const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
-  assert.match(out[0], /^ main\s*$/);
+  assert.match(out[0], /^ \u2713 main\s*$/);
   assert.equal(out[0].includes('\u2191'), false);
 });
 
@@ -127,7 +139,7 @@ test('linked worktree여도 상단 줄은 [worktree]만 유지한다', () => {
     branches: [{ name: 'feature/login', isCurrent: true }],
   });
   const raw = buildLeftPanel(PANEL_W, PANEL_H);
-  assert.match(plain(raw)[0], /^ login \[worktree\]\s*$/);
+  assert.match(plain(raw)[0], /^ ✓ login \[worktree\]\s*$/);
   // 현재 브랜치 줄에는 그대로 붙는다
   assert.match(currentRow(raw), /^\s*\u2713 login \u21914 \[worktree\]\s*$/);
 });
@@ -152,7 +164,7 @@ test('behind만 있을 때는 ↑ 표기가 어디에도 붙지 않는다', () =
 
 test('↑N은 Push 버튼과 같은 orange로 칠한다', () => {
   resetState({ ahead: 2 });
-  const raw = buildLeftPanel(PANEL_W, PANEL_H).find(l => l.includes('\u2713'));
+  const raw = currentRawRow(buildLeftPanel(PANEL_W, PANEL_H));
   const idx = raw.indexOf('\u2191');
   assert.ok(idx > 0, '화살표가 있어야 한다');
   const codes = raw.substring(0, idx).match(/\x1b\[[0-9;]*m/g);
