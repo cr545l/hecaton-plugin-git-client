@@ -1,6 +1,8 @@
 // Git operations via hecaton host API (exec_process, fs_*)
 // No direct child_process or fs usage — all operations go through host permission system.
 
+const nodePath = require('path');
+
 async function gitExec(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (result && result.ok) {
@@ -128,6 +130,42 @@ function unquoteGitPath(p) {
     return Buffer.from(bytes).toString('utf8');
   }
   return p;
+}
+
+// git이 뱉는 파일 경로(status/diff-files/ls-files)는 항상 저장소 루트 기준인데,
+// pathspec은 실행 cwd 기준으로 해석된다. 하위 디렉터리에서 열면 두 기준이 어긋나
+// 목록에 보이는 경로를 그대로 넘기는 stage/discard/diff가 전부 빗나간다
+// ("error: pathspec 'frontend/package.json' did not match any file(s) known to git").
+// 저장소를 열 때 워크트리 루트로 cwd를 맞춰 두 기준을 일치시킨다.
+// .git이 디렉터리면 일반 저장소, 파일이면 linked worktree/submodule — 어느 쪽이든
+// .git을 품은 디렉터리가 워크트리 루트다. 디스크 탐색을 먼저 하는 이유는 시작 경로에서
+// git spawn을 늘리지 않기 위해서고, 못 찾은 경우(GIT_WORK_TREE 등)에만 git에 물어본다.
+// 끝까지 확정하지 못하면(bare 저장소, 저장소 아님) 원래 경로를 그대로 둔다.
+async function resolveWorkTreeRoot(cwd) {
+  if (!cwd) return cwd;
+  let dir;
+  try {
+    dir = nodePath.resolve(cwd);
+  } catch {
+    return cwd;
+  }
+  let probe = dir;
+  while (probe) {
+    try {
+      const st = await hecaton.fs.stat({ path: nodePath.join(probe, '.git') });
+      if (st && st.exists) return probe;
+    } catch { /* keep walking */ }
+    const parent = nodePath.dirname(probe);
+    if (!parent || parent === probe) break;
+    probe = parent;
+  }
+  const top = (await gitExec(['--no-optional-locks', 'rev-parse', '--show-toplevel'], cwd)).trim();
+  if (!top) return cwd;
+  try {
+    return nodePath.resolve(top);
+  } catch {
+    return top;
+  }
 }
 
 async function gitIsRepo(cwd) {
@@ -1423,6 +1461,7 @@ module.exports = {
   git,
   gitExec,
   unquoteGitPath,
+  resolveWorkTreeRoot,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,

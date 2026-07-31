@@ -27,6 +27,7 @@ const {
   gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,
   gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
+  resolveWorkTreeRoot,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
@@ -2245,6 +2246,9 @@ function hasLocalChanges() {
 // 다른 경로의 저장소로 전환 (탭 변경/worktree 열기/clone 완료 공용)
 async function openRepositoryAt(path) {
   if (ui.stopGitWatcher) ui.stopGitWatcher();
+  // 폴더 선택/worktree 열기로 하위 디렉터리가 들어와도 워크트리 루트로 맞춘다 —
+  // git 출력 경로(루트 기준)와 pathspec 해석 기준(cwd)이 어긋나면 파일 조작이 전부 실패한다.
+  path = await resolveWorkTreeRoot(path);
   state.cwd = path;
   await require('./persist').attachRepo(path);
   state.isGitRepo = false;

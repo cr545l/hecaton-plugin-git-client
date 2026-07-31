@@ -25,6 +25,7 @@ const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUser
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
+const { resolveWorkTreeRoot } = require('./git');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
 const path = require('path');
@@ -114,6 +115,9 @@ async function main() {
       state.cwd = process.cwd();
     }
   }
+  // 저장소 하위 디렉터리에서 열렸으면 워크트리 루트로 맞춘다 — git이 보고하는
+  // 파일 경로(루트 기준)와 pathspec 해석 기준(cwd)을 일치시켜야 stage/discard/diff가 맞는다.
+  state.cwd = await resolveWorkTreeRoot(state.cwd);
   // 저장된 UI 설정(탭/패널/분할 비율 등)을 프로젝트 파일에서 복원
   await persist.attachRepo(state.cwd);
 
