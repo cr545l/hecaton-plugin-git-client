@@ -25,6 +25,7 @@ const colors = {
   yellow: CSI + '33m',        // yellow
   cyan: CSI + '36m',          // cyan
   orange: CSI + '33m',        // yellow (dark gold on light themes)
+  pinned: CSI + '95m',        // bright magenta — 핀 고정 브랜치 (green/red/cyan/yellow와 겹치지 않음)
   border: CSI + '2m',         // SGR dim (faint)
   sectionHeader: CSI + '39m', // default foreground
   cursor: CSI + '39m',        // default foreground

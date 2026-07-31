@@ -1,4 +1,4 @@
-const { state, ui } = require('./state');
+const { state, ui, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch } = require('./state');
 function baseName(p) { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return s.substring(s.lastIndexOf('/') + 1); }
 function extName(p) { const b = baseName(p); const i = b.lastIndexOf('.'); return i <= 0 ? '' : b.substring(i); }
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
@@ -285,6 +285,11 @@ function buildBranchContextMenuItems(branchName) {
   if (trackingChildren.length > 0) {
     items.push({ id: 'branch_tracking', label: 'Tracking', children: trackingChildren });
   }
+
+  items.push({ type: 'separator' });
+  items.push(isPinnedBranch(branchName)
+    ? { id: 'branch_pin', label: "Unpin '" + branchName + "'", icon: 'pinned' }
+    : { id: 'branch_pin', label: "Pin '" + branchName + "'", icon: 'pin' });
 
   items.push({ type: 'separator' });
   items.push(
@@ -1142,6 +1147,11 @@ async function handleContextMenuAction(actionId) {
         await afterGitOp(err, 'Unset upstream');
         break;
       }
+      case 'branch_pin':
+        // 핀은 순수 UI 상태다 — git 호출 없이 토글하고 render()로 다시 그리며 저장까지 맡긴다.
+        togglePinnedBranch(branchName);
+        render();
+        break;
       case 'branch_copy_name':
         copyToClipboard(branchName);
         break;
@@ -1594,6 +1604,7 @@ async function handleDialogResult(params) {
       if (buttonId === 'delete') {
         startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, false);
+        if (!err) unpinBranch(target);   // 사라진 브랜치의 핀은 남기지 않는다
         if (!state.spinnerActive) state.error = null;
         await refreshAsync();
         if (state.rightView === 'log') refreshLog();
@@ -1610,6 +1621,7 @@ async function handleDialogResult(params) {
       } else if (buttonId === 'force') {
         startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, true);
+        if (!err) unpinBranch(target);   // 사라진 브랜치의 핀은 남기지 않는다
         await afterGitOp(err, 'Delete branch');
       }
       return;
@@ -1972,6 +1984,7 @@ async function handleDialogResult(params) {
       let err;
       if (action === 'rename-branch') {
         err = await gitRenameBranch(state.cwd, target, name);
+        if (!err) renamePinnedBranch(target, name);   // 핀은 이름으로 물려 있어 함께 옮긴다
       } else if (action === 'rename-stash') {
         err = await gitStashRename(state.cwd, target, name);
       } else if (action === 'new-branch') {

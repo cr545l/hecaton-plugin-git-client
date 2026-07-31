@@ -1,7 +1,7 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
-const { state, ui } = require('./state');
+const { state, ui, isPinnedBranch } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
@@ -987,8 +987,15 @@ function buildLeftPanel(w, h) {
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     } else {
       // 다른 워크트리가 점유한 브랜치는 [worktree] 표기와 같은 색으로 구분한다.
-      const clr = isRemote ? colors.red : heldByWorktree ? colors.cyan : colors.value;
-      const content = ' '.repeat(indent) + clr + truncate(name, maxW) + ansi.reset + tagPart;
+      // 핀은 색(bright magenta)으로 드러내되, 워크트리 점유 표시가 더 강한 제약이라 색을 양보하고
+      // bold만 얹는다 — 그래도 주변 브랜치와 구분된다.
+      // 리모트 추적 브랜치는 동명 로컬 브랜치의 핀을 따라간다(origin/develop ← develop).
+      const pinned = isRemote ? isPinnedRemoteRef(fullRef) : isPinnedBranch(fullRef);
+      const clr = heldByWorktree ? colors.cyan
+        : pinned ? colors.pinned
+        : isRemote ? colors.red : colors.value;
+      const emph = pinned ? ansi.bold : '';
+      const content = ' '.repeat(indent) + clr + emph + truncate(name, maxW) + ansi.reset + tagPart;
       return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
     }
   }
@@ -1007,6 +1014,27 @@ function buildLeftPanel(w, h) {
   }
   // 저장소 자체가 linked worktree면 현재 브랜치에는 상단 브랜치명과 같은 표기를 붙인다.
   const currentBranchTag = state.isLinkedWorktree ? ' [worktree]' : '';
+
+  // Pinned — 핀 고정한 브랜치를 Branches 위에 모아 그룹 접힘/스크롤과 무관하게 바로 닿게 한다.
+  // 목록은 이름만 들고 있으므로 실제로 존재하는 브랜치만 골라 지정 순서대로 그린다.
+  // (Branches 트리에도 그대로 남는다 — 트리의 그룹 구조를 깨지 않기 위해서다.)
+  {
+    const pinned = [];
+    for (const name of ui.pinnedBranches) {
+      const b = state.branches.find(x => x.name === name);
+      if (b) pinned.push(b);
+    }
+    if (pinned.length > 0) {
+      const collapsed = !!ui.collapsedSections.pinned;
+      pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Pinned' + ansi.reset, { action: 'toggle-section', section: 'pinned' });
+      if (!collapsed) {
+        for (const b of pinned) {
+          pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
+            b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name)), { action: 'goto-branch', branch: b.name });
+        }
+      }
+    }
+  }
 
   // Branches
   // 상단 브랜치명 클릭 시 스크롤 대상 — 목록에 그려진 현재 브랜치 줄의 인덱스.
@@ -2451,6 +2479,12 @@ function splitRemoteRef(ref) {
   return null;
 }
 
+// 리모트 추적 브랜치가 핀 고정된 로컬 브랜치의 짝인지 — "origin/develop"은 로컬 "develop"의 핀을 따른다.
+function isPinnedRemoteRef(ref) {
+  const split = splitRemoteRef(ref);
+  return !!split && isPinnedBranch(split.branch);
+}
+
 // decoration 문자열을 토큰으로 쪼개고, 같은 커밋에 있는 동명의 리모트 추적 브랜치를
 // 로컬 브랜치의 접미로 흡수한다. 로컬에 짝이 없는 리모트 ref는 원래대로 "origin/foo"를
 // 유지해 로컬 브랜치와 헷갈리지 않게 둔다.
@@ -2496,7 +2530,14 @@ function decoPlainText(tokens) {
 
 function colorizeDecoTokens(tokens, currentBranch, isHead) {
   const parts = [];
+  const PINNED_STYLE = colors.pinned + ansi.bold;
   for (const token of tokens) {
+    // 핀 고정 브랜치는 history에서도 같은 색으로 눈에 띄게 한다. 리모트 추적 브랜치는
+    // 동명 로컬 브랜치의 핀을 따라가고(origin/develop ← develop), 현재 브랜치는
+    // HEAD 표시가 더 중요하므로 green을 유지한다.
+    const pinned = token.kind === 'remote'
+      ? isPinnedBranch(token.branch)
+      : token.kind === 'local' && token.name !== currentBranch && isPinnedBranch(token.name);
     let part;
     if (token.kind === 'head') {
       part = colors.green + ansi.bold + token.name + ansi.reset;
@@ -2507,14 +2548,17 @@ function colorizeDecoTokens(tokens, currentBranch, isHead) {
     } else if (token.kind === 'tag') {
       part = colors.yellow + token.name + ansi.reset;
     } else if (token.kind === 'remote') {
-      part = colors.red + token.name + ansi.reset;
+      part = (pinned ? PINNED_STYLE : colors.red) + token.name + ansi.reset;
     } else if (token.name === currentBranch) {
       part = colors.green + (isHead ? ansi.bold : '') + token.name + ansi.reset;
+    } else if (pinned) {
+      part = PINNED_STYLE + token.name + ansi.reset;
     } else {
       part = colors.cyan + token.name + ansi.reset;
     }
     if (token.remotes.length) {
-      part += colors.red + REMOTE_MARK + token.remotes.join(',') + ansi.reset;
+      // "develop@origin"의 접미도 흡수된 리모트 짝이므로 로컬 이름과 같은 색으로 묶는다.
+      part += (pinned ? PINNED_STYLE : colors.red) + REMOTE_MARK + token.remotes.join(',') + ansi.reset;
     }
     parts.push(part);
   }
@@ -2996,4 +3040,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons, buildLeftPanel, revealCurrentBranch, buildDecoTokens, decoPlainText };
+module.exports = { render, hintButtons, buildLeftPanel, revealCurrentBranch, buildDecoTokens, decoPlainText, colorizeDecoration };

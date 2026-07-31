@@ -118,6 +118,7 @@ const ui = {
   collapsedSections: {},
   collapsedGroups: {},
   leftPanelActiveBranch: null,
+  pinnedBranches: [],              // 핀 고정한 로컬 브랜치 이름 — 핀 지정 순서 유지, 리포별 영속
   leftPanelScrollOffset: 0,
   leftCurrentBranchLineIdx: -1,    // Branches 목록에 그려진 현재 브랜치 줄 인덱스 (없으면 -1)
   leftRevealCurrentBranch: false,  // 상단 브랜치명 클릭 → 다음 렌더에서 그 줄로 스크롤
@@ -195,4 +196,37 @@ function init() {
   ui.termRows = hecaton.initialState?.rows || 24;
 }
 
-module.exports = { state, ui, init };
+// ── 핀 고정 브랜치 ──
+// 목록은 이름만 들고 다니고(핀 지정 순서), 실제 존재 여부는 그릴 때 state.branches로 판별한다.
+// 변경 후에는 호출부가 render()를 부르면 persist가 디바운스 저장한다.
+
+function isPinnedBranch(name) {
+  return !!name && ui.pinnedBranches.includes(name);
+}
+
+// 핀 토글 — 새로 지정하면 목록 끝에 붙어 지정 순서대로 표시된다. 결과 핀 상태를 반환.
+function togglePinnedBranch(name) {
+  if (!name) return false;
+  const idx = ui.pinnedBranches.indexOf(name);
+  if (idx >= 0) {
+    ui.pinnedBranches.splice(idx, 1);
+    return false;
+  }
+  ui.pinnedBranches.push(name);
+  return true;
+}
+
+function unpinBranch(name) {
+  const idx = ui.pinnedBranches.indexOf(name);
+  if (idx >= 0) ui.pinnedBranches.splice(idx, 1);
+}
+
+// 브랜치 리네임 시 핀도 따라가게 한다 — 이름이 유일한 식별자라 갱신하지 않으면 핀이 끊긴다.
+function renamePinnedBranch(oldName, newName) {
+  const idx = ui.pinnedBranches.indexOf(oldName);
+  if (idx < 0) return;
+  if (ui.pinnedBranches.includes(newName)) ui.pinnedBranches.splice(idx, 1);
+  else ui.pinnedBranches[idx] = newName;
+}
+
+module.exports = { state, ui, init, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch };
