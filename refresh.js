@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitExec, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
+const { gitExec, gitExecChecked, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -492,6 +492,11 @@ let _metaCache = null;
 let _metaFingerprint = '';
 let _metaCacheCwd = '';
 
+// for-each-ref 타임아웃. gitExec 기본값 5초는 ref가 많은 저장소에서 메타 조회 8개를
+// 동시에 spawn할 때(특히 Windows) 빠듯하다. 여기서 타임아웃이 나면 브랜치 목록이
+// 통째로 비므로 status와 같은 수준으로 여유를 준다.
+const REFS_TIMEOUT_MS = 15000;
+
 // .git/refs 하위 loose ref 트리의 지문.
 // 디렉터리 mtime은 "직접 자식"이 바뀔 때만 갱신된다. refs/remotes/origin/foo를
 // 지우면 refs/remotes/origin의 mtime만 바뀌고 refs·refs/remotes는 그대로다.
@@ -874,6 +879,9 @@ async function refreshAsync(options = {}) {
   const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
   if (!metadataOnly) state.ignoredLoading = includeIgnored;
   let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw;
+  // refs/worktrees 조회가 실제로 성공했는지 — 실패를 "0건"으로 오인해 목록을 지우지 않기 위한 플래그.
+  // 캐시에는 성공한 결과만 넣으므로 캐시 적중 경로는 항상 true다.
+  let refsOk = true, worktreesOk = true;
   const statusPromise = metadataOnly
     ? Promise.resolve(null)
     : gitStatusSplit(state.cwd, {
@@ -892,18 +900,25 @@ async function refreshAsync(options = {}) {
     localUserCfgRaw = _metaCache.localUserCfgRaw;
     aheadBehindRaw = _metaCache.aheadBehindRaw;
   } else {
-    [statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
+    let refsRes;
+    [statusSnapshot, stashRaw, refsRes, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
       await Promise.all([
         statusPromise,
         gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
-        gitExec(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd),
+        gitExecChecked(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd, REFS_TIMEOUT_MS),
         gitExec(['--no-optional-locks', 'remote'], state.cwd),
         gitWorktrees(state.cwd),
         gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
         gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
         gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
       ]);
-    if (fingerprint) {
+    refsOk = refsRes.ok;
+    refsRaw = refsRes.text;
+    // 정상 저장소의 worktree list는 최소 메인 워크트리 한 줄을 낸다. 빈 결과는 조회 실패다.
+    worktreesOk = worktrees.length > 0;
+    // 실패한 조회 결과를 캐시에 넣으면 fingerprint(.git 내부 mtime)가 바뀔 때까지 빈 목록이
+    // 계속 재사용된다. 브랜치가 한참 동안 사라져 보이는 원인이므로 성공했을 때만 캐시한다.
+    if (fingerprint && refsOk && worktreesOk) {
       _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw };
       _metaFingerprint = fingerprint;
       _metaCacheCwd = state.cwd;
@@ -935,7 +950,16 @@ async function refreshAsync(options = {}) {
       }
     }
   }
-  state.branch = currentBranch || (metadataOnly && state.branch ? state.branch : 'HEAD (detached)');
+  // refs 조회가 실패했으면 이전 브랜치 상태를 그대로 둔다. 빈 파싱 결과로 덮어쓰면
+  // 브랜치/원격 목록이 통째로 사라지고 현재 브랜치까지 detached로 잘못 표시된다.
+  if (refsOk) {
+    state.branch = currentBranch || (metadataOnly && state.branch ? state.branch : 'HEAD (detached)');
+  } else {
+    // git 호출이 실패해도 .git/HEAD는 읽을 수 있다 — 브랜치명만이라도 최신으로 맞춘다.
+    const headName = await readBranchNameFast().catch(() => '');
+    if (headName) state.branch = headName;
+    else if (!state.branch) state.branch = 'HEAD (detached)';
+  }
   if (!metadataOnly) {
     applyStatusSnapshot(statusSnapshot, includeIgnored);
   }
@@ -947,14 +971,16 @@ async function refreshAsync(options = {}) {
   }) : [];
 
   // branches / remoteBranches — refs 파싱 결과 사용
-  state.branches = branches;
-  state.remoteBranches = remoteBranches;
+  if (refsOk) {
+    state.branches = branches;
+    state.remoteBranches = remoteBranches;
+  }
 
   // remotes (remote 이름 목록 — 브랜치 없이 remote만 있을 수 있어 별도 조회)
   state.remotes = remoteNamesRaw.trim() ? remoteNamesRaw.trim().split('\n').filter(Boolean) : [];
 
-  state.worktrees = worktrees;
-  {
+  if (worktreesOk) {
+    state.worktrees = worktrees;
     const currentWt = worktrees.find(w => w.isCurrent);
     state.isLinkedWorktree = !!(currentWt && !currentWt.isMain);
   }

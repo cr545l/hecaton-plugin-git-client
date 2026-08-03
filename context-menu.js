@@ -1984,8 +1984,10 @@ async function handleDialogResult(params) {
       startSpinner(opName + '...');
       let err;
       if (action === 'rename-branch') {
-        err = await gitRenameBranch(state.cwd, target, name);
-        if (!err) renamePinnedBranch(target, name);   // 핀은 이름으로 물려 있어 함께 옮긴다
+        const renameRes = await gitRenameBranch(state.cwd, target, name);
+        // ref 가 옮겨졌으면 config 갱신이 실패했더라도 핀은 새 이름을 따라가야 한다
+        if (renameRes.renamed) renamePinnedBranch(target, name);   // 핀은 이름으로 물려 있어 함께 옮긴다
+        err = renameRes.error;
       } else if (action === 'rename-stash') {
         err = await gitStashRename(state.cwd, target, name);
       } else if (action === 'new-branch') {

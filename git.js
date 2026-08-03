@@ -12,6 +12,15 @@ async function gitExec(args, cwd, timeout) {
   }
 }
 
+// gitExec은 실패(타임아웃/spawn 실패/비정상 종료)를 빈 출력으로 뭉갠다. "실제로 0건"과
+// "명령이 실패해 아무것도 못 읽었다"를 구분해야 하는 호출자는 이 쪽을 쓴다.
+// 예: for-each-ref가 실패했을 때 브랜치 목록을 빈 배열로 덮어쓰면 브랜치가 통째로 사라진다.
+async function gitExecChecked(args, cwd, timeout) {
+  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const ok = !!(result && result.ok);
+  return { ok, text: ok ? (result.stdout || '').replace(/\r\n/g, '\n') : '' };
+}
+
 async function git(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (!result || !result.ok) {
@@ -1017,7 +1026,58 @@ async function gitUnstageMultiple(cwd, files) {
   );
 }
 
-async function gitRenameBranch(cwd, oldName, newName) { return await gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, 'Rename branch failed'); }
+// git config --get-regexp 에 넘길 값 이스케이프 — 브랜치 이름의 '.' '+' 등이
+// 메타문자로 해석되지 않게 한다 (v1.0, feat+x 같은 이름).
+function escapeConfigRegex(value) {
+  return String(value).replace(/[.^$*+?()[\]{}|\\]/g, '\\$&');
+}
+
+async function branchRefExists(cwd, name) {
+  const r = await gitResult(['show-ref', '--verify', '--quiet', 'refs/heads/' + name], cwd, 5000);
+  return !!(r && r.ok && r.exit_code === 0);
+}
+
+// branch.<name>.* 키가 남아 있는지. --rename-section 은 대상 섹션이 없으면 fatal 을
+// 내는데 그 메시지는 로케일에 따라 번역되므로, 문자열 대신 존재 여부로 판단한다.
+async function hasBranchConfigSection(cwd, name) {
+  const r = await gitResult(
+    ['config', '--local', '--get-regexp', '^branch\\.' + escapeConfigRegex(name) + '\\.'],
+    cwd, 5000,
+  );
+  return !!(r && r.ok && r.exit_code === 0 && (r.stdout || '').trim());
+}
+
+// `git branch -m` 은 (1) ref 이름 변경 → (2) reflog 이동 → (3) config 의 branch.<old>.*
+// 섹션 이름 변경 순으로 진행하고, .git/config.lock 은 (3)에서만 잡는다. 다른 클라이언트가
+// config 를 쓰는 중이거나 죽은 프로세스가 남긴 stale lock 이 있으면 (1)(2)가 이미 끝난 뒤라
+// git 은 fatal 을 내면서도 리네임 자체는 완료해 놓는다:
+//   error: could not lock config file .git/config
+//   fatal: branch is renamed, but update of config-file failed
+// 옮길 섹션이 하나도 없는 브랜치(upstream 미설정)도 lock 부터 잡으므로 똑같이 실패하고,
+// worktree 는 config 를 메인 리포와 공유하므로 같은 lock 을 탄다.
+// 이걸 그대로 올리면 "에러가 떴는데 이름은 바뀌어 있다"가 되므로, ref 가 실제로 옮겨졌는지
+// 확인하고 남은 config 섹션을 직접 옮겨 마무리한다.
+// 반환: { renamed, error } — renamed 는 ref 가 새 이름으로 옮겨졌는지.
+async function gitRenameBranch(cwd, oldName, newName) {
+  const err = await gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, 'Rename branch failed');
+  if (!err) return { renamed: true, error: null };
+  // ref 가 그대로면 이름 충돌·없는 브랜치 같은 평범한 실패다.
+  if (!(await branchRefExists(cwd, newName)) || await branchRefExists(cwd, oldName)) {
+    return { renamed: false, error: err };
+  }
+  // 옮길 설정이 애초에 없으면 config 갱신 실패로 잃은 것이 없다 — 성공으로 끝낸다.
+  if (!(await hasBranchConfigSection(cwd, oldName))) return { renamed: true, error: null };
+  const moveErr = await gitRunOrError(
+    ['config', '--local', '--rename-section', 'branch.' + oldName, 'branch.' + newName],
+    cwd, 10000, 'Could not move branch config',
+  );
+  if (!moveErr) return { renamed: true, error: null };
+  return {
+    renamed: true,
+    error: "Branch was renamed to '" + newName + "', but .git/config could not be updated.\n"
+      + "Upstream settings are still stored under '" + oldName + "'.\n\n" + moveErr,
+  };
+}
 async function gitDeleteBranch(cwd, name, force) { return await gitRunOrError(['branch', force ? '-D' : '-d', name], cwd, 10000, 'Delete branch failed'); }
 async function gitSetUpstream(cwd, branch, upstream) { return await gitRunOrError(['branch', '--set-upstream-to=' + upstream, branch], cwd, 10000, 'Set upstream failed'); }
 async function gitUnsetUpstream(cwd, branch) { return await gitRunOrError(['branch', '--unset-upstream', branch], cwd, 10000, 'Unset upstream failed'); }
@@ -1460,6 +1520,7 @@ async function gitWriteConflictResolution(cwd, file, content) {
 module.exports = {
   git,
   gitExec,
+  gitExecChecked,
   unquoteGitPath,
   resolveWorkTreeRoot,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
