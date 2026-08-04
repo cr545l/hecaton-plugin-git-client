@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitExec, gitExecChecked, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile } = require('./git');
+const { gitExec, gitExecChecked, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -491,6 +491,25 @@ let _guiConfigLoaded = false;
 let _metaCache = null;
 let _metaFingerprint = '';
 let _metaCacheCwd = '';
+
+// 현재 브랜치가 올라가 있는 리모트 이름 — 없으면 '' (아직 push 하지 않은 로컬 전용 브랜치).
+// upstream이 우선이지만, 다른 도구가 `git push origin HEAD`처럼 추적 설정 없이 올린 브랜치는
+// upstream이 비어 있어도 리모트에는 존재한다. 그래서 같은 이름의 원격 브랜치까지 확인해,
+// 커밋 데코레이션에 origin/…이 보이는데 왼쪽 패널에는 @origin이 없는 어긋남을 없앤다.
+function currentBranchRemote() {
+  const cur = state.branches.find(b => b.isCurrent);
+  if (!cur) return '';
+  const fromUpstream = splitUpstreamRef(cur.upstream, state.remotes).remote;
+  if (fromUpstream) return fromUpstream;
+  // 여러 리모트에 같은 이름이 있을 수 있어 관례대로 origin을 먼저 본다.
+  const ordered = state.remotes.includes('origin')
+    ? ['origin', ...state.remotes.filter(r => r !== 'origin')]
+    : state.remotes;
+  for (const r of ordered) {
+    if (state.remoteBranches.includes(r + '/' + cur.name)) return r;
+  }
+  return '';
+}
 
 // for-each-ref 타임아웃. gitExec 기본값 5초는 ref가 많은 저장소에서 메타 조회 8개를
 // 동시에 spawn할 때(특히 Windows) 빠듯하다. 여기서 타임아웃이 나면 브랜치 목록이
@@ -1096,6 +1115,25 @@ async function refreshAsync(options = {}) {
   state.committerEmailIsLocal = !!localUserCfg.email;
 
   // ahead/behind
+  // upstream이 없으면 `@{u}` 조회가 실패해 빈 값이 온다. 그래도 같은 이름의 원격 브랜치가 있으면
+  // 그 ref로 한 번 더 세어, @리모트 표기는 붙었는데 화살표만 빠지는 어긋남을 막는다.
+  // 결과를 메타 캐시에 넣어 새로고침마다 spawn이 하나 늘지 않게 한다. 조회가 실패해 빈 값이
+  // 와도 시도 자체를 기록해 둔다 — 안 그러면 같은 fingerprint 동안 매번 다시 spawn 한다.
+  const abFallbackDone = !!(metaHit && _metaCache && _metaCache.abFallbackDone);
+  if (!aheadBehindRaw.trim() && !abFallbackDone) {
+    const cur = state.branches.find(b => b.isCurrent);
+    const remote = cur && !cur.upstream ? currentBranchRemote() : '';
+    if (remote) {
+      aheadBehindRaw = await gitExec(
+        ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],
+        state.cwd,
+      );
+      if (_metaCache && _metaCacheCwd === state.cwd) {
+        _metaCache.aheadBehindRaw = aheadBehindRaw;
+        _metaCache.abFallbackDone = true;
+      }
+    }
+  }
   const abParts = aheadBehindRaw.trim().split(/\s+/);
   state.behind = parseInt(abParts[0]) || 0;
   state.ahead = parseInt(abParts[1]) || 0;
@@ -1783,4 +1821,5 @@ module.exports = {
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
   removeIndexLock,
   computeRefsTreeSignature,
+  currentBranchRemote,
 };

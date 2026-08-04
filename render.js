@@ -2,7 +2,7 @@ const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
 const { state, ui, isPinnedBranch } = require('./state');
-const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const hostScroll = require('./scroll');
@@ -907,10 +907,6 @@ function buildLeftPanel(w, h) {
   const lines = [];
   const clickMap = [];
   const innerW = w - 1;
-  // 푸시 대기 커밋 수 — 타이틀바 Push 버튼과 같은 화살표 표기를 쓴다.
-  // Branches 목록의 현재 브랜치에만 붙는다 (상단 브랜치명은 그대로 둔다).
-  const aheadTag = state.ahead > 0 ? ' \u2191' + state.ahead : '';
-  const aheadPart = aheadTag ? colors.orange + ansi.bold + aheadTag + ansi.reset : '';
 
   function pushLine(content, action) {
     if (visLen(content) > innerW) {
@@ -920,10 +916,32 @@ function buildLeftPanel(w, h) {
     clickMap.push(action || null);
   }
 
+  // 줄 한복판의 reset이 행 배경까지 지워 하이라이트가 중간에서 잘린다(예: `✓ main` 뒤의 @origin).
+  // 파일/로그 목록과 같은 방식으로 reset 뒤마다 배경을 다시 깔고 폭 끝까지 채워 한 줄로 잇는다.
+  function rowBg(content, bg) {
+    return bg + padRight(content.replace(/\x1b\[0m/g, ansi.reset + bg), innerW) + ansi.reset;
+  }
+
   // Branch name + worktree 표기 + rebase state
   // Branches 목록의 현재 브랜치와 같은 표기(✓ + green)를 쓰고, 클릭하면 목록의 그 줄로 스크롤한다.
   // detached HEAD면 목록에도 ✓ 줄이 없으므로 표기도 클릭도 붙이지 않는다.
   const currentBranchEntry = state.branches.find(b => b.isCurrent) || null;
+
+  // 현재 브랜치의 추적 상태 — 상단 브랜치명 줄과 Branches 목록의 현재 브랜치에 같이 붙인다.
+  // 리모트에 올라가 있으면 그 이름을 red로 먼저 붙인다. 화살표는 밀린 커밋이 있어야만 나오므로
+  // 화살표만으로는 "리모트와 같다"와 "리모트에 아예 없다"가 구분되지 않는데, @리모트이름이
+  // 없는 줄 = 아직 푸시하지 않은 로컬 전용 브랜치로 읽으면 된다.
+  // 그 뒤의 pull/push 대기 화살표는 타이틀바 Pull/Push 버튼과 같은 orange를 쓴다.
+  // detached HEAD면 올라탄 브랜치가 없어 ahead/behind도 의미가 없으므로 통째로 뺀다.
+  const branchRemote = currentBranchEntry ? currentBranchRemote() : '';
+  const remoteTag = branchRemote ? ' @' + branchRemote : '';
+  const arrowTag = currentBranchEntry
+    ? (state.behind > 0 ? ' ↓' + state.behind : '') + (state.ahead > 0 ? ' ↑' + state.ahead : '')
+    : '';
+  const trackTag = remoteTag + arrowTag;
+  const trackPart = (remoteTag ? colors.red + ansi.bold + remoteTag + ansi.reset : '')
+    + (arrowTag ? colors.orange + ansi.bold + arrowTag + ansi.reset : '');
+
   {
     const mark = currentBranchEntry ? '✓ ' : '';
     const nameColor = currentBranchEntry ? colors.green : colors.value;
@@ -940,11 +958,11 @@ function buildLeftPanel(w, h) {
       const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
       const opLabel = isRebase ? 'rebasing' : op.type === 'merge' ? 'merging' : op.type === 'cherry-pick' ? 'cherry-picking' : 'reverting';
       const suffix = isRebase && op.step ? ' (' + opLabel + ' ' + op.step + '/' + op.total + ')' : ' (' + opLabel + ')';
-      branchName = truncate(branchName, Math.max(3, availW - suffix.length - wtTag.length));
-      pushLine(' ' + nameColor + ansi.bold + mark + branchName + ansi.reset + wtPart + colors.yellow + suffix + ansi.reset, revealEntry);
+      branchName = truncate(branchName, Math.max(3, availW - suffix.length - wtTag.length - trackTag.length));
+      pushLine(' ' + nameColor + ansi.bold + mark + branchName + ansi.reset + trackPart + wtPart + colors.yellow + suffix + ansi.reset, revealEntry);
     } else {
-      branchName = truncate(branchName, Math.max(3, availW - wtTag.length));
-      pushLine(' ' + nameColor + ansi.bold + mark + branchName + ansi.reset + wtPart, revealEntry);
+      branchName = truncate(branchName, Math.max(3, availW - wtTag.length - trackTag.length));
+      pushLine(' ' + nameColor + ansi.bold + mark + branchName + ansi.reset + trackPart + wtPart, revealEntry);
     }
   }
 
@@ -978,13 +996,13 @@ function buildLeftPanel(w, h) {
     const isActive = activeBranch === fullRef;
     const tagText = tag || '';
     const tagPart = tagText ? colors.cyan + tagText + ansi.reset : '';
-    // ahead는 HEAD가 올라탄 브랜치에만 의미가 있으므로 현재 브랜치에만 붙인다.
-    const abText = isCurrent ? aheadTag : '';
-    const abPart = isCurrent ? aheadPart : '';
+    // 추적 상태(@리모트 / ahead / behind)는 HEAD가 올라탄 브랜치에만 의미가 있으므로 현재 브랜치에만 붙인다.
+    const abText = isCurrent ? trackTag : '';
+    const abPart = isCurrent ? trackPart : '';
     const maxW = Math.max(1, innerW - indent - visLen(tagText) - visLen(abText));
     if (isCurrent) {
       const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + abPart + tagPart;
-      return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
+      return isActive ? rowBg(content, colors.cursorBg) : content;
     } else {
       // 다른 워크트리가 점유한 브랜치는 [worktree] 표기와 같은 색으로 구분한다.
       // 핀은 색(bright magenta)으로 드러내되, 워크트리 점유 표시가 더 강한 제약이라 색을 양보하고
@@ -996,7 +1014,7 @@ function buildLeftPanel(w, h) {
         : isRemote ? colors.red : colors.value;
       const emph = pinned ? ansi.bold : '';
       const content = ' '.repeat(indent) + clr + emph + truncate(name, maxW) + ansi.reset + tagPart;
-      return isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content;
+      return isActive ? rowBg(content, colors.cursorBg) : content;
     }
   }
 
@@ -1187,7 +1205,7 @@ function buildLeftPanel(w, h) {
         // 절대경로는 패널을 넘치게 하므로 표시하지 않는다.
         // 경로 확인/이동은 우클릭 메뉴(Copy Path / Show in Explorer / Open in File Explorer)로 한다.
         const wtEntry = { action: 'goto-worktree', path: wt.path };
-        pushLine(wt.isCurrent ? colors.cursorBg + padRight(line, innerW) + ansi.reset : line, wtEntry);
+        pushLine(wt.isCurrent ? rowBg(line, colors.cursorBg) : line, wtEntry);
       }
     }
   }
@@ -1201,7 +1219,7 @@ function buildLeftPanel(w, h) {
         const isActive = activeBranch === 'stash:' + s.shortHash;
         const stashLabel = s.message ? s.ref + ' ' + s.message : s.ref;
         const content = '  ' + STASH_TEXT + truncate(stashLabel, innerW - 2) + ansi.reset;
-        pushLine(isActive ? colors.cursorBg + padRight(content, innerW) + ansi.reset : content, { action: 'goto-stash', shortHash: s.shortHash, ref: s.ref });
+        pushLine(isActive ? rowBg(content, colors.cursorBg) : content, { action: 'goto-stash', shortHash: s.shortHash, ref: s.ref });
       }
     }
   }
@@ -1243,9 +1261,14 @@ function buildLeftPanel(w, h) {
   }
 
   // Apply hover highlight
+  // 밑줄만 씌우면 줄 안의 reset이 그걸 끊어 브랜치명 뒤(@리모트, 화살표, 태그)가 하이라이트에서
+  // 빠진다. 파일/로그 목록과 같이 기존 배경을 걷어내고 reset 뒤마다 스타일을 다시 깔아
+  // 배경과 밑줄이 줄 끝까지 한 줄로 이어지게 한다.
   const hoverRow = ui.hoveredLeftPanelRow;
   if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.leftPanelClickMap[hoverRow]) {
-    visibleLines[hoverRow] = CSI + '4m' + colors.value + visibleLines[hoverRow] + ansi.reset;
+    const hoverStyle = colors.hoverBg + CSI + '4m';
+    const deBg = visibleLines[hoverRow].replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
+    visibleLines[hoverRow] = hoverStyle + padRight(deBg.replace(/\x1b\[0m/g, ansi.reset + hoverStyle), innerW) + ansi.reset;
   }
 
   return visibleLines;
