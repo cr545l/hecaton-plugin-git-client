@@ -97,6 +97,9 @@ function computeLayoutSig() {
 function appendLogSixelClear(buf) {
   if (!SIXEL_ENABLED || !ui.logSixelRegion) return;
   const r = ui.logSixelRegion;
+  // bank 행은 호스트가 버퍼를 늘려 둔 동안에만 쓸 수 있다. 확인이 풀린 뒤에 쓰면 마지막
+  // 보이는 행으로 클램프돼 화면 하단에 지우개 자국이 남으므로, 그때는 기록만 버린다.
+  if (r.anchorBank && !hostScroll.isReady('logList')) { ui.logSixelRegion = null; return; }
   buf.push(ansi.reset + ansi.moveTo(r.screenRow, r.screenCol) + encodeSixelClear(r.pixelW, r.pixelH));
   ui.logSixelRegion = null;
 }
@@ -128,13 +131,18 @@ function render() {
   // overscan bank content) here; banks/acks/regions are emitted after the body.
   ui.hostScrollRegions = [];
 
-  // Layout 전환 시 화면 강제 erase — sixel 잔상 제거. 전체 erase(2J)가 화면을 통째로
-  // 지우므로 이전 graph sixel 영역 기록도 버린다(뒤에서 별도 clear를 쏘지 않게).
+  // Layout 전환 시 화면 강제 erase — sixel 잔상 제거.
+  // 단 2J는 "보이는 화면"만 지운다. host-scroll이 켜져 있으면 그래프 sixel은 화면 밖
+  // overscan bank 행에 그려두고 호스트가 그걸 region 안으로 합성하는 구조라, 2J로는
+  // 원본 픽셀이 지워지지 않는다. region 해제(scroll.remove)는 프레임과 순서가 보장되지
+  // 않는 비동기 RPC라 그 사이 호스트가 한 번 더 합성하면 새 화면 위에 그래프가 그대로
+  // 남는다(Commits → Local 전환 후 브랜치 트리 잔상). bank 앵커일 때는 영역 기록을
+  // 남겨 뒤의 sixel emit에서 bank 행에 지우개를 쏘게 한다.
   const layoutSig = computeLayoutSig();
   if (layoutSig !== _lastLayoutSig) {
     buf.push(CSI + '2J');
     _lastLayoutSig = layoutSig;
-    ui.logSixelRegion = null;
+    if (!(ui.logSixelRegion && ui.logSixelRegion.anchorBank)) ui.logSixelRegion = null;
   }
   // 매 프레임 무조건 이전 graph sixel을 지우던 코드는 제거했다. 지우개→텍스트→새 sixel을
   // 프레임마다 반복하면 호스트가 중간 상태를 그릴 때 그래프가 깜빡인다. 실제로 이전 영역을
@@ -676,6 +684,8 @@ function render() {
         screenCol: graphCol,
         pixelW: sz.pixelW,
         pixelH: sz.pixelH,
+        // bank 앵커면 화면 밖 행이라 2J로 지워지지 않는다 — 지우개를 따로 쏴야 한다.
+        anchorBank: !!ui.logSixelAnchorBank,
       };
     }
   } else {

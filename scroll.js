@@ -133,7 +133,13 @@ function syncRegions(defs) {
       _sentRegions.delete(id);
       _hostOffsets.delete(id);
       _confirmed.delete(id);
-      hecaton.scroll.remove({ id }).catch(() => {});
+      // 제거는 프레임(stdout)과 순서가 보장되지 않는 비동기 RPC다. 제거가 확정되기 전에
+      // 호스트가 region을 한 번 더 합성하면 방금 그린 화면 위에 이전 내용이 덮인다
+      // (특히 bank 앵커 그래프 sixel — Commits → Local 전환 후 브랜치 트리 잔상).
+      // 제거가 끝난 뒤 한 프레임 다시 그려 그 영역을 확실히 덮는다.
+      hecaton.scroll.remove({ id }).then(() => {
+        if (_deps && _deps.render) _deps.render();
+      }).catch(() => {});
     }
   }
 }
