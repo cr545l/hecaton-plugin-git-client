@@ -62,10 +62,6 @@ function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
   }
 }
 
-function isConnectedChar(ch) {
-  return ch && ch !== ' ';
-}
-
 // 이웃 셀이 이 셀 쪽으로 수평 획을 뻗는가? (수평 병합선 관통 여부 판정용)
 function connectsRight(ch) { // 오른쪽 가장자리까지 획이 닿는 글자
   return ch === '─' || ch === '┄' || ch === '┼' || ch === '╌' ||
@@ -74,6 +70,19 @@ function connectsRight(ch) { // 오른쪽 가장자리까지 획이 닿는 글�
 function connectsLeft(ch) { // 왼쪽 가장자리까지 획이 닿는 글자
   return ch === '─' || ch === '┄' || ch === '┼' || ch === '╌' ||
          ch === '┤' || ch === '╮' || ch === '╯' || ch === '●' || ch === '◌';
+}
+// 위/아래 이웃 행이 이 셀 쪽으로 세로 획을 뻗는가? "빈 칸이 아니다"로 판정하면
+// 수평 병합선(─ ╭ ╮ ╯ ╰)만 지나간 칸도 이어진 것으로 봐서, 빈 레인을 재사용한
+// 커밋 노드에 붙을 데 없는 꼬다리가 생긴다.
+function connectsDown(ch) { // 아래 가장자리까지 획이 닿는 글자
+  return ch === '│' || ch === '┆' || ch === '┼' || ch === '╌' ||
+         ch === '├' || ch === '┤' || ch === '╭' || ch === '╮' ||
+         ch === '●' || ch === '◌';
+}
+function connectsUp(ch) { // 위 가장자리까지 획이 닿는 글자
+  return ch === '│' || ch === '┆' || ch === '┼' || ch === '╌' ||
+         ch === '├' || ch === '┤' || ch === '╯' || ch === '╰' ||
+         ch === '●' || ch === '◌';
 }
 
 function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
@@ -107,16 +116,16 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
         break;
       case '\u25cf':
       case '\u25cc': {
-        const hasAbove = prevChars && i < prevChars.length && isConnectedChar(prevChars[i]);
-        const hasBelow = nextChars && i < nextChars.length && isConnectedChar(nextChars[i]);
+        const hasAbove = prevChars && i < prevChars.length && connectsDown(prevChars[i]);
+        const hasBelow = nextChars && i < nextChars.length && connectsUp(nextChars[i]);
         if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lineW);
         if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lineW);
         if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - 3), c);
         else pxCircle(buf, pw, ph, cx, cy, dotR, c);
-        if (i > 0 && isConnectedChar(chars[i - 1]) && chars[i - 1] !== '\u2502' && chars[i - 1] !== '\u2506' && chars[i - 1] !== '\u25cf' && chars[i - 1] !== '\u25cc') {
+        if (i > 0 && connectsRight(chars[i - 1]) && chars[i - 1] !== '\u25cf' && chars[i - 1] !== '\u25cc') {
           pxHLine(buf, pw, ph, left, cx - dotR - 1, cy, c, lineW);
         }
-        if (i + 1 < numCols && i + 1 < chars.length && isConnectedChar(chars[i + 1]) && chars[i + 1] !== '\u2502' && chars[i + 1] !== '\u2506' && chars[i + 1] !== '\u25cf' && chars[i + 1] !== '\u25cc') {
+        if (i + 1 < numCols && i + 1 < chars.length && connectsLeft(chars[i + 1]) && chars[i + 1] !== '\u25cf' && chars[i + 1] !== '\u25cc') {
           pxHLine(buf, pw, ph, cx + dotR + 1, right, cy, c, lineW);
         }
         break;
