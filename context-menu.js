@@ -262,8 +262,17 @@ function buildBranchContextMenuItems(branchName) {
       { id: 'branch_force_push', label: "Force Push '" + branchName + "' to '" + remote + "'...", icon: 'warning' },
     );
   }
+  // 이름 바꾸기/삭제는 push 묶음 바로 아래에 둔다. 호스트 menu.show는 위치·스크롤 옵션이
+  // 없어 창보다 긴 메뉴는 아래가 잘려 나간다 — 맨 끝에 두면 작은 창에서 아예 닿지 못한다.
+  // 삭제 둘은 붙여 두되 로컬을 먼저 둬서, 위에서부터 만나는 첫 "Delete '...'"가 항상
+  // 로컬이 되게 한다(원격 push --delete를 로컬 삭제로 오인하는 사고 방지).
+  items.push({ type: 'separator' });
+  items.push({ id: 'branch_rename', label: "Rename '" + branchName + "'...", shortcut: 'F2' });
+  if (!branch.isCurrent) {
+    items.push({ id: 'branch_delete', label: "Delete '" + branchName + "' (local)...", shortcut: 'Delete' });
+  }
   if (upstream) {
-    items.push({ id: 'branch_delete_remote', label: "Delete '" + upstream + "' on Remote...", icon: 'warning' });
+    items.push({ id: 'branch_delete_remote', label: "Delete on Remote: '" + upstream + "'...", icon: 'warning' });
   }
 
   items.push({ type: 'separator' });
@@ -292,13 +301,6 @@ function buildBranchContextMenuItems(branchName) {
     ? { id: 'branch_pin', label: "Unpin '" + branchName + "'", icon: 'pinned' }
     : { id: 'branch_pin', label: "Pin '" + branchName + "'", icon: 'pin' });
 
-  items.push({ type: 'separator' });
-  items.push(
-    { id: 'branch_rename', label: "Rename '" + branchName + "'...", shortcut: 'F2' },
-  );
-  if (!branch.isCurrent) {
-    items.push({ id: 'branch_delete', label: "Delete '" + branchName + "'...", shortcut: 'Delete' });
-  }
   items.push({ type: 'separator' });
   items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
 
@@ -1003,8 +1005,8 @@ async function handleContextMenuAction(actionId) {
         hecaton.dialog.show({
           type: 'message',
           title: 'Delete Remote Branch',
-          message: "Delete '" + remoteBranchName + "' on the remote?\n\nThis cannot be undone from this client.",
-          buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          message: "Delete '" + remoteBranchName + "' on the remote?\n\nThis pushes a deletion to '" + remoteName + "'. The local branch is not touched.\nThis cannot be undone from this client.",
+          buttons: [{ id: 'delete', label: 'Delete on Remote', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'delete-remote-branch-confirm';
         state.pendingDialogTarget = { remote: remoteName, branch: localName };
@@ -1079,8 +1081,8 @@ async function handleContextMenuAction(actionId) {
         hecaton.dialog.show({
           type: 'message',
           title: 'Delete Remote Branch',
-          message: "Delete '" + upstream + "' on the remote?\n\nThis cannot be undone from this client.",
-          buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          message: "Delete '" + upstream + "' on the remote?\n\nThis pushes a deletion to '" + remote + "'. The local branch '" + branchName + "' is not touched.\nThis cannot be undone from this client.",
+          buttons: [{ id: 'delete', label: 'Delete on Remote', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
         });
         state.pendingDialogAction = 'delete-remote-branch-confirm';
         state.pendingDialogTarget = { remote, branch: remoteBranchPart };
