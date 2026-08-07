@@ -13,7 +13,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
 const { startSpinner, stopSpinner } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render, revealCurrentBranch } = require('./render');
-const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
 let currentMouseShape = 'default';
@@ -1026,6 +1026,16 @@ async function handleNameInput(key) {
       render();
       return;
     }
+    // 브랜치 생성은 로컬 변경에 막힐 수 있어 stash 재시도 제안까지 공통 경로에서 처리한다.
+    if (state.mode === 'new-branch') {
+      const startPoint = state.inputTarget;
+      state.mode = 'normal';
+      state.inputBuffer = '';
+      state.inputTarget = '';
+      startSpinner('Branch...');
+      await runCreateBranch(name, startPoint, 'Branch');
+      return;
+    }
     let err;
     if (state.mode === 'rename-stash') {
       err = await gitStashRename(state.cwd, state.inputTarget, name);
@@ -1037,8 +1047,6 @@ async function handleNameInput(key) {
       return;
     } else if (state.mode === 'new-remote-url') {
       err = await gitRemoteAdd(state.cwd, state.inputTarget, name);
-    } else if (state.mode === 'new-branch') {
-      err = await gitCreateBranch(state.cwd, name, state.inputTarget);
     } else {
       err = await gitCreateTag(state.cwd, name, state.inputTarget);
     }
@@ -1046,9 +1054,7 @@ async function handleNameInput(key) {
       ? 'Rename stash'
       : state.mode === 'new-remote-url'
         ? 'Remote'
-        : state.mode === 'new-branch'
-          ? 'Branch'
-          : 'Tag';
+        : 'Tag';
     state.mode = 'normal';
     state.inputBuffer = '';
     state.inputTarget = '';

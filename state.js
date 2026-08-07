@@ -52,6 +52,7 @@ const state = {
   minimized: false,
   pendingStash: false,
   pendingRebaseRef: null,
+  pendingStashCreateBranch: null,  // { name, startPoint, opName } — 로컬 변경에 막힌 브랜치 생성의 재시도 정보
   pendingDiscardFiles: null,
   pendingRemoveFiles: null,        // 버전관리 제외 대상 파일 경로 목록
   pendingRemoveKeepLocal: false,   // true: git rm --cached (로컬 유지), false: git rm (로컬 삭제)

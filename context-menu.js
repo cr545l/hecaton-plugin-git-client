@@ -985,8 +985,7 @@ async function handleContextMenuAction(actionId) {
         break;
       case 'remotebranch_checkout_tracking': {
         startSpinner('Checking out...');
-        const err = await gitCreateBranch(state.cwd, localName, remoteBranchName);
-        await afterGitOp(err, 'Checkout');
+        await runCreateBranch(localName, remoteBranchName, 'Checkout');
         break;
       }
       case 'remotebranch_new_branch':
@@ -1993,7 +1992,8 @@ async function handleDialogResult(params) {
       } else if (action === 'rename-stash') {
         err = await gitStashRename(state.cwd, target, name);
       } else if (action === 'new-branch') {
-        err = await gitCreateBranch(state.cwd, name, target);
+        await runCreateBranch(name, target, opName);
+        return;
       } else if (action === 'new-tag') {
         err = await gitCreateTag(state.cwd, name, target);
       }
@@ -2081,6 +2081,50 @@ async function handleDialogResult(params) {
   }
   if (state.pendingStash) {
     state.pendingStash = false;
+    return;
+  }
+  // 로컬 변경에 막힌 브랜치 생성 — stash 로 워킹트리를 비우고 다시 만든 뒤 되돌린다.
+  if (state.pendingStashCreateBranch) {
+    const req = state.pendingStashCreateBranch;
+    state.pendingStashCreateBranch = null;
+    if (buttonId !== 'stash_create_branch') {
+      render();
+      return;
+    }
+    const label = req.opName + '...';
+    (async () => {
+      startSpinner(label + ' (1/3) Stashing');
+      const stashErr = await gitStashSaveAsync(state.cwd);
+      if (stashErr) {
+        stopSpinner();
+        showError('Stash failed:\n' + stashErr);
+        return;
+      }
+      state.error = label + ' (2/3) Creating branch';
+      const createErr = await gitCreateBranch(state.cwd, req.name, req.startPoint);
+      if (createErr) {
+        // 브랜치가 만들어지지 않았으니 원래 자리에서 그대로 되돌려 놓는다.
+        state.error = label + ' (3/3) Restoring stash';
+        await gitStashPopAsync(state.cwd);
+        await refreshAsync();
+        stopSpinner();
+        if (state.rightView === 'log') refreshLog();
+        showError(req.opName + ' failed:\n' + createErr);
+        return;
+      }
+      state.error = label + ' (3/3) Restoring stash';
+      const popErr = await gitStashPopAsync(state.cwd);
+      await refreshAsync();
+      stopSpinner();
+      if (state.rightView === 'log') refreshLog();
+      if (popErr) {
+        // 브랜치는 만들어졌고 변경분은 stash 에 남아 있다 — 유실이 아니라는 점을 알린다.
+        showError("Branch '" + req.name + "' was created, but restoring your changes failed:\n"
+          + popErr + '\n\nYour changes are still saved in the stash.');
+      } else {
+        render();
+      }
+    })();
     return;
   }
   // no-op 안내에서 고른 되돌리기 — 브랜치를 그 리비전으로 옮긴다(앞선 커밋은 떨어져 나간다).
@@ -2369,6 +2413,40 @@ function isBranchNotFullyMergedError(err) {
   return !!(err && /not fully merged/i.test(err));
 }
 
+// `git checkout -b` 는 브랜치 생성과 체크아웃을 함께 한다. 기준점이 HEAD 와 다르면
+// 실제 체크아웃이 일어나므로, 수정 중인 파일의 내용이 두 커밋 사이에서 다르면 git 이 거부한다.
+// 이때 git 은 브랜치를 만들지 않고 워킹트리도 건드리지 않은 채 중단하므로, stash 후 재시도가 안전하다.
+function isCheckoutOverwriteError(err) {
+  return !!(err && /would be overwritten by (checkout|merge)/i.test(err));
+}
+
+function showStashCreateBranchDialog(name, startPoint, opName, err) {
+  state.pendingStashCreateBranch = { name, startPoint, opName };
+  hecaton.dialog.show({
+    type: 'message',
+    title: opName,
+    message: 'Your local changes would be overwritten by checking out this branch.\n'
+      + 'Would you like to stash them, create the branch, and then reapply?\n\n' + err,
+    buttons: [
+      { id: 'stash_create_branch', label: 'Stash & Create', default: true },
+      { id: 'cancel', label: 'Cancel' },
+    ],
+  });
+  render();
+}
+
+// 브랜치 생성의 공통 실행 경로 — 로컬 변경에 막힌 경우에만 stash 재시도를 제안한다.
+// 그 외에는 평소대로 성공/실패 처리하므로, 기준점이 HEAD 와 같은 흔한 경우엔 확인창이 끼어들지 않는다.
+async function runCreateBranch(name, startPoint, opName) {
+  const err = await gitCreateBranch(state.cwd, name, startPoint);
+  if (isCheckoutOverwriteError(err)) {
+    stopSpinner();
+    showStashCreateBranchDialog(name, startPoint, opName, err);
+    return;
+  }
+  await afterGitOp(err, opName);
+}
+
 function showForceDeleteBranchDialog(branchName, err) {
   hecaton.dialog.show({
     type: 'message',
@@ -2426,4 +2504,6 @@ module.exports = {
   buildWorktreeContextMenuItems,
   handleContextMenuAction,
   handleDialogResult,
+  runCreateBranch,
+  isCheckoutOverwriteError,
 };
