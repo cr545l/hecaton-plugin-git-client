@@ -843,6 +843,16 @@ function render() {
     } else {
       ui.commitAmendZone = null;
     }
+    // 메시지 지우기 버튼: 메시지 첫 줄 오른쪽 (렌더에서 저장한 상대 위치 사용)
+    if (ui.commitClearBtnOffset >= 0) {
+      ui.commitClearZone = {
+        row: ui.commitInputRow,
+        colStart: rpStartCol + ui.commitClearBtnOffset,
+        colEnd: rpStartCol + ui.commitClearBtnOffset + ui.commitClearBtnLen - 1,
+      };
+    } else {
+      ui.commitClearZone = null;
+    }
     if (state.conflictView) {
       const conflictIndices = state.conflictView.chunks
         .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
@@ -864,6 +874,7 @@ function render() {
     ui.commitInputRow = -1;
     ui.commitButtonZone = null;
     ui.commitAmendZone = null;
+    ui.commitClearZone = null;
     ui.mergeApplyZone = null;
   }
 
@@ -892,7 +903,8 @@ function render() {
     const cursorLineIdx = ui.commitCursorLineIdx || 0;
     const hsbOff = ui.diffMaxScrollX > 0 ? 1 : 0;
     const cursorRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOff + 1 + (cursorLineIdx - topLine);
-    const maxW = rightW - 2;
+    // 지우기 버튼이 얹힌 줄은 그만큼 좁게 렌더되므로, 렌더가 실제로 쓴 폭을 그대로 따른다.
+    const maxW = ui.commitMsgCursorMaxW > 0 ? ui.commitMsgCursorMaxW : rightW - 2;
     const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
     const cursorLineEnd = state.commitMsg.indexOf('\n', state.commitCursor);
     const lineText = state.commitMsg.substring(cursorLineStart, cursorLineEnd === -1 ? state.commitMsg.length : cursorLineEnd);
@@ -1597,6 +1609,8 @@ function buildDiffCommitPanel(w, h) {
   ui.rightDiffH = diffH;
   ui.commitMsgVisibleLines = maxMsgLines;
   ui.commitAmendBtnOffset = -1; // commit 영역이 렌더되면 아래에서 다시 설정
+  ui.commitClearBtnOffset = -1;
+  ui.commitMsgCursorMaxW = 0;
 
   // Hunk 단위 스테이징 버튼 (staged/unstaged diff에서만, untracked/conflict 제외)
   ui.diffHunkZones = [];
@@ -1753,14 +1767,33 @@ function buildDiffCommitPanel(w, h) {
       ui.commitTopLine = topLine;
       ui.commitCursorLineIdx = cursorLineIdx;
 
+      // 메시지 지우기 버튼: 첫 줄 오른쪽 끝. 지울 내용이 있을 때만 자리를 차지한다.
+      const clearLabel = '[X]';
+      const showClear = state.commitMsg.length > 0;
+
       for (let i = 0; i < maxMsgLines; i++) {
         const lineIdx = topLine + i;
         if (lineIdx < msgLines.length) {
-          if (lineIdx === cursorLineIdx) {
-            lines.push(' ' + colors.value + viewport(msgLines[lineIdx], cursorCol, w - 2) + ansi.reset);
-          } else {
-            lines.push(' ' + colors.value + truncate(msgLines[lineIdx], w - 2) + ansi.reset);
+          // 버튼이 얹히는 첫 줄만 폭을 양보한다 — 나머지 줄은 끝까지 쓴다.
+          const hasBtn = i === 0 && showClear;
+          const lineW = hasBtn ? Math.max(8, w - 3 - clearLabel.length) : w - 2;
+          const body = lineIdx === cursorLineIdx
+            ? viewport(msgLines[lineIdx], cursorCol, lineW)
+            : truncate(msgLines[lineIdx], lineW);
+          // IME 커서는 이 폭을 기준으로 자리를 잡아야 렌더와 어긋나지 않는다.
+          if (lineIdx === cursorLineIdx) ui.commitMsgCursorMaxW = lineW;
+          let line = ' ' + colors.value + body + ansi.reset;
+          if (hasBtn) {
+            const bodyLen = visLen(stripAnsi(body));
+            const pad = Math.max(1, (w - 1 - clearLabel.length) - 1 - bodyLen);
+            const clearStyle = ui.hoveredCommitClear
+              ? colors.red + ansi.bold + CSI + '4m'
+              : colors.dim;
+            line += ' '.repeat(pad) + clearStyle + clearLabel + ansi.reset;
+            ui.commitClearBtnOffset = 1 + bodyLen + pad;
+            ui.commitClearBtnLen = clearLabel.length;
           }
+          lines.push(line);
         } else {
           lines.push('');
         }

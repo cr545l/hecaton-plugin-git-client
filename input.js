@@ -1372,7 +1372,13 @@ async function handleMouseData(data) {
         newCommitAmendHover = true;
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend) {
+      // Hover: 메시지 지우기 버튼 (커밋 메시지 첫 줄 오른쪽)
+      let newCommitClearHover = false;
+      if (ui.commitClearZone && cy === ui.commitClearZone.row && cx >= ui.commitClearZone.colStart && cx <= ui.commitClearZone.colEnd) {
+        newCommitClearHover = true;
+      }
+
+      if (newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredCommitterAction = newCommitterHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
@@ -1392,6 +1398,7 @@ async function handleMouseData(data) {
         ui.hoveredCollapseAllButton = newCollapseAllHover;
         ui.hoveredDiffHunkIdx = newDiffHunkHover;
         ui.hoveredCommitAmend = newCommitAmendHover;
+        ui.hoveredCommitClear = newCommitClearHover;
         // Update mouse cursor shape
         // 호버 시 밑줄이 그어지는 요소(= 클릭 가능한 버튼/메뉴)는 모두 손가락 커서로 맞춘다.
         // Status 패널의 브랜치명·섹션 헤더·브랜치/워크트리/스태시 줄(leftPanelClickMap)도 포함된다.
@@ -1400,7 +1407,7 @@ async function handleMouseData(data) {
             setMouseShape('ew-resize');
           } else if (newDivHover === 'horizontal') {
             setMouseShape('ns-resize');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover) {
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -2012,6 +2019,16 @@ async function handleMouseData(data) {
           }
         }
         if (hunkHandled) continue;
+      }
+
+      // Click on 메시지 지우기 버튼 — 커서 이동보다 먼저 본다(메시지 줄 위에 얹혀 있다).
+      if (ui.commitClearZone && cy === ui.commitClearZone.row && cx >= ui.commitClearZone.colStart && cx <= ui.commitClearZone.colEnd) {
+        if (state.mode === 'commit' && state.commitMsg.length > 0) {
+          state.commitMsg = '';
+          state.commitCursor = 0;
+          render();
+        }
+        continue;
       }
 
       // Click on amend 토글 (Commit 버튼 오른쪽)

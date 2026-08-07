@@ -99,6 +99,11 @@ const ui = {
   hoveredCommitAmend: false,
   commitAmendBtnOffset: -1,   // 렌더 시 commit 버튼 행 내 amend 토글 시작 컬럼(상대), -1이면 미표시
   commitAmendBtnLen: 0,
+  commitClearZone: null,      // { row, colStart, colEnd } 메시지 지우기 버튼 클릭 존 (메시지 첫 줄 오른쪽)
+  hoveredCommitClear: false,
+  commitClearBtnOffset: -1,   // 렌더 시 메시지 첫 줄 내 지우기 버튼 시작 컬럼(상대), -1이면 미표시
+  commitClearBtnLen: 0,
+  commitMsgCursorMaxW: 0,     // 커서가 놓인 메시지 줄을 렌더할 때 쓴 폭 (IME 커서 위치를 렌더와 맞춘다)
   diffHunkZones: [],          // [{ lineIdx, colStart, colEnd, hunkIdx }] hunk 버튼 클릭 존
   hoveredDiffHunkIdx: -1,
   stashMap: new Map(),
