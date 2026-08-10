@@ -640,7 +640,9 @@ function render() {
       // confirmed the region (enlarged buffer); earlier writes would clamp
       // onto the bottom visible row.
       if (hostScroll.isReady(r.id)) {
-        for (let i = 0; i < 3; i++) {
+        const bankDepth = hostScroll.depthOf(r.id);
+        const bankLines = bankDepth.before + bankDepth.after;
+        for (let i = 0; i < bankLines; i++) {
           buf.push(ansi.reset + ansi.moveTo(bankTop + 1 + i, absCol) + padRight(r.bank[i] || '', r.width) + ansi.reset);
         }
         buf.push(hostScroll.ackString(r.id, r.off));
@@ -1278,7 +1280,7 @@ function buildLeftPanel(w, h) {
     ui.hostScrollRegions.push({
       id: 'left', panel: 'left', relRow: 0, width: innerW, height: h,
       contentRows: lines.length, off,
-      bank: [lines[off - 1] || '', lines[off + h] || '', lines[off + h + 1] || ''],
+      bank: hostScroll.buildBank('left', (i) => lines[i], off, h),
     });
   }
 
@@ -1539,7 +1541,7 @@ function buildFileListPanel(w, h) {
     ui.hostScrollRegions.push({
       id: 'files', panel: 'middle', relRow: 0, width: innerW, height: h,
       contentRows: lines.length, off,
-      bank: [lines[off - 1] || '', lines[off + h] || '', lines[off + h + 1] || ''],
+      bank: hostScroll.buildBank('files', (i) => lines[i], off, h),
     });
   }
 
@@ -1632,7 +1634,7 @@ function buildDiffCommitPanel(w, h) {
     ui.hostScrollRegions.push({
       id: 'diff', panel: 'right', relRow: 0, width: innerW, height: diffH,
       contentRows: contentLen, off,
-      bank: [pick(off - 1), pick(off + diffH), pick(off + diffH + 1)],
+      bank: hostScroll.buildBank('diff', pick, off, diffH),
     });
   }
 
@@ -1977,17 +1979,23 @@ function buildLogPanel(w, h) {
     }
   }
 
-  // Host-owned scroll: register the list as a region with 3 overscan bank rows
-  // (row above the viewport + 2 rows below) so the host can reveal partial
-  // rows during sub-cell scrolling.
+  // Host-owned scroll: register the list as a region with its negotiated
+  // overscan bank rows (rows above the viewport + rows below) so the host can
+  // reveal them while scrolling.
   // Region registration only needs isActive(); the bank contents and the
   // bank-anchored sixel additionally need the host's confirmation (isReady).
   const useHostScroll = hostScroll.isActive() && listH > 0 && hostScroll.isReady('logList');
+  const logDepth = hostScroll.depthOf('logList');
   let logBankRows = null;
   if (hostScroll.isActive() && listH > 0) {
     const off = state.logScrollOffset;
     if (useHostScroll) {
-      logBankRows = [renderLogRow(off - 1), renderLogRow(off + listH), renderLogRow(off + listH + 1)];
+      // Same order as buildBank: `before` rows above (oldest first), then
+      // `after` rows below. Kept as row objects because the graph column needs
+      // the per-row glyph data, not just the text.
+      logBankRows = [];
+      for (let i = logDepth.before; i >= 1; i--) logBankRows.push(renderLogRow(off - i));
+      for (let i = 0; i < logDepth.after; i++) logBankRows.push(renderLogRow(off + listH + i));
     }
     ui.hostScrollRegions.push({
       id: 'logList', panel: 'right', relRow: 0, width: innerW, height: listH,
@@ -1997,15 +2005,20 @@ function buildLogPanel(w, h) {
   }
 
   // Sixel. With host scroll the graph covers the overscan range too
-  // ([off-1, off+listH+1]) and is anchored at the bank row, which the host
-  // maps to one row above the viewport.
+  // ([off-before, off+listH+after-1]) and is anchored at the first bank row,
+  // which the host maps to `before` rows above the viewport.
   if (SIXEL_ENABLED && graphRows.length > 0 && maxNaturalWidth > 0) {
     const off = state.logScrollOffset;
     const sixelGraphRows = useHostScroll
-      ? [logBankRows[0].graph, ...graphRows, logBankRows[1].graph, logBankRows[2].graph]
+      ? [
+          ...logBankRows.slice(0, logDepth.before).map(r => r.graph),
+          ...graphRows,
+          ...logBankRows.slice(logDepth.before).map(r => r.graph),
+        ]
       : graphRows;
-    const prevIdx = useHostScroll ? off - 2 : off - 1;
-    const nextIdx = off + listH + (useHostScroll ? 2 : 0);
+    // Boundary rows are the ones just outside what the graph image covers.
+    const prevIdx = useHostScroll ? off - logDepth.before - 1 : off - 1;
+    const nextIdx = off + listH + (useHostScroll ? logDepth.after : 0);
     const prevItem = prevIdx >= 0 ? state.logItems[prevIdx] : null;
     const nextItem = nextIdx < state.logItems.length ? state.logItems[nextIdx] : null;
     const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
@@ -2261,7 +2274,7 @@ function buildLogPanel(w, h) {
           // position-dependent, so report whatever makes the host's limit
           // (contentRows - height) equal the plugin's true reachable limit.
           contentRows: maxDetailScroll + cH, off,
-          bank: [pick(off - 1), pick(off + cH), pick(off + cH + 1)],
+          bank: hostScroll.buildBank('logDetail', pick, off, cH),
         });
       }
       // Reserve row for horizontal scrollbar
@@ -2410,7 +2423,7 @@ function buildFreshPanel(w, h) {
     ui.hostScrollRegions.push({
       id: 'freshList', panel: 'right', relRow: 1, width: innerW, height: fileListH,
       contentRows: state.freshItems.length, off,
-      bank: [renderFreshRow(off - 1), renderFreshRow(off + fileListH), renderFreshRow(off + fileListH + 1)],
+      bank: hostScroll.buildBank('freshList', renderFreshRow, off, fileListH),
     });
   }
 
@@ -2505,7 +2518,7 @@ function buildFreshPanel(w, h) {
         ui.hostScrollRegions.push({
           id: 'freshDetail', panel: 'right', relRow: detailRegionRelRow, width: innerW, height: cH,
           contentRows: state.freshDetailLines.length, off,
-          bank: [pick(off - 1), pick(off + cH), pick(off + cH + 1)],
+          bank: hostScroll.buildBank('freshDetail', pick, off, cH),
         });
       }
       // Reserve row for horizontal scrollbar

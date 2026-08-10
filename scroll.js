@@ -10,10 +10,22 @@
 //  - programmatic scrolling (keyboard cursor following, jump-to-top on
 //    refresh), pushed to the host via scroll.set after each render.
 //
-// Each region renders 3 overscan bank lines at off-screen buffer rows
-// (row above the viewport + 2 rows below) so the host can reveal partial rows
-// during sub-cell scrolling, and acknowledges the rendered base offset with an
-// in-band OSC 7741 so the host keeps stale frames positioned correctly.
+// Each region renders overscan bank lines at off-screen buffer rows (rows above
+// the viewport + rows below) so the host can reveal partial rows during sub-cell
+// scrolling, and acknowledges the rendered base offset with an in-band OSC 7741
+// so the host keeps stale frames positioned correctly.
+//
+// Bank depth is fixed at registration and declared to the host through
+// overscan_before/after. Adjusting it to the scroll speed was tried and is a net
+// loss: every change re-registers the region, and until the host confirms we may
+// not write bank rows at all, while the host's buffer resize throws away its
+// cell cache — so the banks empty out exactly during the fast scroll they were
+// meant to help, and the panel flickers on top of that.
+//
+// No depth can cover a hard fling anyway (it moves far more rows per round-trip
+// than any bank holds); the host handles that case by snapping its base and
+// showing briefly stale rows rather than blank ones. The depth here just needs
+// to absorb ordinary scrolling.
 //
 // Hosts without the scroll API (no scroll.set in plugin_api_methods.def) fall
 // back to the legacy plugin-side SGR wheel handlers untouched.
@@ -21,7 +33,7 @@
 const { state, ui } = require('./state');
 
 // Fixed off-screen bank slot per region id: bank rows live at
-// termRows + slot*3 (0-based), 3 rows each.
+// termRows + slot*BANK_ROWS (0-based), BANK_ROWS rows each.
 const BANK_SLOTS = {
   left: 0,
   files: 1,
@@ -31,6 +43,19 @@ const BANK_SLOTS = {
   freshList: 5,
   freshDetail: 6,
 };
+
+// Rows above / below the viewport. Deeper than the original 1+2 so ordinary
+// wheel and trackpad scrolling stays covered without the host having to fall
+// back to stale rows; every extra row costs the host buffer a row it scans each
+// frame, so this stays modest.
+const BANK_BEFORE = 2;
+const BANK_AFTER = 4;
+const BANK_ROWS = BANK_BEFORE + BANK_AFTER;
+const BANK_DEPTH = { before: BANK_BEFORE, after: BANK_AFTER };
+
+function depthOf() {
+  return BANK_DEPTH;
+}
 
 let _supported; // undefined = not probed yet
 let _deps = null; // { render, maybeLoadMoreLog }
@@ -109,6 +134,8 @@ function syncRegions(defs) {
         content_rows: d.contentRows,
         content_cols: d.contentCols,
         overscan_row: d.overscanRow,
+        overscan_before: BANK_BEFORE,
+        overscan_after: BANK_AFTER,
       }).then((res) => {
         if (res && !res.error) {
           const wasConfirmed = _confirmed.has(d.id);
@@ -152,7 +179,17 @@ function isReady(id) {
 
 // 0-based buffer row of a region's first bank line.
 function bankRow(id) {
-  return ui.termRows + (BANK_SLOTS[id] || 0) * 3;
+  return ui.termRows + (BANK_SLOTS[id] || 0) * BANK_ROWS;
+}
+
+// Bank lines for a region, in the order the host expects: BANK_BEFORE rows above
+// the viewport (topmost first) then BANK_AFTER rows below it.
+//   getLine(contentIndex) -> rendered line (may be undefined past the ends)
+function buildBank(id, getLine, off, height) {
+  const out = [];
+  for (let i = BANK_BEFORE; i >= 1; i--) out.push(getLine(off - i) || '');
+  for (let i = 0; i < BANK_AFTER; i++) out.push(getLine(off + height + i) || '');
+  return out;
 }
 
 // In-band render ack: tells the host which content row the buffer currently
@@ -162,4 +199,6 @@ function ackString(id, baseRow) {
   return '\x1b]7741;' + id + ';' + baseRow + ';0\x07';
 }
 
-module.exports = { isActive, isReady, init, applyOffset, syncRegions, bankRow, ackString, BANK_SLOTS };
+module.exports = {
+  isActive, isReady, init, applyOffset, syncRegions, bankRow, buildBank, depthOf, ackString, BANK_SLOTS,
+};
