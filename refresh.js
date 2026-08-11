@@ -1816,6 +1816,7 @@ function updateFreshDetail() {
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, updateDiff,
+  formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,

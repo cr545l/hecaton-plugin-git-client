@@ -591,13 +591,35 @@ function splitUpstreamRef(upstream, remotes) {
   return { remote: upstream.substring(0, idx), branch: upstream.substring(idx + 1) };
 }
 
+// upstream 대비 밀림/뒤처짐은 track(개수)과 trackshort(방향)를 함께 읽는다.
+// track 문자열("[ahead 2, behind 1]")은 로케일에 따라 번역될 수 있어 숫자만 뽑고,
+// 어느 쪽이 ahead인지는 번역되지 않는 trackshort(>, <, <>, =)로 판별한다.
+function parseUpstreamTrack(track, trackShort) {
+  const info = { ahead: 0, behind: 0, gone: false };
+  if (!track && !trackShort) return info;
+  if (/\bgone\b/.test(track)) { info.gone = true; return info; }
+  const nums = (track.match(/\d+/g) || []).map(Number);
+  if (trackShort === '>') info.ahead = nums[0] || 0;
+  else if (trackShort === '<') info.behind = nums[0] || 0;
+  else if (trackShort === '<>') { info.ahead = nums[0] || 0; info.behind = nums[1] || 0; }
+  return info;
+}
+
 async function gitBranches(cwd) {
   try {
-    const raw = (await git(['branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)'], cwd)).trim();
+    const raw = (await git(['branch', '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)'], cwd)).trim();
     if (!raw) return [];
     return raw.split('\n').map(line => {
       const parts = line.split('\t');
-      return { name: parts[0], isCurrent: parts[1] === '*', upstream: parts[2] || '' };
+      const track = parseUpstreamTrack(parts[3] || '', parts[4] || '');
+      return {
+        name: parts[0],
+        isCurrent: parts[1] === '*',
+        upstream: parts[2] || '',
+        ahead: track.ahead,
+        behind: track.behind,
+        upstreamGone: track.gone,
+      };
     });
   } catch {
     return [];
@@ -1530,7 +1552,7 @@ module.exports = {
   gitCheckoutOurs, gitCheckoutTheirs,
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
   gitRevertContinue, gitRevertAbort, gitRevertSkip, gitWriteRebaseMessage,
-  gitBranches, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitRemoteAdd,
+  gitBranches, parseUpstreamTrack, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitCherryPick, gitCherryPickNoCommit, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo, gitCommitMessage,

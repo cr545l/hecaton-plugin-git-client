@@ -2,7 +2,7 @@ const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
 const { state, ui, isPinnedBranch } = require('./state');
-const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const hostScroll = require('./scroll');
@@ -73,6 +73,134 @@ function buildCommitterHint(maxWidth) {
   }
 
   return { content, width: offset, zones };
+}
+
+// 힌트바 왼쪽 조각 잇기 — 앞에서부터 폭이 허용하는 만큼만 붙인다.
+// alt를 주면 원래 표기가 안 들어갈 때 더 짧은 표기로 물러난다(예: 이름+이메일 → 이름).
+// 첫 조각(식별자)조차 못 들어가면 힌트 자체를 포기해 반쪽짜리 문구를 남기지 않는다.
+function joinHintParts(parts, maxWidth) {
+  let content = '';
+  let width = 0;
+  for (const part of parts) {
+    if (!part) continue;
+    const sep = width > 0 ? '  ' : ' ';
+    for (const text of [part.text, ...(part.alt || [])]) {
+      if (!text) continue;
+      const need = visLen(sep) + visLen(text);
+      if (width + need > maxWidth) continue;
+      content += sep + (part.style || '') + text + ansi.reset;
+      width += need;
+      break;
+    }
+  }
+  return width > 0 ? content : null;
+}
+
+// 히스토리 힌트 — 마우스를 올린 리비전(없으면 현재 선택된 리비전)의 요약을
+// 힌트바 왼쪽에 해시 / 커밋일시 / 커미터 순으로 미리 보여준다.
+function buildRevisionHint(maxWidth) {
+  if (state.rightView !== 'log') return null;
+
+  let item = null;
+  const hoverRow = ui.hoveredLogRow;
+  if (hoverRow >= 0) {
+    const hovered = state.logItems[state.logScrollOffset + hoverRow];
+    if (hovered && hovered.type === 'commit') item = hovered;
+  }
+  if (!item) item = selectedLogRef();
+  if (!item) return null;
+
+  const hash = item.ref || (item.hash || '').substring(0, 7);
+  if (!hash) return null;
+  const dateStr = item.committerDate || item.authorDate;
+  const name = item.committerName || item.authorName || '';
+  const email = item.committerEmail || item.authorEmail || '';
+
+  return joinHintParts([
+    { text: hash, style: item.isRecovery ? RECOVERY_TEXT : colors.yellow },
+    { text: dateStr ? formatDateTime(dateStr) : '', style: colors.dim },
+    { text: email ? name + ' <' + email + '>' : name, alt: [name], style: colors.dim },
+  ], maxWidth);
+}
+
+// Status 힌트 — 좌측 패널에서 마우스를 올린 줄의 정보를 힌트바에 편다.
+// 패널은 폭이 좁아 표기를 접어두는 곳이 많다(추적 리모트, 밀린/뒤처진 커밋 수,
+// 워크트리 경로). 그 접힌 정보를 여기서 풀어 보여준다.
+function buildStatusHint(maxWidth) {
+  if (!state.isGitRepo) return null;
+  const row = ui.hoveredLeftPanelRow;
+  if (row < 0 || row >= ui.leftPanelClickMap.length) return null;
+  const entry = ui.leftPanelClickMap[row];
+  if (!entry) return null;
+
+  if (entry.action === 'goto-branch' || entry.action === 'reveal-current-branch') {
+    return buildBranchHint(entry.branch, maxWidth);
+  }
+  if (entry.action === 'goto-worktree') {
+    const wt = state.worktrees.find(w => w.path === entry.path);
+    if (!wt) return null;
+    const label = wt.isDetached ? 'detached' : wt.branch ? wt.branch : '';
+    const flags = [wt.isMain ? 'main' : '', wt.isLocked ? 'locked' : '', wt.isPrunable ? 'prunable' : '']
+      .filter(Boolean).join(', ');
+    return joinHintParts([
+      { text: label, style: wt.isDetached ? colors.dim : colors.value + ansi.bold },
+      { text: wt.path, style: colors.dim },
+      { text: flags ? '[' + flags + ']' : '', style: colors.dim },
+    ], maxWidth);
+  }
+  if (entry.action === 'goto-stash') {
+    const s = state.stashes.find(x => x.shortHash === entry.shortHash);
+    if (!s) return null;
+    return joinHintParts([
+      { text: s.shortHash || '', style: colors.yellow },
+      { text: s.ref || '', style: STASH_TEXT },
+      { text: s.message || '', style: colors.dim },
+    ], maxWidth);
+  }
+  return null;
+}
+
+// 브랜치 한 줄 요약 — 이름 / 추적 리모트 / push·pull 대기 커밋 순으로 놓는다.
+function buildBranchHint(name, maxWidth) {
+  if (!name) return null;
+  const local = state.branches.find(b => b.name === name);
+
+  if (!local) {
+    // 리모트 추적 브랜치 — 이 리모트를 따라가는 로컬 브랜치가 있으면 함께 보여준다.
+    if (!state.remoteBranches.includes(name)) return null;
+    const tracker = state.branches.find(b => b.upstream === name);
+    return joinHintParts([
+      { text: name, style: colors.red + ansi.bold },
+      { text: tracker ? '← ' + tracker.name : '', style: colors.value },
+      { text: tracker ? '' : 'not tracked by a local branch', style: colors.dim },
+    ], maxWidth);
+  }
+
+  // 현재 브랜치의 ahead/behind는 push/pull 직후 낙관적으로 갱신되는 state 쪽이 더 최신이다.
+  const ahead = local.isCurrent ? state.ahead : local.ahead || 0;
+  const behind = local.isCurrent ? state.behind : local.behind || 0;
+  // upstream을 지정하지 않았어도 같은 이름의 리모트 브랜치가 있으면 패널이 @리모트로
+  // 표시한다(currentBranchRemote). 힌트에서도 같은 기준으로 짚어준다.
+  const guessedRemote = local.isCurrent && !local.upstream ? currentBranchRemote() : '';
+  const upstream = local.upstream || (guessedRemote ? guessedRemote + '/' + local.name : '');
+  const holder = state.worktrees.find(w => !w.isCurrent && w.branch === local.name);
+
+  let track;
+  if (local.upstreamGone) track = { text: '[gone]', style: colors.red + ansi.bold };
+  else if (ahead > 0 || behind > 0) {
+    track = {
+      text: (ahead > 0 ? 'push ↑' + ahead + (behind > 0 ? '  ' : '') : '') + (behind > 0 ? 'pull ↓' + behind : ''),
+      style: colors.orange + ansi.bold,
+    };
+  } else if (upstream) track = { text: 'up to date', style: colors.dim };
+  else track = { text: 'local only', style: colors.dim };
+
+  return joinHintParts([
+    { text: name, style: local.isCurrent ? colors.green + ansi.bold : colors.value },
+    { text: upstream ? '→ ' + upstream + (local.upstream ? '' : ' (not set)') : '', style: colors.red },
+    track,
+    { text: holder ? '[worktree: ' + holder.path + ']' : '', style: colors.cyan },
+  ], maxWidth);
 }
 
 // Layout 전환 감지 — sixel은 텍스트 redraw로 지워지지 않아 잔상이 남는다.
@@ -510,6 +638,19 @@ function render() {
   );
 
   // -- Hint bar --
+  // 오른쪽(스피너 + committer)을 먼저 확정해야 왼쪽에 남는 폭을 알 수 있다.
+  // 리비전 힌트가 그 폭에 맞춰 표시 항목을 줄이기 때문에 순서가 중요하다.
+  const spinnerPart = isSpinning()
+    ? colors.dim + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ansi.reset
+    : '';
+  const spinnerWidth = visLen(spinnerPart);
+  const committerMaxWidth = Math.max(0, Math.min(72, Math.floor(width * 0.55) - spinnerWidth));
+  const committerHint = buildCommitterHint(committerMaxWidth);
+  const rightSeparator = spinnerPart && committerHint.width > 0 ? ' ' : '';
+  const rightContent = spinnerPart + rightSeparator + committerHint.content;
+  const rightWidth = visLen(rightContent);
+  const leftMaxWidth = Math.max(0, width - rightWidth - (rightWidth > 0 ? 1 : 0));
+
   let hintContent;
   if (state.mode === 'rebase-menu') {
     hintContent = colors.yellow + ' Rebase: ' + ansi.reset
@@ -587,18 +728,10 @@ function render() {
         + colors.dim + '[b] continue/abort' + (op.type !== 'merge' ? '/skip' : '') + ansi.reset;
     }
   } else {
-    hintContent = ' ' + buildHintText();
+    hintContent = buildStatusHint(leftMaxWidth)
+      || buildRevisionHint(leftMaxWidth)
+      || (' ' + buildHintText());
   }
-  const spinnerPart = isSpinning()
-    ? colors.dim + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ansi.reset
-    : '';
-  const spinnerWidth = visLen(spinnerPart);
-  const committerMaxWidth = Math.max(0, Math.min(72, Math.floor(width * 0.55) - spinnerWidth));
-  const committerHint = buildCommitterHint(committerMaxWidth);
-  const rightSeparator = spinnerPart && committerHint.width > 0 ? ' ' : '';
-  const rightContent = spinnerPart + rightSeparator + committerHint.content;
-  const rightWidth = visLen(rightContent);
-  const leftMaxWidth = Math.max(0, width - rightWidth - (rightWidth > 0 ? 1 : 0));
   const leftContent = leftMaxWidth <= 0
     ? ''
     : visLen(hintContent) > leftMaxWidth
