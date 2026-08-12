@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitExec, gitExecChecked, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef } = require('./git');
+const { gitExec, gitExecChecked, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -492,23 +492,26 @@ let _metaCache = null;
 let _metaFingerprint = '';
 let _metaCacheCwd = '';
 
-// 현재 브랜치가 올라가 있는 리모트 이름 — 없으면 '' (아직 push 하지 않은 로컬 전용 브랜치).
+// 브랜치가 올라가 있는 리모트 이름 — 없으면 '' (아직 push 하지 않은 로컬 전용 브랜치).
 // upstream이 우선이지만, 다른 도구가 `git push origin HEAD`처럼 추적 설정 없이 올린 브랜치는
 // upstream이 비어 있어도 리모트에는 존재한다. 그래서 같은 이름의 원격 브랜치까지 확인해,
 // 커밋 데코레이션에 origin/…이 보이는데 왼쪽 패널에는 @origin이 없는 어긋남을 없앤다.
-function currentBranchRemote() {
-  const cur = state.branches.find(b => b.isCurrent);
-  if (!cur) return '';
-  const fromUpstream = splitUpstreamRef(cur.upstream, state.remotes).remote;
+function branchRemoteFor(branch) {
+  if (!branch) return '';
+  const fromUpstream = splitUpstreamRef(branch.upstream, state.remotes).remote;
   if (fromUpstream) return fromUpstream;
   // 여러 리모트에 같은 이름이 있을 수 있어 관례대로 origin을 먼저 본다.
   const ordered = state.remotes.includes('origin')
     ? ['origin', ...state.remotes.filter(r => r !== 'origin')]
     : state.remotes;
   for (const r of ordered) {
-    if (state.remoteBranches.includes(r + '/' + cur.name)) return r;
+    if (state.remoteBranches.includes(r + '/' + branch.name)) return r;
   }
   return '';
+}
+
+function currentBranchRemote() {
+  return branchRemoteFor(state.branches.find(b => b.isCurrent));
 }
 
 // for-each-ref 타임아웃. gitExec 기본값 5초는 ref가 많은 저장소에서 메타 조회 8개를
@@ -866,7 +869,10 @@ async function refreshAsync(options = {}) {
   // - 메타(stash/for-each-ref/remote/worktrees/user 2종/ahead-behind) 7개는 fingerprint 캐시 적중 시 재호출 생략
   // - git-dir은 state.gitDir 캐시 우선 (preCheck/setupGitWatcher가 채움)
   // → 캐시 적중: 1 spawn (status), 미스: 8 spawn
-  const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)';
+  // upstream:track / trackshort까지 함께 받아 브랜치별 ahead/behind를 얻는다. 같은
+  // for-each-ref 한 번에 딸려 오므로 spawn이 늘지 않는다 — Pinned 목록이 현재 브랜치처럼
+  // push/pull 대기 수를 보여주는 데 쓴다.
+  const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)';
   const sepLocal = (process.platform === 'win32') ? '\\' : '/';
   const gitDirPromise = (state.gitDir && state.gitCommonDir)
     ? Promise.resolve(state.gitDir)
@@ -961,7 +967,8 @@ async function refreshAsync(options = {}) {
         const name = refname.substring('refs/heads/'.length);
         const isCurrent = headMark === '*';
         if (isCurrent) currentBranch = name;
-        branches.push({ name, isCurrent, upstream });
+        const track = parseUpstreamTrack(parts[3] || '', parts[4] || '');
+        branches.push({ name, isCurrent, upstream, ahead: track.ahead, behind: track.behind, upstreamGone: track.gone });
       } else if (refname.startsWith('refs/remotes/')) {
         const name = refname.substring('refs/remotes/'.length);
         if (name.includes('/HEAD')) continue;
@@ -1823,4 +1830,5 @@ module.exports = {
   removeIndexLock,
   computeRefsTreeSignature,
   currentBranchRemote,
+  branchRemoteFor,
 };

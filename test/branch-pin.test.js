@@ -13,13 +13,14 @@ const PANEL_H = 60;
 const PINNED = '\x1b[95m';  // colors.pinned — 핀 고정 브랜치
 const GREEN = '\x1b[32m';   // colors.green — 현재 브랜치
 const CYAN = '\x1b[36m';    // colors.cyan — 일반 로컬 브랜치(history) / 워크트리 점유(목록)
-const RED = '\x1b[31m';     // colors.red — 리모트 추적 브랜치
+const RED = '\x1b[31m';     // colors.red — 리모트 추적 브랜치 / @리모트 표기
+const ORANGE = '\x1b[33m';  // colors.orange — push/pull 대기 화살표
 
 function plain(lines) {
   return lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, ''));
 }
 
-function resetState({ branch = 'main', branches, pinned = [], worktrees, remoteBranches = [] } = {}) {
+function resetState({ branch = 'main', branches, pinned = [], worktrees, remoteBranches = [], ahead = 0, behind = 0 } = {}) {
   state.loading = false;
   state.isGitRepo = true;
   state.gitNotFound = false;
@@ -35,8 +36,8 @@ function resetState({ branch = 'main', branches, pinned = [], worktrees, remoteB
   state.stashes = [];
   state.worktrees = worktrees || [{ path: 'C:/repo', branch, isMain: true, isCurrent: true, isDetached: false, isBare: false, isLocked: false, isPrunable: false }];
   state.isLinkedWorktree = false;
-  state.ahead = 0;
-  state.behind = 0;
+  state.ahead = ahead;
+  state.behind = behind;
   ui.pinnedBranches = pinned.slice();
   ui.collapsedSections = {};
   ui.collapsedGroups = {};
@@ -131,6 +132,127 @@ test('핀이 있어도 줄이 패널 폭을 넘지 않는다', () => {
   const narrow = 20;
   for (const line of plain(buildLeftPanel(narrow, PANEL_H))) {
     assert.ok(line.length <= narrow - 1, '줄이 패널 폭을 넘음: [' + line + ']');
+  }
+});
+
+// ── 추적 상태 표기 ──
+//
+// 핀은 자주 보는 브랜치를 모아 둔 목록이라, 거기까지 가지 않고도 push/pull 할 게
+// 있는지 알 수 있어야 한다. 현재 브랜치 줄과 같은 표기(@리모트 + ↓behind ↑ahead)를 쓴다.
+
+function pinnedLines(w = PANEL_W) {
+  const lines = buildLeftPanel(w, PANEL_H);
+  const idx = plain(lines).findIndex(l => /^\s*[-+] Pinned\s*$/.test(l));
+  const out = [];
+  for (let i = idx + 1; i < lines.length; i++) {
+    if (/^\s*[-+] /.test(plain(lines)[i])) break;
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+function trackedBranches(branch) {
+  return [
+    { name: 'main', isCurrent: branch === 'main', upstream: 'origin/main', ahead: 0, behind: 0 },
+    { name: 'develop', isCurrent: branch === 'develop', upstream: 'origin/develop', ahead: 2, behind: 3 },
+    { name: 'local-only', isCurrent: branch === 'local-only', upstream: '', ahead: 0, behind: 0 },
+  ];
+}
+
+test('핀 브랜치에 @리모트를 붙인다', () => {
+  resetState({ branches: trackedBranches('main'), pinned: ['develop'], remoteBranches: ['origin/develop'] });
+  const line = pinnedLines()[0];
+  assert.match(plain([line])[0], /develop @origin/);
+  assert.ok(codesBefore(line, '@origin').includes(RED), '@리모트는 red');
+});
+
+test('핀 브랜치에 push/pull 대기 수를 붙인다', () => {
+  resetState({ branches: trackedBranches('main'), pinned: ['develop'], remoteBranches: ['origin/develop'] });
+  const line = pinnedLines()[0];
+  assert.match(plain([line])[0], /↓3 ↑2/, 'behind 먼저, ahead 다음');
+  assert.ok(codesBefore(line, '↓3').includes(ORANGE), '화살표는 orange');
+});
+
+test('밀리거나 뒤처진 게 없으면 화살표를 붙이지 않는다', () => {
+  resetState({ branches: trackedBranches('develop'), pinned: ['main'], remoteBranches: ['origin/main'] });
+  assert.match(plain(pinnedLines())[0], /^\s+main @origin\s*$/);
+});
+
+test('리모트에 없는 브랜치는 아무 표기도 붙지 않는다', () => {
+  resetState({ branches: trackedBranches('main'), pinned: ['local-only'] });
+  assert.match(plain(pinnedLines())[0], /^\s+local-only\s*$/);
+});
+
+test('upstream이 없어도 같은 이름의 리모트 브랜치가 있으면 @리모트를 붙인다', () => {
+  resetState({ branches: trackedBranches('main'), pinned: ['local-only'], remoteBranches: ['origin/local-only'] });
+  assert.match(plain(pinnedLines())[0], /^\s+local-only @origin\s*$/);
+});
+
+test('현재 브랜치를 핀하면 상단 줄과 같은 값(state.ahead/behind)을 쓴다', () => {
+  resetState({
+    branch: 'main',
+    branches: trackedBranches('main'),
+    pinned: ['main'],
+    remoteBranches: ['origin/main'],
+    ahead: 5,
+    behind: 7,
+  });
+  assert.match(plain(pinnedLines())[0], /✓ main @origin ↓7 ↑5/);
+});
+
+// 핀은 Pinned 목록과 Branches 트리 양쪽에 그려진다. 어느 쪽을 보고 있든 같은 정보가
+// 있어야 하므로 트리에서도 추적 상태를 붙인다.
+test('Branches 트리의 핀 고정 브랜치에도 추적 표기를 붙인다', () => {
+  resetState({ branches: trackedBranches('main'), pinned: ['develop'], remoteBranches: ['origin/develop'] });
+  const lines = buildLeftPanel(PANEL_W, PANEL_H);
+  const flat = plain(lines);
+  const branchesIdx = sectionIdx(flat, 'Branches');
+  const i = flat.findIndex((l, idx) => idx > branchesIdx && /^\s+develop/.test(l));
+  assert.match(flat[i], /^\s+develop @origin ↓3 ↑2\s*$/);
+  assert.ok(codesBefore(lines[i], '@origin').includes(RED));
+  assert.ok(codesBefore(lines[i], '↓3').includes(ORANGE));
+});
+
+test('핀이 아닌 브랜치는 트리에서 이름만 둔다', () => {
+  resetState({ branches: trackedBranches('main'), pinned: ['develop'], remoteBranches: ['origin/develop', 'origin/main'] });
+  const flat = plain(buildLeftPanel(PANEL_W, PANEL_H));
+  const branchesIdx = sectionIdx(flat, 'Branches');
+  const line = flat.slice(branchesIdx).find(l => /^\s+local-only/.test(l));
+  assert.equal(line.trim(), 'local-only', '줄마다 붙이면 트리가 넓어진다');
+});
+
+test('그룹(feature/) 안의 핀 고정 브랜치에도 붙는다', () => {
+  resetState({
+    branch: 'main',
+    branches: [
+      { name: 'main', isCurrent: true, upstream: 'origin/main', ahead: 0, behind: 0 },
+      { name: 'feature/login', isCurrent: false, upstream: 'origin/feature/login', ahead: 1, behind: 0 },
+      { name: 'feature/other', isCurrent: false, upstream: 'origin/feature/other', ahead: 9, behind: 9 },
+    ],
+    pinned: ['feature/login'],
+    remoteBranches: ['origin/feature/login', 'origin/feature/other'],
+  });
+  const flat = plain(buildLeftPanel(PANEL_W, PANEL_H));
+  const branchesIdx = sectionIdx(flat, 'Branches');
+  const rest = flat.slice(branchesIdx);
+  assert.ok(rest.some(l => /^\s+login @origin ↑1\s*$/.test(l)), '핀 걸린 그룹 항목: ' + rest.join(' / '));
+  assert.ok(rest.some(l => /^\s+other\s*$/.test(l)), '핀이 아닌 그룹 항목은 이름만');
+});
+
+test('추적 표기가 붙어도 줄이 패널 폭을 넘지 않는다', () => {
+  resetState({
+    branch: 'main',
+    branches: [
+      { name: 'main', isCurrent: true, upstream: 'origin/main', ahead: 0, behind: 0 },
+      { name: 'a-very-long-branch-name-that-overflows', isCurrent: false, upstream: 'origin/a-very-long-branch-name-that-overflows', ahead: 12, behind: 34 },
+    ],
+    pinned: ['a-very-long-branch-name-that-overflows'],
+    remoteBranches: ['origin/a-very-long-branch-name-that-overflows'],
+  });
+  for (const narrow of [16, 20, 28]) {
+    for (const line of plain(buildLeftPanel(narrow, PANEL_H))) {
+      assert.ok(line.length <= narrow - 1, 'w=' + narrow + ' 줄이 폭을 넘음: [' + line + ']');
+    }
   }
 });
 

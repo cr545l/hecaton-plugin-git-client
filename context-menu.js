@@ -16,7 +16,7 @@ const {
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
   gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync,
   gitCheckRebaseConflicts, gitIsRebaseNoop,
   gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
   gitExec, gitResetModeAsync, gitRewordCommitAsync, gitSquashIntoParentAsync,
@@ -27,7 +27,7 @@ const {
   gitDeleteTag, gitCreateTagAnnotated, gitApplyPatchFromText,
   gitWorktreeAdd, gitWorktreeRemove, gitWorktreePruneAsync, gitBranchExists,
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
-  resolveWorkTreeRoot,
+  resolveWorkTreeRoot, splitUpstreamRef,
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
@@ -348,6 +348,12 @@ function buildBranchContextMenuItems(branchName) {
     items.push({ id: 'branch_merge_into', label: "Merge '" + branchName + "' into current" });
   }
 
+  // 받아오기 계열은 결과가 HEAD에 들어간다 — merge도 pull도 "어디로"를 고를 수 없다.
+  // 그래서 체크아웃하지 않은 브랜치에 Pull을 그대로 실행하면 엉뚱하게 현재 브랜치를
+  // 건드리고, 현재 브랜치가 이미 그 커밋들을 담고 있으면 'Already up to date'로 종료 코드
+  // 0을 돌려줘 "눌러도 아무 일도 안 일어난다"로 보인다.
+  // 항목은 그대로 두되(의도는 "그 브랜치를 최신으로"가 맞다), 실행 시 어떤 명령으로
+  // 대신할지 고르게 한다 — showPullOtherBranchDialog 참고.
   if (upstream) {
     items.push(
       { id: 'branch_ff', label: "Fast-Forward to '" + upstream + "'" },
@@ -1150,15 +1156,25 @@ async function handleContextMenuAction(actionId) {
         startSpinner('Checking out...');
         gitCheckoutRefAsync(state.cwd, branchName).then(async err => { await afterGitOp(err, 'Checkout'); });
         break;
-      case 'branch_ff':
+      case 'branch_ff': {
         startSpinner('Fast-forwarding...');
-        gitMergeFastForwardAsync(state.cwd, upstream).then(async err => { await afterGitOp(err, 'Fast-forward'); });
+        // 현재 브랜치는 merge --ff-only로 작업 트리까지 함께 옮긴다. 다른 브랜치는
+        // 체크아웃돼 있지 않으므로 refspec fetch로 ref만 옮긴다 — merge를 쓰면 엉뚱하게
+        // HEAD가 갱신된다.
+        const ffPromise = branch && branch.isCurrent
+          ? gitMergeFastForwardAsync(state.cwd, upstream)
+          : gitFetchIntoBranchAsync(state.cwd, remote, splitUpstreamRef(upstream, state.remotes).branch, branchName);
+        ffPromise.then(async err => { await afterGitOp(err, 'Fast-forward'); });
         break;
+      }
       case 'branch_pull':
+        // 체크아웃하지 않은 브랜치면 pull이 HEAD로 들어가 버린다 — 대신할 명령을 고르게 한다.
+        if (!branch || !branch.isCurrent) { showPullOtherBranchDialog(branchName, upstream, false); break; }
         startSpinner('Pulling...');
         gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Pull'); });
         break;
       case 'branch_pull_rebase':
+        if (!branch || !branch.isCurrent) { showPullOtherBranchDialog(branchName, upstream, true); break; }
         startSpinner('Pulling with rebase...');
         gitPullRebaseAsync(state.cwd, remote, branchName).then(async err => {
           if (err && isRebaseConflictError(err)) {
@@ -1719,6 +1735,33 @@ async function handleDialogResult(params) {
           refreshInBackground({ statusOnly: true });
         }
       }
+      return;
+    }
+
+    // 체크아웃하지 않은 브랜치의 Pull — 고른 대체 명령을 실행한다.
+    if (action === 'pull-other-branch' || action === 'pull-other-branch-rebase') {
+      if (!target || (buttonId !== 'ff' && buttonId !== 'checkout_pull')) return;
+      const rebase = action === 'pull-other-branch-rebase';
+      const entry = state.branches.find(b => b.name === target);
+      const parts = splitUpstreamRef(entry ? entry.upstream : '', state.remotes);
+      const remote = parts.remote || state.remotes[0] || 'origin';
+      const remoteBranch = parts.branch || target;
+
+      if (buttonId === 'ff') {
+        startSpinner('Fast-forwarding...');
+        const err = await gitFetchIntoBranchAsync(state.cwd, remote, remoteBranch, target);
+        await afterGitOp(err, 'Fast-forward');
+        return;
+      }
+      // Checkout & Pull — 체크아웃부터 실패하면(로컬 수정 등) pull은 시도하지 않는다.
+      startSpinner('Checking out...');
+      const coErr = await gitCheckoutRefAsync(state.cwd, target);
+      if (coErr) { await afterGitOp(coErr, 'Checkout'); return; }
+      startSpinner(rebase ? 'Pulling with rebase...' : 'Pulling...');
+      const pullErr = rebase
+        ? await gitPullRebaseAsync(state.cwd, remote, remoteBranch)
+        : await gitPullFromRemoteAsync(state.cwd, remote, remoteBranch);
+      await afterGitOp(pullErr, rebase ? 'Pull (rebase)' : 'Pull');
       return;
     }
 
@@ -2566,6 +2609,52 @@ async function runCreateBranch(name, startPoint, opName) {
     return;
   }
   await afterGitOp(err, opName);
+}
+
+// 체크아웃하지 않은 브랜치에 Pull을 눌렀을 때 — 왜 그대로는 안 되는지 알리고,
+// 같은 의도를 이루는 두 명령 중에서 고르게 한다.
+//   Fast-Forward   : git fetch <remote> <upstream>:<branch>
+//                    ref만 옮긴다. 워킹트리·현재 브랜치를 건드리지 않지만 갈라졌으면 거절된다.
+//   Checkout & Pull: git checkout <branch> && git pull [--rebase] <remote> <upstream>
+//                    진짜 pull이라 갈라져도 병합/리베이스로 합칠 수 있지만 워킹트리가 바뀐다.
+function showPullOtherBranchDialog(branchName, upstream, rebase) {
+  const branch = state.branches.find(b => b.name === branchName);
+  const ahead = branch ? (branch.ahead || 0) : 0;
+  const behind = branch ? (branch.behind || 0) : 0;
+  const current = state.branch || 'HEAD';
+
+  // 다른 워크트리가 잡고 있으면 두 선택지 모두 git이 거절한다 — 고르게 하지 않고 알려만 준다.
+  const holder = state.worktrees.find(w => !w.isCurrent && w.branch === branchName);
+  if (holder) {
+    showError("'" + branchName + "' is checked out in another worktree:\n" + holder.path
+      + '\n\nUpdate it from that worktree — git refuses to move a branch that is checked out elsewhere.');
+    return;
+  }
+
+  let situation;
+  if (behind === 0 && ahead === 0) situation = "'" + branchName + "' already matches '" + upstream + "'.";
+  else if (ahead > 0 && behind > 0) {
+    situation = "'" + branchName + "' has diverged from '" + upstream + "' (↑" + ahead + ' ↓' + behind + ')'
+      + '\nFast-Forward will be refused — only Checkout & Pull can merge the two sides.';
+  } else if (behind > 0) situation = "'" + branchName + "' is ↓" + behind + " behind '" + upstream + "' and can be fast-forwarded.";
+  else situation = "'" + branchName + "' is ↑" + ahead + " ahead of '" + upstream + "' — nothing to receive.";
+
+  const pullLabel = rebase ? 'Checkout & Pull (Rebase)' : 'Checkout & Pull';
+  hecaton.dialog.show({
+    type: 'message',
+    title: rebase ? "Pull '" + branchName + "' with Rebase" : "Pull '" + branchName + "'",
+    message: "git pull always merges into the checked-out branch, so it would update '" + current
+      + "' instead of '" + branchName + "'.\n\n" + situation
+      + '\n\nFast-Forward moves the branch without touching your working tree.\n'
+      + pullLabel + " switches to '" + branchName + "' first, then pulls.",
+    buttons: [
+      { id: 'ff', label: 'Fast-Forward', default: !(ahead > 0 && behind > 0) },
+      { id: 'checkout_pull', label: pullLabel, default: ahead > 0 && behind > 0 },
+      { id: 'cancel', label: 'Cancel' },
+    ],
+  });
+  state.pendingDialogAction = rebase ? 'pull-other-branch-rebase' : 'pull-other-branch';
+  state.pendingDialogTarget = branchName;
 }
 
 function showForceDeleteBranchDialog(branchName, err) {

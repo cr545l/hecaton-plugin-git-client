@@ -15,12 +15,16 @@ const { refreshAsync } = require('../refresh');
 
 const SEP = (process.platform === 'win32') ? '\\' : '/';
 
-// for-each-ref --format='%(HEAD)\t%(refname)\t%(upstream:short)'
+// for-each-ref --format='%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)'
+// 브랜치별 추적 상태(ahead/behind/gone)는 이 한 번의 조회에서 함께 받는다 — Pinned 목록과
+// 힌트바가 현재 브랜치가 아닌 브랜치에도 push/pull 대기 수를 보여주는 근거다.
 const REFS_RAW = [
-  '*\trefs/heads/work5\torigin/work5',
-  '\trefs/heads/dev\torigin/dev',
-  '\trefs/remotes/origin/dev\t',
-  '\trefs/remotes/origin/HEAD\t',
+  '*\trefs/heads/work5\torigin/work5\t[ahead 2]\t>',
+  '\trefs/heads/dev\torigin/dev\t[ahead 1, behind 4]\t<>',
+  '\trefs/heads/stale\torigin/stale\t[gone]\t',
+  '\trefs/heads/solo\t\t\t',
+  '\trefs/remotes/origin/dev\t\t\t',
+  '\trefs/remotes/origin/HEAD\t\t\t',
 ].join('\n') + '\n';
 
 function worktreeRaw(cwd) {
@@ -118,11 +122,33 @@ test('조회에 성공하면 브랜치/원격/워크트리를 채운다', async 
 
   await refreshAsync(OPTS);
 
-  assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev']);
+  assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev', 'stale', 'solo']);
   assert.deepEqual(state.remoteBranches, ['origin/dev']);   // origin/HEAD는 제외
   assert.equal(state.branch, 'work5');
   assert.equal(state.worktrees.length, 2);
   assert.equal(host.refsCalls, 1);
+});
+
+test('브랜치별 ahead/behind/gone을 같은 조회에서 받아 둔다', async () => {
+  const cwd = 'C:/repo-track';
+  installHost(cwd);
+  resetState(cwd);
+
+  await refreshAsync(OPTS);
+  const by = name => state.branches.find(b => b.name === name);
+
+  assert.deepEqual(
+    { ahead: by('work5').ahead, behind: by('work5').behind, upstreamGone: by('work5').upstreamGone },
+    { ahead: 2, behind: 0, upstreamGone: false });
+  assert.deepEqual(
+    { ahead: by('dev').ahead, behind: by('dev').behind, upstreamGone: by('dev').upstreamGone },
+    { ahead: 1, behind: 4, upstreamGone: false },
+    '현재 브랜치가 아니어도 대기 수를 알아야 한다');
+  assert.equal(by('stale').upstreamGone, true, '원격에서 사라진 upstream');
+  assert.deepEqual(
+    { ahead: by('solo').ahead, behind: by('solo').behind, upstreamGone: by('solo').upstreamGone },
+    { ahead: 0, behind: 0, upstreamGone: false },
+    'upstream이 없으면 비교 기준이 없다');
 });
 
 test('for-each-ref가 실패해도 기존 브랜치 목록을 지우지 않는다', async () => {
@@ -131,14 +157,14 @@ test('for-each-ref가 실패해도 기존 브랜치 목록을 지우지 않는�
   resetState(cwd);
 
   await refreshAsync(OPTS);
-  assert.equal(state.branches.length, 2);
+  assert.equal(state.branches.length, 4);
 
   host.refsOk = false;
   host.mtime = 2000;   // .git이 바뀌어 캐시 미스 → 실제로 for-each-ref를 다시 호출한다
   await refreshAsync(OPTS);
 
   assert.equal(host.refsCalls, 2, '캐시 미스라 재조회해야 실패 경로를 탄다');
-  assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev']);
+  assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev', 'stale', 'solo']);
   assert.deepEqual(state.remoteBranches, ['origin/dev']);
   assert.equal(state.branch, 'work5', 'detached로 잘못 표시하면 안 된다');
 });
@@ -159,7 +185,7 @@ test('for-each-ref 실패 결과는 캐시하지 않아 다음 refresh에서 복
   await refreshAsync(OPTS);
 
   assert.equal(host.refsCalls, 2, '실패분이 캐시됐다면 재조회하지 않는다');
-  assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev']);
+  assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev', 'stale', 'solo']);
 });
 
 test('worktree list가 실패해도 기존 워크트리 목록을 지우지 않는다', async () => {
@@ -186,5 +212,5 @@ test('조회에 성공하면 지문이 같은 다음 refresh는 캐시를 쓴다
   await refreshAsync(OPTS);
 
   assert.equal(host.refsCalls, 1, '성공 결과는 지문이 같은 동안 재사용해야 한다');
-  assert.equal(state.branches.length, 2);
+  assert.equal(state.branches.length, 4);
 });

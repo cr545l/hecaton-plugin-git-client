@@ -2,7 +2,7 @@ const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
 const { state, ui, isPinnedBranch } = require('./state');
-const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, formatDateTime } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const hostScroll = require('./scroll');
@@ -1099,6 +1099,23 @@ function buildLeftPanel(w, h) {
   const trackPart = (remoteTag ? colors.red + ansi.bold + remoteTag + ansi.reset : '')
     + (arrowTag ? colors.orange + ansi.bold + arrowTag + ansi.reset : '');
 
+  // 임의의 로컬 브랜치에 대한 같은 표기 — Pinned 목록에서 쓴다.
+  // ahead/behind는 현재 브랜치만 rev-list로 따로 재고(upstream이 없어도 나온다), 나머지는
+  // for-each-ref의 upstream:track에서 온다. 그래서 upstream이 없는 핀 브랜치는 @리모트만
+  // 붙고 화살표는 나오지 않는다 — 셀 기준이 없으니 0으로 단정하지 않는 편이 맞다.
+  function branchTrackParts(b) {
+    if (!b) return { text: '', part: '' };
+    if (b.isCurrent) return { text: trackTag, part: trackPart };
+    const remote = branchRemoteFor(b);
+    const rTag = remote ? ' @' + remote : '';
+    const aTag = (b.behind > 0 ? ' ↓' + b.behind : '') + (b.ahead > 0 ? ' ↑' + b.ahead : '');
+    return {
+      text: rTag + aTag,
+      part: (rTag ? colors.red + ansi.bold + rTag + ansi.reset : '')
+        + (aTag ? colors.orange + ansi.bold + aTag + ansi.reset : ''),
+    };
+  }
+
   {
     const mark = currentBranchEntry ? '✓ ' : '';
     const nameColor = currentBranchEntry ? colors.green : colors.value;
@@ -1149,13 +1166,15 @@ function buildLeftPanel(w, h) {
   const ARROW_CLOSED = '+';
   const activeBranch = ui.leftPanelActiveBranch;
 
-  function branchLine(indent, name, fullRef, isCurrent, isRemote, tag, heldByWorktree) {
+  function branchLine(indent, name, fullRef, isCurrent, isRemote, tag, heldByWorktree, track) {
     const isActive = activeBranch === fullRef;
     const tagText = tag || '';
     const tagPart = tagText ? colors.cyan + tagText + ansi.reset : '';
-    // 추적 상태(@리모트 / ahead / behind)는 HEAD가 올라탄 브랜치에만 의미가 있으므로 현재 브랜치에만 붙인다.
-    const abText = isCurrent ? trackTag : '';
-    const abPart = isCurrent ? trackPart : '';
+    // 추적 상태(@리모트 / ahead / behind)는 track을 넘겨 준 줄에만 붙인다 — Pinned 목록과
+    // Branches 트리의 핀 고정 브랜치가 그렇다. 나머지 브랜치까지 붙이면 트리가 넓어져
+    // 좁은 패널에서 이름이 잘리므로, 현재 브랜치를 뺀 나머지는 이름만 둔다.
+    const abText = track ? track.text : (isCurrent ? trackTag : '');
+    const abPart = track ? track.part : (isCurrent ? trackPart : '');
     const maxW = Math.max(1, innerW - indent - visLen(tagText) - visLen(abText));
     if (isCurrent) {
       const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + abPart + tagPart;
@@ -1170,7 +1189,7 @@ function buildLeftPanel(w, h) {
         : pinned ? colors.pinned
         : isRemote ? colors.red : colors.value;
       const emph = pinned ? ansi.bold : '';
-      const content = ' '.repeat(indent) + clr + emph + truncate(name, maxW) + ansi.reset + tagPart;
+      const content = ' '.repeat(indent) + clr + emph + truncate(name, maxW) + ansi.reset + abPart + tagPart;
       return isActive ? rowBg(content, colors.cursorBg) : content;
     }
   }
@@ -1204,8 +1223,11 @@ function buildLeftPanel(w, h) {
       pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Pinned' + ansi.reset, { action: 'toggle-section', section: 'pinned' });
       if (!collapsed) {
         for (const b of pinned) {
+          // 핀은 눈에 잘 띄라고 모아 둔 목록이니, 현재 브랜치처럼 @리모트와 push/pull
+          // 대기 수까지 붙여 여기만 보고도 상태를 알 수 있게 한다.
           pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
-            b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name)), { action: 'goto-branch', branch: b.name });
+            b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
+            branchTrackParts(b)), { action: 'goto-branch', branch: b.name });
         }
       }
     }
@@ -1240,14 +1262,16 @@ function buildLeftPanel(w, h) {
             const fullName = prefix + '/' + item.shortName;
             if (item.isCurrent) currentBranchLineIdx = lines.length;
             pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent, false,
-              item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName)), { action: 'goto-branch', branch: fullName });
+              item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName),
+              isPinnedBranch(fullName) ? branchTrackParts(item) : null), { action: 'goto-branch', branch: fullName });
           }
         }
       }
       for (const b of topLevel) {
         if (b.isCurrent) currentBranchLineIdx = lines.length;
         pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
-          b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name)), { action: 'goto-branch', branch: b.name });
+          b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
+          isPinnedBranch(b.name) ? branchTrackParts(b) : null), { action: 'goto-branch', branch: b.name });
       }
     }
   }

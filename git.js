@@ -1119,6 +1119,14 @@ async function gitPushToRemoteAsync(cwd, remote, branch) { return await gitAsync
 // refuses that under push.default=simple.
 async function gitPushHeadToBranchAsync(cwd, remote, remoteBranch) { return await gitAsyncWrap(['push', remote, 'HEAD:refs/heads/' + remoteBranch], cwd); }
 async function gitPullFromRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', remote, branch], cwd); }
+// 체크아웃하지 않은 로컬 브랜치를 upstream까지 끌어올린다. `git pull`/`git merge`는 무엇을
+// 인자로 주든 결과가 HEAD에 들어가므로 다른 브랜치를 갱신할 수 없다 — refspec fetch만이
+// 작업 트리를 건드리지 않고 그 브랜치의 ref를 옮긴다.
+// fast-forward가 아니면 git이 (non-fast-forward)로 거절하고, 다른 워크트리가 체크아웃 중이면
+// refusing to fetch into branch로 거절한다. 둘 다 그대로 사용자에게 보여주면 된다.
+async function gitFetchIntoBranchAsync(cwd, remote, remoteBranch, localBranch) {
+  return await gitAsyncWrap(['fetch', remote, remoteBranch + ':' + localBranch], cwd);
+}
 async function gitPullRebaseAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', '--rebase', remote, branch], cwd); }
 async function gitForcePushAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '--force-with-lease', remote, branch], cwd); }
 async function gitPushDeleteBranchAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', remote, '--delete', branch], cwd); }
@@ -1575,7 +1583,7 @@ module.exports = {
   gitRewordCommitAsync, gitSquashIntoParentAsync, gitDropCommitAsync, gitEditCommitAsync,
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync,
   gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync,
   splitUpstreamRef,
   gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,
