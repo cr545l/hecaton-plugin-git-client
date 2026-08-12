@@ -33,18 +33,29 @@ const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh,
 const { render } = require('./render');
 const { startSpinner, stopSpinner } = require('./spinner');
 
+// 커밋 하나에 달린 태그 수만큼 서브메뉴가 늘어나므로 상한을 둔다.
+// 배경은 REF_INLINE_MAX 주석과 test/menu-payload.test.js 참고.
+const HISTORY_TAG_MAX = 3;
+
+function historyBranchEntries() {
+  return state.branches
+    .filter(b => !b.isCurrent)
+    .map(b => ({ id: 'checkout_branch:' + b.name, label: b.name }));
+}
+
 function buildHistoryContextMenuItems() {
   const branch = state.branch || 'HEAD';
 
-  // Branch submenu
-  const branchChildren = state.branches
-    .filter(b => !b.isCurrent)
-    .slice(0, 20)
-    .map(b => ({ id: 'checkout_branch:' + b.name, label: b.name }));
+  // Branch submenu — 브랜치가 적을 때만 자식으로 붙인다. 많으면 별도 메뉴로 넘겨
+  // payload가 저장소 크기를 따라 커지지 않게 한다(예전 slice(0, 20)은 21번째부터
+  // 아예 닿을 수 없었다).
+  const branchChildren = historyBranchEntries();
 
   const items = [];
 
-  if (branchChildren.length > 0) {
+  if (branchChildren.length > REF_INLINE_MAX) {
+    items.push({ id: 'history_branch_open', label: branch, icon: 'git-branch' });
+  } else if (branchChildren.length > 0) {
     items.push({
       id: 'branches_submenu',
       label: branch,
@@ -88,7 +99,10 @@ function buildHistoryContextMenuItems() {
   if (selectedItem && selectedItem.decoration) {
     const tagRe = /tag: ([^,)]+)/g;
     let tagMatch;
+    let tagCount = 0;
     while ((tagMatch = tagRe.exec(selectedItem.decoration))) {
+      // 한 커밋에 태그가 몰려 있어도 메뉴 뒤쪽(Copy Commit SHA 등)을 밀어내면 안 된다.
+      if (++tagCount > HISTORY_TAG_MAX) break;
       const tagName = tagMatch[1].trim();
       items.push({
         id: 'tag_menu:' + tagName,
@@ -233,6 +247,93 @@ function buildWorktreeContextMenuItems(wtPath) {
   return items;
 }
 
+// 호스트 menu.show는 한 번에 받을 수 있는 항목 수에 한계가 있고, 넘치면 뒤쪽 항목을
+// 조용히 버린다 — 에러도 없고 잘렸다는 표시도 없다. 그래서 저장소 크기를 따라 커지는
+// 목록(리모트 추적 브랜치 등)을 그대로 실으면, 그 뒤에 오는 항목이 통째로 사라진다.
+//
+// 실제로 리모트 추적 브랜치 45개짜리 저장소에서 브랜치 메뉴가 Tracking에서 정확히 끊겨
+// Pin / Copy Branch Name이 나오지 않았다. 창을 키워도, 클릭 위치를 바꿔도 같았다
+// (메뉴 아래에 빈 공간이 남는데도 끊겼다 — 높이 때문이 아니다). 리모트가 2개인 저장소는
+// 같은 메뉴가 끝까지 나온다. 평탄화 22항목/1.2KB는 정상, 59항목/4.5KB에서 잘렸다.
+//
+// 따라서 규칙은 하나다: 한 번의 menu.show payload가 저장소 크기를 따라 커지면 안 된다.
+// history 메뉴의 브랜치 서브메뉴도 같은 이유로 slice(0, 20)을 쓰고 있었지만, 자르는
+// 방식은 21번째부터 아예 닿을 수 없어 아래 페이지 방식으로 바꿨다.
+const REF_INLINE_MAX = 8;   // 서브메뉴로 직접 붙일 수 있는 최대 항목 수
+const REF_PAGE_SIZE = 15;   // 별도 메뉴로 넘길 때 한 페이지에 싣는 항목 수
+
+// 저장소 크기를 따라 커지는 목록을 별도 메뉴로 낼 때 쓴다. 한 페이지 항목 수를 고정하고
+// 나머지는 Previous/More로 넘겨, 목록이 아무리 길어도 payload가 일정하게 유지된다.
+// (예전처럼 slice로 잘라 버리면 뒤쪽 항목에는 아예 닿을 수 없다.)
+function buildPagedRefMenu({ titleId, title, entries, page, pagePrefix, tail }) {
+  const lastPage = Math.max(0, Math.ceil(entries.length / REF_PAGE_SIZE) - 1);
+  const pageIdx = Math.min(Math.max(page || 0, 0), lastPage);
+  const start = pageIdx * REF_PAGE_SIZE;
+  const slice = entries.slice(start, start + REF_PAGE_SIZE);
+  const paged = entries.length > REF_PAGE_SIZE;
+
+  const items = [{
+    id: titleId,
+    label: title + (paged ? '  (' + (start + 1) + '-' + (start + slice.length) + ' / ' + entries.length + ')' : ''),
+    enabled: false,
+  }];
+  for (const entry of slice) items.push(entry);
+
+  if (paged) {
+    items.push({ type: 'separator' });
+    if (pageIdx > 0) items.push({ id: pagePrefix + (pageIdx - 1), label: 'Previous...' });
+    if (start + slice.length < entries.length) items.push({ id: pagePrefix + (pageIdx + 1), label: 'More...' });
+  }
+  for (const item of (tail || [])) items.push(item);
+  return items;
+}
+
+// 업스트림 후보를 쓸모 있는 순서로 놓는다 — 지금 업스트림, 같은 이름의 리모트 브랜치,
+// 나머지 순. 목록을 페이지로 나눠야 하므로 정작 필요한 항목이 뒤로 밀리면 안 된다.
+function orderedTrackingRefs(branchName, upstream) {
+  const sameName = [];
+  const rest = [];
+  let current = null;
+  for (const rb of state.remoteBranches) {
+    if (rb === upstream) { current = rb; continue; }
+    const slashIdx = rb.indexOf('/');
+    const shortName = slashIdx >= 0 ? rb.substring(slashIdx + 1) : rb;
+    if (shortName === branchName) sameName.push(rb);
+    else rest.push(rb);
+  }
+  return (current ? [current] : []).concat(sameName, rest);
+}
+
+function trackingEntry(rb, upstream) {
+  return { id: 'branch_track:' + rb, label: rb + (rb === upstream ? ' (current)' : '') };
+}
+
+// 리모트가 많을 때 브랜치 메뉴 대신 따로 여는 Tracking 메뉴.
+function buildBranchTrackingMenuItems(branchName, page) {
+  const branch = state.branches.find(b => b.name === branchName);
+  if (!branch) return [];
+  const upstream = branch.upstream;
+  return buildPagedRefMenu({
+    titleId: 'branch_tracking_title',
+    title: "Set upstream of '" + branchName + "' to:",
+    entries: orderedTrackingRefs(branchName, upstream).map(rb => trackingEntry(rb, upstream)),
+    page,
+    pagePrefix: 'branch_tracking_page:',
+    tail: upstream ? [{ type: 'separator' }, { id: 'branch_untrack', label: 'Unset Upstream' }] : [],
+  });
+}
+
+// 브랜치가 많을 때 history 메뉴의 브랜치 서브메뉴 대신 따로 여는 체크아웃 메뉴.
+function buildHistoryBranchMenuItems(page) {
+  return buildPagedRefMenu({
+    titleId: 'history_branch_title',
+    title: 'Checkout branch:',
+    entries: historyBranchEntries(),
+    page,
+    pagePrefix: 'history_branch_page:',
+  });
+}
+
 function buildBranchContextMenuItems(branchName) {
   const branch = state.branches.find(b => b.name === branchName);
   if (!branch) return [];
@@ -284,15 +385,16 @@ function buildBranchContextMenuItems(branchName) {
   // 브랜치 메뉴에도 둔다. worktree_new는 대상 경로를 쓰지 않아 여기서도 안전하다.
   items.push({ id: 'worktree_new', label: 'New Worktree...' });
 
-  const trackingChildren = state.remoteBranches.map(rb => ({
-    id: 'branch_track:' + rb,
-    label: rb + (rb === upstream ? ' (current)' : ''),
-  }));
+  // 리모트가 적을 때만 서브메뉴로 붙인다. 많으면 별도 메뉴로 넘겨 payload가 저장소
+  // 크기를 따라 커지지 않게 한다 — 그러지 않으면 아래 Pin / Copy Branch Name이 잘린다.
+  const trackingChildren = orderedTrackingRefs(branchName, upstream).map(rb => trackingEntry(rb, upstream));
   if (upstream) {
     trackingChildren.push({ type: 'separator' });
     trackingChildren.push({ id: 'branch_untrack', label: 'Unset Upstream' });
   }
-  if (trackingChildren.length > 0) {
+  if (trackingChildren.length > REF_INLINE_MAX) {
+    items.push({ id: 'branch_tracking_open', label: 'Tracking...' });
+  } else if (trackingChildren.length > 0) {
     items.push({ id: 'branch_tracking', label: 'Tracking', children: trackingChildren });
   }
 
@@ -1034,6 +1136,15 @@ async function handleContextMenuAction(actionId) {
       return;
     }
 
+    // 리모트가 많은 저장소의 Tracking — 서브메뉴 대신 페이지로 나눈 별도 메뉴로 연다.
+    if (actionId === 'branch_tracking_open' || actionId.startsWith('branch_tracking_page:')) {
+      const page = actionId === 'branch_tracking_open'
+        ? 0
+        : parseInt(actionId.substring('branch_tracking_page:'.length), 10) || 0;
+      hecaton.menu.show({ items: buildBranchTrackingMenuItems(branchName, page) }).catch(() => null);
+      return;
+    }
+
     switch (actionId) {
       case 'branch_checkout':
         startSpinner('Checking out...');
@@ -1298,6 +1409,16 @@ async function handleContextMenuAction(actionId) {
         break;
       }
     }
+    return;
+  }
+
+  // 브랜치가 많은 저장소의 체크아웃 목록 — 서브메뉴 대신 페이지로 나눈 별도 메뉴로 연다.
+  // 선택한 커밋과 무관하므로 logItem 확인보다 앞에 둔다.
+  if (actionId === 'history_branch_open' || actionId.startsWith('history_branch_page:')) {
+    const page = actionId === 'history_branch_open'
+      ? 0
+      : parseInt(actionId.substring('history_branch_page:'.length), 10) || 0;
+    hecaton.menu.show({ items: buildHistoryBranchMenuItems(page) }).catch(() => null);
     return;
   }
 
@@ -2500,6 +2621,8 @@ module.exports = {
   buildPushRemoteMenuItems,
   buildRemoteBranchContextMenuItems,
   buildBranchContextMenuItems,
+  buildBranchTrackingMenuItems,
+  buildHistoryBranchMenuItems,
   buildTabContextMenuItems,
   buildWorktreeContextMenuItems,
   handleContextMenuAction,
