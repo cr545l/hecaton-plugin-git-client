@@ -12,7 +12,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
 } = require('./git');
 const { startSpinner, stopSpinner } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
-const { render, revealCurrentBranch } = require('./render');
+const { render } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
@@ -1857,10 +1857,6 @@ async function handleMouseData(data) {
               updateFreshDetail();
       
               state.focusPanel = 'status';
-              render();
-            } else if (entry.action === 'reveal-current-branch') {
-              // 상단 브랜치명 클릭 — Branches 목록의 현재 브랜치 줄로 스크롤한다.
-              revealCurrentBranch(entry.branch);
               render();
             } else if (entry.action === 'toggle-section') {
               ui.collapsedSections[entry.section] = !ui.collapsedSections[entry.section];

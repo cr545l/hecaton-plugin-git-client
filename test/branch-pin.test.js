@@ -43,8 +43,6 @@ function resetState({ branch = 'main', branches, pinned = [], worktrees, remoteB
   ui.collapsedGroups = {};
   ui.leftPanelScrollOffset = 0;
   ui.leftPanelActiveBranch = null;
-  ui.leftRevealCurrentBranch = false;
-  ui.leftCurrentBranchLineIdx = -1;
   ui.hoveredLeftPanelRow = -1;
   ui.hostScrollRegions = [];
 }

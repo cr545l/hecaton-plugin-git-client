@@ -134,7 +134,7 @@ test('upstream이 사라졌으면 [gone]으로 알린다', () => {
 
 test('상단 브랜치명 줄도 같은 정보를 보여준다', () => {
   setupStatus({ ahead: 2, behind: 1 });
-  const hint = hintForRow(e => e.action === 'reveal-current-branch');
+  const hint = hintForRow(e => e.action === 'goto-branch' && e.branch === 'main');
 
   assert.match(hint, /main/);
   assert.match(hint, /push ↑2/);
