@@ -32,6 +32,36 @@ function padRight(text, width) {
   return text + ' '.repeat(pad);
 }
 
+// 탭 들여쓰기 폭. 터미널 기본 tab stop은 8이지만 side-by-side diff는 한 칸이 좁아
+// 4가 실용적이다 — 여기만 바꾸면 모든 diff 뷰에 함께 적용된다.
+const TAB_WIDTH = 4;
+
+// 탭을 다음 tab stop까지의 공백으로 바꾼다.
+//
+// 터미널에서 탭은 "공백 출력"이 아니라 "커서 이동"이라 지나간 칸의 이전 내용이 그대로
+// 남는다. 게다가 visLen/sliceByWidth는 탭을 1칸으로 세므로, 확장하지 않으면 계산 폭과
+// 실제 그려지는 폭이 어긋나 diff 셀이 옆 칸을 침범하고 앞 프레임 잔상이 겹쳐 보인다.
+// (탭 들여쓰기를 쓰는 파일의 diff에서 줄이 깨져 보이던 원인)
+//
+// ANSI 시퀀스가 섞이지 않은 raw 텍스트에만 쓴다 — 색이 붙은 뒤에는 열 계산이 어긋난다.
+function expandTabs(text, tabWidth) {
+  if (typeof text !== 'string' || text.indexOf('\t') === -1) return text;
+  const w = tabWidth || TAB_WIDTH;
+  let out = '';
+  let col = 0;
+  for (const ch of text) {
+    if (ch === '\t') {
+      const fill = w - (col % w);
+      out += ' '.repeat(fill);
+      col += fill;
+    } else {
+      out += ch;
+      col += isWide(ch.codePointAt(0)) ? 2 : 1;
+    }
+  }
+  return out;
+}
+
 function truncate(text, maxLen) {
   if (visLen(text) <= maxLen) return text;
   // Walk through text, counting visible width
@@ -129,4 +159,4 @@ function sliceByWidth(text, startCol, maxWidth) {
   return plain.substring(begin, i);
 }
 
-module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport, sliceByWidth };
+module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport, sliceByWidth, expandTabs, TAB_WIDTH };
