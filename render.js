@@ -1,6 +1,6 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
-const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi } = require('./text');
+const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs } = require('./text');
 const { state, ui, isPinnedBranch } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
@@ -1727,7 +1727,7 @@ function buildDiffCommitPanel(w, h) {
       for (const line of state.diffLines) {
         const plain = line.replace(/[\r\n]/g, '');
         if (isDiffMetaLine(plain)) continue;
-        const lw = stripAnsi(plain).length;
+        const lw = stripAnsi(expandDiffTabs(plain)).length;
         if (lw > maxLineW) maxLineW = lw;
       }
       preMaxScrollX = Math.max(0, maxLineW - contentW);
@@ -2276,7 +2276,7 @@ function buildLogPanel(w, h) {
       let logDetailMaxLineW = 0;
       for (const entry of filteredDetail) {
         if (entry.text && !entry.isFileHeader && !isDiffMetaLine(entry.text.replace(/[\r\n]/g, ''))) {
-          const lw = stripAnsi(entry.text.replace(/[\r\n]/g, '')).length;
+          const lw = stripAnsi(expandDiffTabs(entry.text.replace(/[\r\n]/g, ''))).length;
           if (lw > logDetailMaxLineW) logDetailMaxLineW = lw;
         }
       }
@@ -2621,7 +2621,7 @@ function buildFreshPanel(w, h) {
       for (const line of state.freshDetailLines) {
         const plain = line.replace(/[\r\n]/g, '');
         if (isDiffMetaLine(plain)) continue;
-        const lw = stripAnsi(plain).length;
+        const lw = stripAnsi(expandDiffTabs(plain)).length;
         if (lw > freshDetailMaxLineW) freshDetailMaxLineW = lw;
       }
       const freshDetailMaxScrollX = Math.max(0, freshDetailMaxLineW - (innerW - 1));
@@ -2816,7 +2816,7 @@ function buildConflictDiffLines(innerW) {
     const chunk = conflictView.chunks[chunkIndex];
     if (chunk.type === 'context') {
       for (const line of chunk.lines) {
-        lines.push(colors.dim + '  ' + truncate(line, innerW - 2) + ansi.reset);
+        lines.push(colors.dim + '  ' + truncate(expandTabs(line), innerW - 2) + ansi.reset);
       }
       continue;
     }
@@ -2836,8 +2836,9 @@ function buildConflictDiffLines(innerW) {
     const bodyTop = lines.length;
     const rowCount = Math.max(chunk.ours.length, chunk.theirs.length, 1);
     for (let row = 0; row < rowCount; row++) {
-      const leftRaw = chunk.ours[row] !== undefined ? chunk.ours[row] : '';
-      const rightRaw = chunk.theirs[row] !== undefined ? chunk.theirs[row] : '';
+      // 표시 전용 탭 확장 — chunk 원본은 해결 결과를 파일에 쓸 때 그대로 쓴다.
+      const leftRaw = chunk.ours[row] !== undefined ? expandTabs(chunk.ours[row]) : '';
+      const rightRaw = chunk.theirs[row] !== undefined ? expandTabs(chunk.theirs[row]) : '';
       const leftPrefix = selection === 'ours' ? white + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
       const rightPrefix = selection === 'theirs' ? white + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
       const leftHovered = hoveredZone && hoveredZone.chunkIndex === chunkIndex && hoveredZone.action === 'select-ours' && hoveredZone.lineIdx === bodyTop + row;
@@ -3000,8 +3001,8 @@ function buildSideBySideDiffLayout(rawLines, innerW) {
 
   for (const row of rows) {
     if (row.type !== 'pair') continue;
-    if (row.leftText) maxLeftW = Math.max(maxLeftW, visLen(row.leftText));
-    if (row.rightText) maxRightW = Math.max(maxRightW, visLen(row.rightText));
+    if (row.leftText) maxLeftW = Math.max(maxLeftW, visLen(expandDiffTabs(row.leftText)));
+    if (row.rightText) maxRightW = Math.max(maxRightW, visLen(expandDiffTabs(row.rightText)));
   }
 
   rows.unshift({ type: 'side-header' });
@@ -3140,6 +3141,20 @@ function filterLogDetailLines(lines, collapsedFiles) {
   return result;
 }
 
+// diff 한 줄의 탭을 화면 폭에 맞춰 공백으로 편다 (표시 전용 — state.diffLines 원본은
+// hunk 패치 생성에 그대로 쓰이므로 절대 바꾸지 않는다).
+// 첫 칸은 +/-/space 마커라 마커를 컬럼 0으로 세면 들여쓰기가 한 칸씩 밀린다. 마커를
+// 떼고 편 뒤 다시 붙여 원본 파일과 같은 tab stop에 맞춘다.
+function expandDiffTabs(rawLine) {
+  if (typeof rawLine !== 'string' || rawLine.indexOf('\t') === -1) return rawLine;
+  const marker = rawLine[0];
+  if ((marker === '+' || marker === '-' || marker === ' ') &&
+      !rawLine.startsWith('+++') && !rawLine.startsWith('---')) {
+    return marker + expandTabs(rawLine.slice(1));
+  }
+  return expandTabs(rawLine);
+}
+
 /**
  * Colorize a diff line with syntax highlighting for code content
  * Adds background color for additions (green) and deletions (red)
@@ -3169,7 +3184,7 @@ function colorizeDiffLineWithUnderline(rawLine, w, ulStart, ulEnd) {
 }
 
 function colorizeDiffLine(rawLine, w, filePath, scrollX) {
-  rawLine = rawLine.replace(/[\r\n]/g, '');
+  rawLine = expandDiffTabs(rawLine.replace(/[\r\n]/g, ''));
   // Don't apply horizontal scroll to metadata/header lines
   const sx = isDiffMetaLine(rawLine) ? 0 : (scrollX || 0);
 
