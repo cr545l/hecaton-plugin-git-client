@@ -28,6 +28,7 @@ const { handleContextMenuAction, handleDialogResult } = require('./context-menu'
 const { resolveWorkTreeRoot } = require('./git');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
+const coordinate = require('./coordinate');
 const path = require('path');
 
 async function main() {
@@ -238,6 +239,14 @@ let _gitWatcherCleanup = null;
 const GIT_MTIME_POLL_INTERVAL_MS = 2000;
 const GIT_WORKTREE_POLL_INTERVAL_MS = 3000;
 const USER_ACTION_REFRESH_SUPPRESS_MS = 1500;
+// 최소화된 인스턴스는 화면을 그리지 않는다. 폴링을 완전히 멈추면 복원 순간 낡은 화면이
+// 잠깐 보이므로, 끄는 대신 주기만 크게 늘린다. 복원 시 window_restored가 즉시
+// refreshAsync를 돌리므로 이 사이에 놓친 변경은 그때 따라잡힌다.
+const MINIMIZED_POLL_DIVISOR = 5;
+// 다른 인스턴스가 방금 올려둔 폴링 결과를 재사용하는 유효 기간. 폴링 주기보다 약간
+// 짧게 잡아, 앞서 돌던 인스턴스가 멈추면 다음 틱에 다른 인스턴스가 바로 이어받는다.
+const SHARED_META_MAX_AGE_MS = GIT_MTIME_POLL_INTERVAL_MS - 400;
+const SHARED_WORKTREE_MAX_AGE_MS = GIT_WORKTREE_POLL_INTERVAL_MS - 500;
 
 function stopGitWatcher() {
   if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
@@ -250,11 +259,20 @@ ui.setupGitWatcher = () => setupGitWatcher();
 // cwd당 1회만 시도하기 위한 메모. 같은 저장소를 다시 열어도 추가 spawn은 발생하지 않는다.
 const _gitOptimizationsAppliedFor = new Set();
 
+// fsmonitor를 켜면 git이 저장소마다 fsmonitor--daemon을 띄운다. 이 데몬은 워크트리
+// 전체를 감시하며 상주하고, 플러그인이 몇 초 주기로 폴링하는 한 유휴 종료도 걸리지
+// 않는다. 저장소를 여럿 열어두면 그만큼 상주 데몬이 쌓여 CPU를 계속 먹는다.
+// 그래서 데몬 값을 실제로 뽑는 규모에서만 켠다.
+//
+// index 파일 크기로 추적 파일 수를 근사한다(엔트리당 대략 60~100바이트). 이미 폴링에서
+// stat하는 파일이라 추가 비용이 없고, ls-files로 세는 것과 달리 git을 스폰하지 않는다.
+const FSMONITOR_MIN_INDEX_BYTES = 2 * 1024 * 1024;
+
 // status 가속을 위해 core.untrackedCache, core.fsmonitor를 자동 활성화한다.
 // - 이미 사용자가 true/false로 명시한 경우는 건드리지 않는다 (의도 존중).
-// - fsmonitor는 git 2.37+에서만 활성화 (그 이하에서는 동작이 다르다).
+// - fsmonitor는 git 2.37+ 이면서 저장소가 충분히 클 때만 활성화.
 // - 모든 호출은 best-effort. 실패해도 silent.
-async function applyGitOptimizations(cwd) {
+async function applyGitOptimizations(cwd, gitDir) {
   if (_gitOptimizationsAppliedFor.has(cwd)) return;
   _gitOptimizationsAppliedFor.add(cwd);
 
@@ -275,8 +293,20 @@ async function applyGitOptimizations(cwd) {
     }
   } catch { /* ignore */ }
 
-  // core.fsmonitor — git 2.37+ 필요
+  // core.fsmonitor — git 2.37+ 이고, 상주 데몬이 값을 하는 규모일 때만
   try {
+    // 규모 판정을 먼저 한다. 작은 저장소면 git --version 스폰조차 하지 않는다.
+    const indexPath = path.join(gitDir || path.join(cwd, '.git'), 'index');
+    let indexBytes = 0;
+    try {
+      const st = await hecaton.fs.stat({ path: indexPath });
+      // 호스트 구현에 따라 size / size_bytes 로 온다.
+      if (st && st.exists) indexBytes = st.size || st.size_bytes || 0;
+    } catch { indexBytes = 0; }
+    // index를 못 읽으면 규모를 모른다. 모를 때는 켜지 않는다 — 상주 데몬을
+    // 잘못 띄우는 쪽이 status가 조금 느린 쪽보다 비싸다.
+    if (indexBytes < FSMONITOR_MIN_INDEX_BYTES) return;
+
     const ver = await hecaton.process.exec({
       program: 'git', args: ['--version'],
       cwd, timeout_ms: 3000,
@@ -309,9 +339,6 @@ async function applyGitOptimizations(cwd) {
 async function setupGitWatcher() {
   stopGitWatcher(); // 기존 워처 정리
   if (!state.cwd || !state.isGitRepo) return;
-
-  // 저장소별 1회 자동 활성화 (status 가속). state.isGitRepo 확인 후라 안전.
-  applyGitOptimizations(state.cwd);
 
   let debounceTimer = null;
   let pendingAutoRefreshOptions = null;
@@ -379,6 +406,13 @@ async function setupGitWatcher() {
   }
   // linked worktree면 index/HEAD/logs는 per-worktree git dir에, refs/packed-refs는 공용 dir에 있다.
   if (!commonDir) commonDir = gitDir;
+
+  // 여러 인스턴스가 같은 저장소를 열었을 때 폴링과 네트워크 작업을 공유하기 위한 준비.
+  // 공용 git dir 기준이라 linked worktree들도 같은 조율 대상에 들어간다.
+  coordinate.configure(commonDir, state.cwd);
+
+  // 저장소별 1회 자동 활성화 (status 가속). gitDir이 확정된 뒤라야 저장소 규모를 잴 수 있다.
+  applyGitOptimizations(state.cwd, gitDir);
   // refs 하위는 mtime만으로 변경을 잡을 수 없어(디렉터리 mtime은 직접 자식만 반영)
   // computeRefsTreeSignature로 따로 감시한다. 여기 남긴 refs/refs/heads는
   // read_dir을 제공하지 않는 호스트에서의 폴백이다.
@@ -445,25 +479,49 @@ async function setupGitWatcher() {
     return diffRaw + '\x1e' + untrackedRaw + '\x1e' + stats.join('\x1e');
   }
 
-  let lastMtimes = await Promise.all(pollTargets.map(statMtime));
-  let lastRefsSig = await computeRefsTreeSignature(commonDir).catch(() => '');
+  let lastRefsSig = '';
+
+  // .git 메타 상태를 하나의 문자열로 압축한다. 인스턴스 간에 그대로 주고받으려면
+  // 같은 상태에서 같은 값이 나와야 하므로, 배열 비교 대신 결정적인 문자열을 쓴다.
+  // refs 스캔이 예외로 실패한 틱은 직전 값으로 때우는데 그 값은 인스턴스마다 다를 수
+  // 있어, 그때만 공유 대상에서 뺀다(shareable=false).
+  async function computeMetaSignature() {
+    let refsFailed = false;
+    const [mtimes, refsSig] = await Promise.all([
+      Promise.all(pollTargets.map(statMtime)),
+      // 스캔 실패 시 직전 값을 그대로 써서 오탐 refresh를 만들지 않는다.
+      computeRefsTreeSignature(commonDir).catch(() => { refsFailed = true; return lastRefsSig; }),
+    ]);
+    lastRefsSig = refsSig;
+    return { sig: mtimes.join('|') + '\x1e' + refsSig, shareable: !refsFailed };
+  }
+
+  let lastMetaSig = (await computeMetaSignature()).sig;
   let metaPolling = false;
+  let metaTick = 0;
   const pollInterval = setInterval(async () => {
     if (metaPolling) return;
+    // 최소화 상태에서는 매 틱이 아니라 N틱에 한 번만 확인한다.
+    if (state.minimized && (metaTick++ % MINIMIZED_POLL_DIVISOR) !== 0) return;
     metaPolling = true;
     try {
-      const [current, refsSig] = await Promise.all([
-        Promise.all(pollTargets.map(statMtime)),
-        // 스캔 실패 시 직전 값을 그대로 써서 오탐 refresh를 만들지 않는다.
-        computeRefsTreeSignature(commonDir).catch(() => lastRefsSig),
-      ]);
-      let changed = refsSig !== lastRefsSig;
-      for (let i = 0; !changed && i < current.length; i++) {
-        if (current[i] !== lastMtimes[i]) changed = true;
+      // fetch/pull/push가 도는 동안의 폴링은 .git 락을 두고 경합만 만든다.
+      // 작업이 끝나면 그쪽에서 새로고침을 걸어주므로 이 틱은 건너뛴다.
+      if (await coordinate.isNetworkOpInFlight()) return;
+
+      // 같은 워크트리를 보는 다른 인스턴스가 방금 계산해 둔 값이 있으면 그대로 쓴다.
+      let sig;
+      const shared = await coordinate.readSharedSnapshot('meta', SHARED_META_MAX_AGE_MS);
+      if (shared) {
+        sig = shared.value;
+      } else {
+        const computed = await computeMetaSignature();
+        sig = computed.sig;
+        if (computed.shareable) coordinate.publishSharedSnapshot('meta', sig).catch(() => null);
       }
-      if (changed) {
-        lastMtimes = current;
-        lastRefsSig = refsSig;
+
+      if (sig !== lastMetaSig) {
+        lastMetaSig = sig;
         triggerRefresh();
       }
     } finally {
@@ -483,10 +541,23 @@ async function setupGitWatcher() {
     if (Date.now() - getLastUserRefreshTime() < USER_ACTION_REFRESH_SUPPRESS_MS) return;
     statusPolling = true;
     try {
-      const snapshot = await buildWorktreeSnapshot();
-      if (snapshot !== null && snapshot !== lastStatusSnapshot) {
-        lastStatusSnapshot = snapshot;
-        triggerRefresh({ statusOnly: true });
+      // 네트워크 작업 중에는 걸러낸다 — 이 폴링은 매 틱 git을 두 번 스폰하므로
+      // fetch/pull/push가 무는 락과 정면으로 부딪힌다.
+      if (!await coordinate.isNetworkOpInFlight()) {
+        // 같은 워크트리를 보는 인스턴스가 이미 돌려놓은 결과가 있으면 재사용한다.
+        // 여기서 아끼는 건 인스턴스당 git 프로세스 2개(diff-files + ls-files)다.
+        let snapshot = null;
+        const shared = await coordinate.readSharedSnapshot('worktree', SHARED_WORKTREE_MAX_AGE_MS);
+        if (shared) {
+          snapshot = shared.value;
+        } else {
+          snapshot = await buildWorktreeSnapshot();
+          if (snapshot !== null) coordinate.publishSharedSnapshot('worktree', snapshot).catch(() => null);
+        }
+        if (snapshot !== null && snapshot !== lastStatusSnapshot) {
+          lastStatusSnapshot = snapshot;
+          triggerRefresh({ statusOnly: true });
+        }
       }
     } catch { /* ignore */ }
     statusPolling = false;

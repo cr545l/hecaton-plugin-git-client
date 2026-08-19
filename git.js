@@ -2,6 +2,7 @@
 // No direct child_process or fs usage — all operations go through host permission system.
 
 const nodePath = require('path');
+const coordinate = require('./coordinate');
 
 async function gitExec(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
@@ -829,9 +830,63 @@ async function gitCheckRebaseConflicts(cwd, targetRef) {
   return { willConflict: true, files: conflictFiles };
 }
 
-async function gitFetchAsync(cwd) { return await gitAsyncWrap(['fetch', '--all', '--prune'], cwd); }
-async function gitPullAsync(cwd) { return await gitAsyncWrap(['pull'], cwd); }
-async function gitPushAsync(cwd) { return await gitAsyncWrap(['push'], cwd); }
+// 원격이 여러 개면 --all은 하나씩 순서대로 돈다. 원격마다 연결 수립 비용이 그대로
+// 붙으므로 병렬로 돌린다. git 2.36+ 에서 원격 fetch에 적용되고, 그 이전 버전은
+// 옵션을 조용히 무시하거나 서브모듈에만 적용해 동작이 달라지지 않는다.
+const FETCH_JOBS = 4;
+// 네트워크 작업이 진행 중일 때 남의 작업을 기다려 주는 상한. 이 안에 안 끝나면
+// 상대가 멈춘 것으로 보고 직접 실행한다.
+const NETWORK_OP_WAIT_MS = 30000;
+// fetch는 저장소 전체에 대한 작업이라 다른 인스턴스가 방금 끝냈으면 다시 돌릴 이유가
+// 없다. 사용자가 버튼을 누른 직후 원격이 또 바뀌었을 가능성은 이 창 안에서는 무시한다.
+const FETCH_REUSE_WINDOW_MS = 3000;
+
+// 같은 저장소를 보는 인스턴스들이 네트워크 작업을 동시에 걸지 않도록 조율한다.
+// 진행 중인 작업이 있으면 끝날 때까지 기다렸다가 그 결과를 쓴다 — 락을 두고
+// 경합하는 것보다 빠르고, 호출부 입장에서는 그냥 성공(null)으로 끝난 것과 같다.
+async function runNetworkOp(op, reuseWindowMs, run) {
+  let decision = 'run';
+  try {
+    decision = await coordinate.beginNetworkOp(op, reuseWindowMs);
+  } catch { decision = 'run'; }
+
+  if (decision === 'reuse') {
+    await coordinate.endNetworkOp(op, true).catch(() => null);
+    return null;
+  }
+  if (decision === 'inflight') {
+    const finished = await coordinate.waitForNetworkOp(NETWORK_OP_WAIT_MS).catch(() => false);
+    await coordinate.endNetworkOp(op, true).catch(() => null);
+    if (finished) return null;
+    // 기다려도 안 끝났다 — 상대가 멈춘 것으로 보고, 진행 기록을 넘겨받아 내가 실행한다.
+    try { await coordinate.claimNetworkOp(op); } catch { /* ignore */ }
+  }
+
+  let err = null;
+  let threw = false;
+  try {
+    err = await run();
+  } catch (e) {
+    threw = true;
+    throw e;
+  } finally {
+    await coordinate.endNetworkOp(op, !threw && !err).catch(() => null);
+  }
+  return err;
+}
+
+async function gitFetchAsync(cwd) {
+  return await runNetworkOp('fetch', FETCH_REUSE_WINDOW_MS,
+    () => gitAsyncWrap(['fetch', '--all', '--prune', '--jobs=' + FETCH_JOBS], cwd));
+}
+// pull/push는 워크트리와 브랜치에 따라 결과가 달라 남의 실행 결과를 대신 쓸 수 없다.
+// 겹쳤을 때 기다리기만 하고, reuse 창은 0으로 둔다.
+async function gitPullAsync(cwd) {
+  return await runNetworkOp('pull', 0, () => gitAsyncWrap(['pull'], cwd));
+}
+async function gitPushAsync(cwd) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push'], cwd));
+}
 async function gitRebaseAsync(cwd, ref) { return await gitAsyncWrap(['rebase', ref], cwd); }
 // ref 가 이미 HEAD 의 조상이면 옮길 커밋이 없어 rebase 는 아무 일도 하지 않는다.
 // 이때 git 은 "Current branch X is up to date." 를 stdout 에 찍고 exit 0 으로 끝내므로
@@ -1113,26 +1168,45 @@ async function gitGetRemoteUrl(cwd, remote) {
 }
 
 async function gitMergeFastForwardAsync(cwd, ref) { return await gitAsyncWrap(['merge', '--ff-only', ref], cwd); }
-async function gitPushToRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '-u', remote, branch], cwd); }
+async function gitPushToRemoteAsync(cwd, remote, branch) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', '-u', remote, branch], cwd));
+}
 // Push HEAD onto a differently named remote branch. Needed when a local branch
 // was renamed: its upstream still points at the old name and plain `git push`
 // refuses that under push.default=simple.
-async function gitPushHeadToBranchAsync(cwd, remote, remoteBranch) { return await gitAsyncWrap(['push', remote, 'HEAD:refs/heads/' + remoteBranch], cwd); }
-async function gitPullFromRemoteAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', remote, branch], cwd); }
+async function gitPushHeadToBranchAsync(cwd, remote, remoteBranch) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, 'HEAD:refs/heads/' + remoteBranch], cwd));
+}
+async function gitPullFromRemoteAsync(cwd, remote, branch) {
+  return await runNetworkOp('pull', 0, () => gitAsyncWrap(['pull', remote, branch], cwd));
+}
 // 체크아웃하지 않은 로컬 브랜치를 upstream까지 끌어올린다. `git pull`/`git merge`는 무엇을
 // 인자로 주든 결과가 HEAD에 들어가므로 다른 브랜치를 갱신할 수 없다 — refspec fetch만이
 // 작업 트리를 건드리지 않고 그 브랜치의 ref를 옮긴다.
 // fast-forward가 아니면 git이 (non-fast-forward)로 거절하고, 다른 워크트리가 체크아웃 중이면
 // refusing to fetch into branch로 거절한다. 둘 다 그대로 사용자에게 보여주면 된다.
 async function gitFetchIntoBranchAsync(cwd, remote, remoteBranch, localBranch) {
-  return await gitAsyncWrap(['fetch', remote, remoteBranch + ':' + localBranch], cwd);
+  // 특정 ref만 끌어오는 fetch라 남의 fetch 결과로 대체할 수 없다 — reuse 창은 0.
+  return await runNetworkOp('fetch', 0, () => gitAsyncWrap(['fetch', remote, remoteBranch + ':' + localBranch], cwd));
 }
-async function gitPullRebaseAsync(cwd, remote, branch) { return await gitAsyncWrap(['pull', '--rebase', remote, branch], cwd); }
-async function gitForcePushAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', '--force-with-lease', remote, branch], cwd); }
-async function gitPushDeleteBranchAsync(cwd, remote, branch) { return await gitAsyncWrap(['push', remote, '--delete', branch], cwd); }
-async function gitPushTagsAsync(cwd, remote) { return await gitAsyncWrap(['push', remote, '--tags'], cwd); }
-async function gitPushTagAsync(cwd, remote, tag) { return await gitAsyncWrap(['push', remote, 'refs/tags/' + tag], cwd); }
-async function gitPushDeleteTagAsync(cwd, remote, tag) { return await gitAsyncWrap(['push', remote, '--delete', 'refs/tags/' + tag], cwd); }
+async function gitPullRebaseAsync(cwd, remote, branch) {
+  return await runNetworkOp('pull', 0, () => gitAsyncWrap(['pull', '--rebase', remote, branch], cwd));
+}
+async function gitForcePushAsync(cwd, remote, branch) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', '--force-with-lease', remote, branch], cwd));
+}
+async function gitPushDeleteBranchAsync(cwd, remote, branch) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, '--delete', branch], cwd));
+}
+async function gitPushTagsAsync(cwd, remote) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, '--tags'], cwd));
+}
+async function gitPushTagAsync(cwd, remote, tag) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, 'refs/tags/' + tag], cwd));
+}
+async function gitPushDeleteTagAsync(cwd, remote, tag) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, '--delete', 'refs/tags/' + tag], cwd));
+}
 
 async function gitRemoteRemove(cwd, name) { return await gitRunOrError(['remote', 'remove', name], cwd, 10000, 'Remote remove failed'); }
 async function gitRemoteRename(cwd, oldName, newName) { return await gitRunOrError(['remote', 'rename', oldName, newName], cwd, 30000, 'Remote rename failed'); }
