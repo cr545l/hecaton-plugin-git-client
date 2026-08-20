@@ -27,8 +27,13 @@ let _shareDir = '';       // 공유 파일 디렉터리 (빈 문자열이면 조
 let _cwdKey = '';         // 워크트리 구분용 키 — 같은 저장소라도 워크트리가 다르면 스냅샷은 공유 불가
 let _dirReady = false;    // mkdir 완료 여부
 
-// 로컬 인스턴스가 네트워크 작업 중인지. 공유 파일을 읽지 않고도 판정할 수 있는
-// 빠른 경로 — 자기 자신이 fetch/pull/push 중이면 폴링을 돌릴 이유가 없다.
+// 로컬 인스턴스가 네트워크 작업 중인지. { op, startedAt } 또는 null.
+// 공유 파일을 읽지 않고도 판정할 수 있는 빠른 경로 — 자기 자신이 fetch/pull/push
+// 중이면 폴링을 돌릴 이유가 없다.
+//
+// 시작 시각을 함께 두는 게 중요하다. exec 응답이 끝내 돌아오지 않으면 작업을 닫는
+// 코드가 실행되지 않아 이 플래그가 영원히 남고, 그러면 그 인스턴스의 폴링이 영구히
+// 멈춘다. 억제는 어디까지나 한시적이어야 한다.
 let _localNetworkOp = null;
 
 function hashKey(text) {
@@ -143,7 +148,11 @@ async function isRemoteNetworkOpInFlight() {
 // 이 저장소에서 네트워크 작업이 도는 중인지. 폴링 억제 판단에 쓴다.
 // 남의 작업뿐 아니라 내가 실행/대기 중인 경우도 폴링을 멈춰야 하므로 로컬 플래그를 함께 본다.
 async function isNetworkOpInFlight() {
-  if (_localNetworkOp) return true;
+  if (_localNetworkOp) {
+    if (Date.now() - _localNetworkOp.startedAt < NETOP_STALE_MS) return true;
+    // 응답이 돌아오지 않은 작업이다. 여기서 놓아주지 않으면 폴링이 영영 멈춘다.
+    _localNetworkOp = null;
+  }
   return await isRemoteNetworkOpInFlight();
 }
 
@@ -154,7 +163,7 @@ async function isNetworkOpInFlight() {
 // reuseWindowMs를 0으로 주면 'reuse' 판정을 하지 않는다(pull/push처럼 결과를 남이
 // 대신 내줄 수 없는 작업용).
 async function beginNetworkOp(op, reuseWindowMs) {
-  _localNetworkOp = op;
+  _localNetworkOp = { op, startedAt: Date.now() };
   if (!isEnabled() || !await ensureDir()) return 'run';
   const data = await readNetOp();
   const now = Date.now();
@@ -181,7 +190,7 @@ async function beginNetworkOp(op, reuseWindowMs) {
 // 실행하기로 한 경우에만 쓴다 — 그냥 실행하면 내 작업이 아무 기록 없이 돌아가고,
 // 다른 인스턴스는 그 사이 같은 작업을 또 걸게 된다.
 async function claimNetworkOp(op) {
-  _localNetworkOp = op;
+  _localNetworkOp = { op, startedAt: Date.now() };
   if (!isEnabled() || !await ensureDir()) return;
   await writeJson(sharedPath(NETOP_KIND, false), {
     op, owner: INSTANCE_ID, startedAt: Date.now(), finishedAt: 0, ok: false,
@@ -212,6 +221,8 @@ async function waitForNetworkOp(timeoutMs) {
 
 module.exports = {
   INSTANCE_ID,
+  // 테스트용: 응답이 돌아오지 않은 작업을 흉내내기 위해 시작 시각만 되돌린다.
+  __setLocalNetworkOpStartedAt(ms) { if (_localNetworkOp) _localNetworkOp.startedAt = ms; },
   configure,
   isEnabled,
   readSharedSnapshot,

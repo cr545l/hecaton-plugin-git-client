@@ -29,6 +29,7 @@ const { resolveWorkTreeRoot } = require('./git');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
 const coordinate = require('./coordinate');
+const reap = require('./reap');
 const path = require('path');
 
 async function main() {
@@ -247,6 +248,10 @@ const MINIMIZED_POLL_DIVISOR = 5;
 // 짧게 잡아, 앞서 돌던 인스턴스가 멈추면 다음 틱에 다른 인스턴스가 바로 이어받는다.
 const SHARED_META_MAX_AGE_MS = GIT_MTIME_POLL_INTERVAL_MS - 400;
 const SHARED_WORKTREE_MAX_AGE_MS = GIT_WORKTREE_POLL_INTERVAL_MS - 500;
+// 폴링 재진입 가드가 풀리지 않은 채 남는 것을 막는 상한. 호스트 RPC가 응답을 끝내
+// 돌려주지 않으면 그 틱의 await가 영영 끝나지 않아 가드가 true로 굳고, 그러면 이
+// 인스턴스의 폴링이 영구히 멈춘다. 이 시간을 넘긴 가드는 무시하고 다시 돈다.
+const POLL_GUARD_STALE_MS = 30000;
 
 function stopGitWatcher() {
   if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
@@ -413,6 +418,12 @@ async function setupGitWatcher() {
 
   // 저장소별 1회 자동 활성화 (status 가속). gitDir이 확정된 뒤라야 저장소 규모를 잴 수 있다.
   applyGitOptimizations(state.cwd, gitDir);
+
+  // 회수되지 못한 폴링 프로세스 정리. 프로세스 목록 조회가 무거워 시작 부하와
+  // 겹치지 않게 뒤로 미루고, 결과는 기다리지 않는다.
+  const reapTimer = setTimeout(() => {
+    reap.reapOrphanedPollProcesses(coordinate).catch(() => null);
+  }, 5000);
   // refs 하위는 mtime만으로 변경을 잡을 수 없어(디렉터리 mtime은 직접 자식만 반영)
   // computeRefsTreeSignature로 따로 감시한다. 여기 남긴 refs/refs/heads는
   // read_dir을 제공하지 않는 호스트에서의 폴백이다.
@@ -498,12 +509,14 @@ async function setupGitWatcher() {
 
   let lastMetaSig = (await computeMetaSignature()).sig;
   let metaPolling = false;
+  let metaPollingSince = 0;
   let metaTick = 0;
   const pollInterval = setInterval(async () => {
-    if (metaPolling) return;
+    if (metaPolling && (Date.now() - metaPollingSince) < POLL_GUARD_STALE_MS) return;
     // 최소화 상태에서는 매 틱이 아니라 N틱에 한 번만 확인한다.
     if (state.minimized && (metaTick++ % MINIMIZED_POLL_DIVISOR) !== 0) return;
     metaPolling = true;
+    metaPollingSince = Date.now();
     try {
       // fetch/pull/push가 도는 동안의 폴링은 .git 락을 두고 경합만 만든다.
       // 작업이 끝나면 그쪽에서 새로고침을 걸어주므로 이 틱은 건너뛴다.
@@ -533,13 +546,15 @@ async function setupGitWatcher() {
   // repeated edits to an already-modified file also refresh the diff/status.
   let lastStatusSnapshot = await buildWorktreeSnapshot().catch(() => '') || '';
   let statusPolling = false;
+  let statusPollingSince = 0;
   const statusPollInterval = setInterval(async () => {
-    if (statusPolling) return;
+    if (statusPolling && (Date.now() - statusPollingSince) < POLL_GUARD_STALE_MS) return;
     if (state.loading || state.minimized) return;
     if (state.mode !== 'normal') return;
     // Avoid polling during the short action-coalescing window.
     if (Date.now() - getLastUserRefreshTime() < USER_ACTION_REFRESH_SUPPRESS_MS) return;
     statusPolling = true;
+    statusPollingSince = Date.now();
     try {
       // 네트워크 작업 중에는 걸러낸다 — 이 폴링은 매 틱 git을 두 번 스폰하므로
       // fetch/pull/push가 무는 락과 정면으로 부딪힌다.
@@ -559,12 +574,14 @@ async function setupGitWatcher() {
           triggerRefresh({ statusOnly: true });
         }
       }
-    } catch { /* ignore */ }
-    statusPolling = false;
+    } catch { /* ignore */ } finally {
+      statusPolling = false;
+    }
   }, GIT_WORKTREE_POLL_INTERVAL_MS);
 
   _gitWatcherCleanup = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
+    clearTimeout(reapTimer);
     clearInterval(pollInterval);
     clearInterval(statusPollInterval);
   };
