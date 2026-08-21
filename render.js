@@ -266,11 +266,17 @@ function render() {
   // 않는 비동기 RPC라 그 사이 호스트가 한 번 더 합성하면 새 화면 위에 그래프가 그대로
   // 남는다(Commits → Local 전환 후 브랜치 트리 잔상). bank 앵커일 때는 영역 기록을
   // 남겨 뒤의 sixel emit에서 bank 행에 지우개를 쏘게 한다.
+  //
+  // 화면 안에 앵커한 그래프(스크롤이 불가능한 짧은 목록)도 2J로는 지워지지 않는다 —
+  // 2J가 비우는 건 텍스트 셀이고, 호스트가 들고 있는 sixel 이미지는 그대로 남는다.
+  // 여기서 같은 자리에 지우개를 먼저 쏘고 그 위에 새 화면 텍스트를 그린다. 뒤의 sixel
+  // emit 단계에 맡기지 않는 건 그쪽은 본문 텍스트 뒤라, 지우개가 새 화면 위에 얹히기
+  // 때문이다.
   const layoutSig = computeLayoutSig();
   if (layoutSig !== _lastLayoutSig) {
     buf.push(CSI + '2J');
     _lastLayoutSig = layoutSig;
-    if (!(ui.logSixelRegion && ui.logSixelRegion.anchorBank)) ui.logSixelRegion = null;
+    if (ui.logSixelRegion && !ui.logSixelRegion.anchorBank) appendLogSixelClear(buf);
   }
   // 매 프레임 무조건 이전 graph sixel을 지우던 코드는 제거했다. 지우개→텍스트→새 sixel을
   // 프레임마다 반복하면 호스트가 중간 상태를 그릴 때 그래프가 깜빡인다. 실제로 이전 영역을
@@ -2112,7 +2118,15 @@ function buildLogPanel(w, h) {
   // reveal them while scrolling.
   // Region registration only needs isActive(); the bank contents and the
   // bank-anchored sixel additionally need the host's confirmation (isReady).
-  const useHostScroll = hostScroll.isActive() && listH > 0 && hostScroll.isReady('logList');
+  //
+  // 목록이 뷰포트 안에 다 들어오면 스크롤할 여지가 없다. 이때 호스트는 region의 overscan을
+  // 합성해 줄 이유가 없고, 그러면 화면 밖 bank 행에 앵커한 그래프 sixel은 영영 화면에
+  // 나타나지 않는다 — 커밋 수가 적은 저장소에서 브랜치 트리가 통째로 사라지던 원인이다.
+  // 스크롤이 불가능할 땐 bank를 쓰지 않고 보이는 행에 직접 그린다(원래 호스트 확인 전에
+  // 쓰던 경로와 같다).
+  const listScrollable = state.logItems.length > listH;
+  const useHostScroll = hostScroll.isActive() && listH > 0 && listScrollable
+    && hostScroll.isReady('logList');
   const logDepth = hostScroll.depthOf('logList');
   let logBankRows = null;
   if (hostScroll.isActive() && listH > 0) {
