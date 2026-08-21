@@ -31,7 +31,39 @@ const {
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
-const { startSpinner, stopSpinner } = require('./spinner');
+const { startSpinner, stopSpinner, guardWriteOp } = require('./spinner');
+
+// ── 컨텍스트 메뉴 액션 read/write 분류 ──
+// 저장소를 바꾸지 않는 액션만 나열한다(허용 목록). 여기 없는 액션은 전부 쓰기로
+// 간주해, 다른 쓰기 작업이 도는 동안에는 guardWriteOp가 막는다. 새 항목을 빠뜨리면
+// 잠깐 과하게 막힐 뿐이지만, 쓰기를 잘못 통과시키면 작업이 중첩된다 — 기본은 차단.
+const READ_ONLY_MENU_ACTIONS = new Set([
+  // 새로고침/보기 전환
+  'tab_refresh', 'stash_compare',
+  // 클립보드 복사
+  'copy_sha', 'copy_info', 'save_patch',
+  'stash_copy_sha', 'stash_copy_info',
+  'branch_copy_name', 'remotebranch_copy_name', 'remote_copy_url',
+  'file_copy_path', 'file_copy_full_path', 'file_save_patch',
+  'file_external_diff_head', 'file_external_diff_index',
+  'file_blame', 'file_history',
+  'worktree_copy_path',
+  // 파일/탐색기 열기 (현재 저장소를 바꾸지 않음)
+  'file_open', 'file_open_explorer', 'file_show_in_explorer',
+  'worktree_open_explorer', 'worktree_show_in_explorer',
+  // UI 상태만 바꾸는 것들
+  'branch_pin',
+  'remote_sort_alpha', 'remote_sort_alpha_desc', 'remote_sort_recent',
+  'remote_sort_title', 'push_remote_title',
+  // 페이지네이션/서브메뉴 열기
+  'history_branch_open', 'branch_tracking_open',
+]);
+const READ_ONLY_MENU_PREFIXES = ['history_branch_page:', 'branch_tracking_page:', 'tag_menu:'];
+
+function isReadOnlyMenuAction(actionId) {
+  if (READ_ONLY_MENU_ACTIONS.has(actionId)) return true;
+  return READ_ONLY_MENU_PREFIXES.some(p => actionId.startsWith(p));
+}
 
 // 커밋 하나에 달린 태그 수만큼 서브메뉴가 늘어나므로 상한을 둔다.
 // 배경은 REF_INLINE_MAX 주석과 test/menu-payload.test.js 참고.
@@ -494,6 +526,11 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
 }
 
 async function handleContextMenuAction(actionId) {
+  // menu_activated는 stdin 게이트를 거치지 않는다 — 저장소를 바꾸는 액션은
+  // 여기서 직접 막아야 쓰기 작업 중 중첩 실행(커밋 중 discard 등)이 안 생긴다.
+  // 복사/열기 같은 읽기 액션은 작업 중에도 그대로 통과시킨다.
+  if (!isReadOnlyMenuAction(actionId) && !guardWriteOp()) return;
+
   // Tab context menu actions
   if (actionId === 'tab_refresh') {
     refreshAsync().then(() => {
@@ -2528,7 +2565,9 @@ async function afterGitOp(err, opName, refreshOpts = {}) {
 }
 
 function showError(msg) {
-  state.error = null;
+  // 쓰기 작업이 진행 중이면 힌트바의 진행 메시지를 지우지 않는다
+  // (읽기 액션의 안내 다이얼로그가 작업 표시를 덮어쓰는 것 방지).
+  if (!state.spinnerActive) state.error = null;
   hecaton.dialog.show({
     type: 'message',
     title: 'Error',

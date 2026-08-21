@@ -4,7 +4,6 @@ const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTab
 const { state, ui, isPinnedBranch } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
-const { BRAILLE_FRAMES, isSpinning } = require('./spinner');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
@@ -644,16 +643,12 @@ function render() {
   );
 
   // -- Hint bar --
-  // 오른쪽(스피너 + committer)을 먼저 확정해야 왼쪽에 남는 폭을 알 수 있다.
+  // 오른쪽(committer)을 먼저 확정해야 왼쪽에 남는 폭을 알 수 있다.
   // 리비전 힌트가 그 폭에 맞춰 표시 항목을 줄이기 때문에 순서가 중요하다.
-  const spinnerPart = isSpinning()
-    ? colors.dim + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ansi.reset
-    : '';
-  const spinnerWidth = visLen(spinnerPart);
-  const committerMaxWidth = Math.max(0, Math.min(72, Math.floor(width * 0.55) - spinnerWidth));
+  // 처리상태 스피너는 힌트바에서 빼고 창 타이틀에서 돌린다 (title.js 참고).
+  const committerMaxWidth = Math.max(0, Math.min(72, Math.floor(width * 0.55)));
   const committerHint = buildCommitterHint(committerMaxWidth);
-  const rightSeparator = spinnerPart && committerHint.width > 0 ? ' ' : '';
-  const rightContent = spinnerPart + rightSeparator + committerHint.content;
+  const rightContent = committerHint.content;
   const rightWidth = visLen(rightContent);
   const leftMaxWidth = Math.max(0, width - rightWidth - (rightWidth > 0 ? 1 : 0));
 
@@ -703,21 +698,16 @@ function render() {
     windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply' + ansi.reset;
     hintContent = windowHint;
   } else if (!state.isGitRepo && (state.error || state.cwd)) {
-    hintContent = ' ' + colors.red + (state.error || 'cwd: ' + state.cwd) + ansi.reset;
-  } else if (state.error) {
+    // 처리상태(clone/init 진행 메시지)는 창 타이틀이 맡는다 — 여기서는 경로/에러만.
+    const msg = state.spinnerActive ? ('cwd: ' + state.cwd) : (state.error || 'cwd: ' + state.cwd);
+    hintContent = ' ' + colors.red + msg + ansi.reset;
+  } else if (state.error && !state.spinnerActive) {
+    // 쓰기 작업 진행 메시지(spinnerActive 중의 state.error)와 refresh 스피너는
+    // 창 타이틀에서 점자 스피너와 함께 표시한다 — 힌트바는 에러/토스트만 맡아
+    // 작업 중에도 일반 힌트(리비전/브랜치 정보)가 그대로 보인다.
     const isInProgress = state.error.endsWith('...');
     const msgColor = isInProgress ? colors.yellow : colors.red;
-    if (state.spinnerActive) {
-      const BRAILLE = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-      hintContent = ' ' + msgColor + BRAILLE[state.spinnerFrame % BRAILLE.length] + ' ' + state.error + ansi.reset;
-    } else {
-      hintContent = ' ' + msgColor + state.error + ansi.reset;
-    }
-  } else if (state.refreshing) {
-    const msg = state.refreshMessage || 'Refreshing...';
-    hintContent = ' ' + colors.yellow + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ' ' + msg + ansi.reset;
-  } else if (state.logLoadingMore) {
-    hintContent = ' ' + colors.yellow + BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ' Loading more commits...' + ansi.reset;
+    hintContent = ' ' + msgColor + state.error + ansi.reset;
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else if (state.operationState) {
@@ -747,7 +737,7 @@ function render() {
   const rightStartCol = startCol + visLen(leftContent) + hintGap;
   buf.push(ansi.moveTo(hintRow, startCol) + leftContent + ' '.repeat(hintGap) + rightContent);
 
-  const committerStartCol = rightStartCol + spinnerWidth + visLen(rightSeparator);
+  const committerStartCol = rightStartCol;
   ui.committerClickZones = committerHint.zones.map(zone => ({
     row: hintRow,
     colStart: committerStartCol + zone.offset,

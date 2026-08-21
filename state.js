@@ -69,7 +69,8 @@ const state = {
   freshTimeWindowMode: false,
   ahead: 0,
   behind: 0,
-  spinnerActive: false,
+  spinnerActive: false,  // 쓰기 작업(커밋/푸시/스테이징 등) 진행 중 — spinner.js guardWriteOp의 기준
+  busyFlashUntil: 0,     // 쓰기 작업 중 차단된 입력 피드백 표시 만료 시각 (ms epoch)
   spinnerFrame: 0,
   refreshing: false,
   refreshMessage: '',

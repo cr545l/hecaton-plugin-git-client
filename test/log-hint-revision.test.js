@@ -161,13 +161,25 @@ test('히스토리 뷰가 아니면 리비전 힌트를 쓰지 않는다', () =>
   assert.doesNotMatch(hint, /aaaaaaa/, '다른 뷰의 힌트바를 건드리면 안 된다');
 });
 
-test('진행 중 메시지가 리비전 힌트보다 우선한다', () => {
+test('에러/토스트 메시지가 리비전 힌트보다 우선한다', () => {
   setupLogView();
   state.error = 'Pushing...';
   const hint = hintLine(captureRender());
 
-  assert.match(hint, /Pushing/, '작업 메시지가 보여야 한다');
+  assert.match(hint, /Pushing/, '메시지가 보여야 한다');
   assert.doesNotMatch(hint, /aaaaaaa/);
+});
+
+test('쓰기 작업 진행 메시지는 힌트바를 차지하지 않는다 — 타이틀이 맡는다', () => {
+  setupLogView();
+  state.spinnerActive = true;
+  state.error = 'Pushing...';
+  const hint = hintLine(captureRender());
+  state.spinnerActive = false;
+  state.error = null;
+
+  assert.doesNotMatch(hint, /Pushing/, '진행 메시지는 창 타이틀로 옮겨졌다');
+  assert.match(hint, /aaaaaaa/, '작업 중에도 리비전 힌트가 그대로 보여야 한다');
 });
 
 // 좁은 터미널에서는 committer 영역과 겹치지 않게 뒤쪽부터 접혀야 한다.

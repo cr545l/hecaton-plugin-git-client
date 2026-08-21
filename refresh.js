@@ -314,11 +314,13 @@ function refreshInBackground(options = {}, followup = {}) {
     })
     .finally(() => {
       _backgroundRefreshCount = Math.max(0, _backgroundRefreshCount - 1);
-      releaseSpinner();
+      // releaseSpinner가 마지막 updateTitle을 부르므로, 타이틀에 남을 처리상태
+      // 플래그를 먼저 내려야 스피너가 사라진 타이틀로 원복된다.
       if (_backgroundRefreshCount === 0) {
         state.refreshing = false;
         state.refreshMessage = '';
       }
+      releaseSpinner();
       renderNow();
     });
 }
