@@ -11,7 +11,7 @@ const FRESH_TIME_WINDOWS = [
 ];
 const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
-const { acquireSpinner, releaseSpinner } = require('./spinner');
+const { acquireSpinner, releaseSpinner, beginPanelLoading, endPanelLoading } = require('./spinner');
 const { applyWindowTitle } = require('./title');
 const { stripDiffFileHeaders } = require('./text');
 
@@ -1568,6 +1568,7 @@ function updateLogDetail(options = {}) {
   state.diffScrollX = 0;
   const item = selectedLogRef();
   if (!item) {
+    endPanelLoading('logDetail');
     state.logDetailLines = [];
     return;
   }
@@ -1607,13 +1608,16 @@ function updateLogDetail(options = {}) {
   // Show header immediately, load body/diff async.
   state.logDetailLines = [...lines];
   const seq = ++_logDetailSeq;
-  if (options.headerOnly) return;
+  if (options.headerOnly) { endPanelLoading('logDetail'); return; }
+  // 본문/패치가 도착할 때까지 상세 끝에 스피너를 붙인다.
+  beginPanelLoading('logDetail');
   const stashRef = ui.stashMap.get(item.ref);
   const promise = stashRef
     ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)
     : gitExec(['show', '--format=%B%x00', '--patch', item.ref], state.cwd, 30000);
   promise.then(raw => {
     if (_logDetailSeq !== seq) return;
+    endPanelLoading('logDetail');
     const detailLines = [];
     if (stashRef) {
       detailLines.push(...lines);
@@ -1638,6 +1642,11 @@ function updateLogDetail(options = {}) {
       }
     }
     state.logDetailLines = detailLines;
+    require('./render').render();
+  }, () => {
+    // 실패로 끝나도 스피너는 걷는다. 더 새 요청이 떠 있으면 그 쪽 것은 건드리지 않는다.
+    if (_logDetailSeq !== seq) return;
+    endPanelLoading('logDetail');
     require('./render').render();
   });
 }
@@ -1666,6 +1675,7 @@ function updateDiff() {
   const item = selectedItem();
   if (!item) {
     if (_diffDebounceTimer) { clearTimeout(_diffDebounceTimer); _diffDebounceTimer = null; }
+    endPanelLoading('diff');
     state.diffLines = [];
     state.conflictView = null;
     state.currentDiffFile = null;
@@ -1682,6 +1692,13 @@ function updateDiff() {
     state.conflictView = null;
   }
 
+  // 보여 줄 것이 없는 동안에만 스피너를 켠다 — 이미 그려진 diff를 다시 읽는 경우(스테이징,
+  // 백그라운드 refresh)엔 화면이 비지 않으니 알릴 것도 없고, 프레임마다 다시 그릴 이유도 없다.
+  // debounce 전에 켜야 기다리는 80ms 동안 "Select a file to view diff" 안내가 잘못 보이지 않는다.
+  const showsNothing = state.diffLines.length === 0
+    && !(state.conflictView && state.conflictView.file === item.file);
+  if (showsNothing) beginPanelLoading('diff');
+
   const seq = ++_diffSeq;
   if (_diffDebounceTimer) clearTimeout(_diffDebounceTimer);
   _diffDebounceTimer = setTimeout(() => {
@@ -1691,6 +1708,7 @@ function updateDiff() {
     if (item.status === 'U') {
       gitReadConflictFile(state.cwd, item.file).then(conflictView => {
         if (_diffSeq !== seq) return;
+        endPanelLoading('diff');
         state.conflictView = conflictView;
         state.diffLines = [];
         if (ui.mergeConflictFile !== item.file) {
@@ -1699,6 +1717,10 @@ function updateDiff() {
           ui.mergeChunkSelections = {};
         }
         ensureConflictSelections(conflictView);
+        require('./render').render();
+      }, () => {
+        if (_diffSeq !== seq) return;
+        endPanelLoading('diff');
         require('./render').render();
       });
       return;
@@ -1715,8 +1737,13 @@ function updateDiff() {
     }
     gitExec(args, state.cwd).then(raw => {
       if (_diffSeq !== seq) return;
+      endPanelLoading('diff');
       state.conflictView = null;
       state.diffLines = raw.split('\n');
+      require('./render').render();
+    }, () => {
+      if (_diffSeq !== seq) return;
+      endPanelLoading('diff');
       require('./render').render();
     });
   }, DIFF_DEBOUNCE_MS);
@@ -1802,6 +1829,7 @@ function refreshFresh() {
 function updateFreshDetail() {
   const item = state.freshItems[state.freshCursor];
   if (!item) {
+    endPanelLoading('freshDetail');
     state.freshDetailLines = [];
     state.diffScrollX = 0;
     return;
@@ -1813,6 +1841,9 @@ function updateFreshDetail() {
     state.diffScrollX = 0;
     state.freshDetailLines = [];
   }
+  // diff 쪽과 같은 기준 — 이미 그려진 내용이 있으면 스피너를 켜지 않는다.
+  if (state.freshDetailLines.length === 0) beginPanelLoading('freshDetail');
+
   const seq = ++_freshDetailSeq;
   let promise;
   if (item.isPending) {
@@ -1826,9 +1857,14 @@ function updateFreshDetail() {
   }
   promise.then(raw => {
     if (_freshDetailSeq !== seq) return;
+    endPanelLoading('freshDetail');
     // 여기서 걸러 두면 스크롤 한계 계산까지 한 배열만 보게 된다 — 이 목록은
     // 화면 표시 전용이라(패치를 만들지 않는다) 원본을 남길 이유가 없다.
     state.freshDetailLines = stripDiffFileHeaders(raw.split('\n'));
+    require('./render').render();
+  }, () => {
+    if (_freshDetailSeq !== seq) return;
+    endPanelLoading('freshDetail');
     require('./render').render();
   });
 }

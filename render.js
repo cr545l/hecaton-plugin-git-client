@@ -6,6 +6,7 @@ const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, current
 const { highlightCode, getLanguage } = require('./highlighter');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
+const { panelLoadingLabel } = require('./spinner');
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
@@ -1811,7 +1812,12 @@ function buildDiffCommitPanel(w, h) {
     } else if (state.diffLines.length === 0) {
       ui.mergeClickZones = [];
       ui.mergeChunkLineMap = {};
-      lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
+      // 로딩 중에는 "파일을 고르라"는 안내가 사실과 다르다 — 스피너로 바꾸고,
+      // 스피너를 그리기 전 짧은 유예 동안에는 빈 줄로 둔다.
+      const spin = panelLoadingLabel('diff', 'Loading diff...');
+      if (spin) lines.push(colors.dim + ' ' + spin + ansi.reset);
+      else if (state.diffLoading) lines.push('');
+      else lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < diffH; i++) lines.push('');
       ui.diffMaxScroll = 0;
       ui.diffMaxScrollX = 0;
@@ -2213,7 +2219,11 @@ function buildLogPanel(w, h) {
   }
 
   // Build filtered detail lines (respecting collapsed files)
-  const filteredDetail = filterLogDetailLines(state.logDetailLines, ui.collapsedDetailFiles);
+  // 커밋 헤더는 바로 나오고 본문/패치는 늦게 온다 — 그 사이 상세 끝에 스피너를 붙인다.
+  // 스크롤 한계도 이 목록에서 나오므로 원본에 얹어 두고 한 번에 계산한다.
+  const detailSpin = panelLoadingLabel('logDetail', 'Loading diff...');
+  const detailSource = detailSpin ? [...state.logDetailLines, '', detailSpin] : state.logDetailLines;
+  const filteredDetail = filterLogDetailLines(detailSource, ui.collapsedDetailFiles);
   ui.filteredDetailCount = filteredDetail.length;
 
   // Pre-calculate detail scroll pct for separator. Display only — the
@@ -2638,7 +2648,10 @@ function buildFreshPanel(w, h) {
   if (detailH > 0) {
     const selItem = state.freshItems[state.freshCursor];
     if (state.freshDetailLines.length === 0) {
-      lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
+      const spin = panelLoadingLabel('freshDetail', 'Loading diff...');
+      if (spin) lines.push(colors.dim + ' ' + spin + ansi.reset);
+      else if (state.freshDetailLoading) lines.push('');
+      else lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
       for (let i = 1; i < detailH; i++) lines.push('');
       ui.freshDetailMaxScrollX = 0;
     } else {

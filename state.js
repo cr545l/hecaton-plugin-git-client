@@ -72,6 +72,14 @@ const state = {
   spinnerActive: false,  // 쓰기 작업(커밋/푸시/스테이징 등) 진행 중 — spinner.js guardWriteOp의 기준
   busyFlashUntil: 0,     // 쓰기 작업 중 차단된 입력 피드백 표시 만료 시각 (ms epoch)
   spinnerFrame: 0,
+  // 읽기 작업(diff/상세 로드)의 진행 표시 — 쓰기 작업의 spinnerActive 와 달리 입력을 막지 않고
+  // 해당 패널 안에만 스피너를 그린다. Since 는 스피너를 그리기 시작할 시점을 재는 기준이다.
+  diffLoading: false,
+  diffLoadingSince: 0,
+  logDetailLoading: false,
+  logDetailLoadingSince: 0,
+  freshDetailLoading: false,
+  freshDetailLoadingSince: 0,
   refreshing: false,
   refreshMessage: '',
   indexLocked: false,    // .git/index.lock 존재 여부 — Unlock 버튼 노출 트리거

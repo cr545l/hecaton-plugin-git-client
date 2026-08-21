@@ -17,6 +17,9 @@ function acquireSpinner() {
     spinnerTimer = setInterval(() => {
       state.spinnerFrame = (state.spinnerFrame + 1) % BRAILLE_FRAMES.length;
       updateTitle();
+      // 패널 안에 그린 스피너는 화면을 다시 그려야 돈다. 떠 있는 동안에만 켜지므로
+      // 백그라운드 refresh 내내 재그리기를 피한다는 위 원칙은 그대로다.
+      if (panelRefCount > 0) require('./render').render();
     }, 80);
   }
 }
@@ -61,6 +64,50 @@ function stopSpinner() {
   releaseSpinner();
 }
 
+// ── 패널 안에 그리는 로딩 스피너 ──
+// diff/상세는 헤더만 먼저 나오고 본문이 늦게 오는 구간이 있다. 그 사이를 빈 화면이나
+// "Select a file..." 안내로 두면 멈춘 것처럼 보이므로 스피너로 대기 중임을 알린다.
+// 로드가 한 프레임 안에 끝나면 스피너가 번쩍이기만 하므로 유예를 두되, 그보다 길어지면
+// 곧바로 알린다 — 유예가 길면 빈 화면이 먼저 보인다. 스피너 타이머와 같은 80ms 주기의
+// 바로 다음 프레임에서 그려지도록 한 프레임보다 조금 짧게 잡는다.
+const PANEL_SPINNER_DELAY_MS = 70;
+
+// 키마다 진행 플래그와 시작 시각을 짝지어 둔다 — 켜고 끄는 짝이 어긋나지 않게.
+const PANEL_LOADERS = {
+  diff: ['diffLoading', 'diffLoadingSince'],
+  logDetail: ['logDetailLoading', 'logDetailLoadingSince'],
+  freshDetail: ['freshDetailLoading', 'freshDetailLoadingSince'],
+};
+
+let panelRefCount = 0;
+
+function beginPanelLoading(key) {
+  const [flag, since] = PANEL_LOADERS[key];
+  if (state[flag]) return;   // 이미 기다리는 중이면 시작 시각을 새로 잡지 않는다
+  state[flag] = true;
+  state[since] = Date.now();
+  panelRefCount++;
+  acquireSpinner();
+}
+
+function endPanelLoading(key) {
+  const [flag, since] = PANEL_LOADERS[key];
+  if (!state[flag]) return;
+  state[flag] = false;
+  state[since] = 0;
+  if (panelRefCount > 0) panelRefCount--;
+  releaseSpinner();
+}
+
+// 지금 그려야 할 스피너 문자열 — 로딩 중이 아니거나 아직 유예 시간 안이면 null.
+// 호출부는 null 이면 원래 그리던 것을 그대로 그린다.
+function panelLoadingLabel(key, label) {
+  const [flag, since] = PANEL_LOADERS[key];
+  if (!state[flag]) return null;
+  if (Date.now() - state[since] < PANEL_SPINNER_DELAY_MS) return null;
+  return BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ' ' + label;
+}
+
 function isWriteOpActive() {
   return state.spinnerActive;
 }
@@ -100,4 +147,4 @@ function showToast(msg, ttlMs = 1000) {
   }, ttlMs);
 }
 
-module.exports = { BRAILLE_FRAMES, startSpinner, stopSpinner, acquireSpinner, releaseSpinner, isSpinning, isWriteOpActive, guardWriteOp, flashBusy, showToast };
+module.exports = { BRAILLE_FRAMES, startSpinner, stopSpinner, acquireSpinner, releaseSpinner, isSpinning, isWriteOpActive, guardWriteOp, flashBusy, showToast, beginPanelLoading, endPanelLoading, panelLoadingLabel };
