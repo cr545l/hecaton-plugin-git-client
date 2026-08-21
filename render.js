@@ -7,6 +7,12 @@ const { highlightCode, getLanguage } = require('./highlighter');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
 const { panelLoadingLabel } = require('./spinner');
+// 목록의 선택 줄 배경. 포커스가 diff/detail 쪽으로 가도 선택 자체는 그대로 두고 흐리게만
+// 그린다 — 고른 대상이 바뀐 게 아니므로 표시가 사라지면 "선택이 풀렸다"로 읽힌다.
+function listCursorBg() {
+  return state.focusPanel === 'status' ? colors.cursorBg : colors.cursorBgInactive;
+}
+
 const RECOVERY_TEXT = ansi.dim + ansi.fg(160, 160, 160);
 const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 
@@ -1472,7 +1478,7 @@ function buildFileListPanel(w, h) {
   const innerW = w - 1;
   let cursorLineIdx = -1;
   let listIdx = 0;
-  const focused = state.focusPanel === 'status';
+  const cursorBgColor = listCursorBg();
   ui.fileHeaderZones = [];
 
   if (state.loading) {
@@ -1569,7 +1575,7 @@ function buildFileListPanel(w, h) {
     const isCursor = state.cursor === listIdx;
     const isMultiSel = state.selectedFiles.has(listIdx);
     if (isCursor) cursorLineIdx = lines.length;
-    const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
@@ -1582,7 +1588,7 @@ function buildFileListPanel(w, h) {
     const isCursor = state.cursor === listIdx;
     const isMultiSel = state.selectedFiles.has(listIdx);
     if (isCursor) cursorLineIdx = lines.length;
-    const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
@@ -1623,7 +1629,7 @@ function buildFileListPanel(w, h) {
     const isCursor = state.cursor === listIdx;
     const isMultiSel = state.selectedFiles.has(listIdx);
     if (isCursor) cursorLineIdx = lines.length;
-    const bgColor = isMultiSel ? colors.selectedBg : (isCursor && focused ? colors.cursorBg : '');
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
     const hasBg = bgColor !== '';
     const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
@@ -1651,7 +1657,7 @@ function buildFileListPanel(w, h) {
         const item = state.ignored[i];
         const isCursor = state.cursor === listIdx;
         if (isCursor) cursorLineIdx = lines.length;
-        const bgColor = isCursor && focused ? colors.cursorBg : '';
+        const bgColor = isCursor ? cursorBgColor : '';
         const line = '   ' + colors.dim + '!' + ansi.reset + (bgColor || '') + ' ' + colors.dim + sliceByWidth(item.file, state.filesScrollX, innerW - 6) + ansi.reset;
         pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
         listIdx++;
@@ -1702,8 +1708,10 @@ function buildFileListPanel(w, h) {
   }
 
   // Apply hover highlight to file list
+  // 커서 줄은 건너뛴다 — 덮어쓰면 마우스를 올린 동안 선택이 풀린 것처럼 보인다.
   const hoverRow = ui.hoveredFileRow;
-  if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.fileLineMap[hoverRow] >= 0) {
+  if (hoverRow >= 0 && hoverRow < visibleLines.length && ui.fileLineMap[hoverRow] >= 0
+      && ui.fileLineMap[hoverRow] !== state.cursor) {
     const orig = visibleLines[hoverRow];
     // Remove existing background and apply hover
     const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
@@ -2052,11 +2060,13 @@ function buildLogPanel(w, h) {
   }
   const graphRows = [];
   let graphWidth = 0;
+  const logFocused = state.focusPanel === 'status';
+  const cursorBgColor = listCursorBg();
   function renderLogRow(itemIdx) {
     const item = itemIdx >= 0 ? state.logItems[itemIdx] : null;
     if (!item) return { text: '', graph: null };
 
-    const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+    const isCursor = itemIdx === selectedItemIdx;
 
     if (item.type === 'commit') {
       const prefix = ' ';
@@ -2094,7 +2104,7 @@ function buildLogPanel(w, h) {
           else { subjStr = truncate(safeSubject, available); decoPart = ''; }
         }
       }
-      const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
+      const resetTo = isCursor ? ansi.reset + cursorBgColor : ansi.reset;
       const subjectStyle = item.isRecovery ? RECOVERY_TEXT : colors.value;
       const hashStyle = item.isRecovery
         ? RECOVERY_TEXT
@@ -2107,8 +2117,11 @@ function buildLogPanel(w, h) {
       const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
-        text: (isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset,
-        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles, isCursor } : null,
+        text: (isCursor ? cursorBgColor : '') + padRight(line, innerW) + ansi.reset,
+        graph: item.chars ? {
+          chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles,
+          isCursor: isCursor && logFocused, isCursorInactive: isCursor && !logFocused,
+        } : null,
       };
     } else {
       const graphPart = ' '.repeat(maxNaturalWidth);
@@ -2132,7 +2145,7 @@ function buildLogPanel(w, h) {
     const item = state.logItems[itemIdx];
     // Only apply hover to commit items (not graph-only rows) and not to cursor
     if (item && item.type === 'commit') {
-      const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+      const isCursor = itemIdx === selectedItemIdx;
       if (!isCursor) {
         const orig = lines[hoverRow];
         const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');
@@ -2566,13 +2579,14 @@ function buildFreshPanel(w, h) {
   state.freshScrollOffset = Math.max(0, Math.min(state.freshScrollOffset, Math.max(0, state.freshItems.length - fileListH)));
 
   const visibleItems = state.freshItems.slice(state.freshScrollOffset, state.freshScrollOffset + fileListH);
+  const cursorBgColor = listCursorBg();
   function renderFreshRow(itemIdx) {
     const item = itemIdx >= 0 ? state.freshItems[itemIdx] : null;
     if (!item) return '';
 
-    const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+    const isCursor = itemIdx === selectedItemIdx;
     const prefix = '   ';
-    const resetTo = isCursor ? ansi.reset + colors.cursorBg : ansi.reset;
+    const resetTo = isCursor ? ansi.reset + cursorBgColor : ansi.reset;
 
     const statusIcon = freshStatusIcon(item.status);
     const fileColor = heatmapColor(item.date, tw.days || 7);
@@ -2584,7 +2598,7 @@ function buildFreshPanel(w, h) {
       + '  ' + colors.dim + padRight(relTime, 4) + resetTo
       + ' ' + colors.dim + authorPart + resetTo;
 
-    return (isCursor ? colors.cursorBg : '') + padRight(line, innerW) + ansi.reset;
+    return (isCursor ? cursorBgColor : '') + padRight(line, innerW) + ansi.reset;
   }
   for (let i = 0; i < fileListH; i++) {
     const itemIdx = state.freshScrollOffset + i;
@@ -2606,7 +2620,7 @@ function buildFreshPanel(w, h) {
   const hoverRow = ui.hoveredFreshRow;
   if (hoverRow > 0 && hoverRow < lines.length) {
     const itemIdx = hoverRow > 0 && hoverRow - 1 < visibleItems.length ? state.freshScrollOffset + (hoverRow - 1) : -1;
-    const isCursor = state.focusPanel === 'status' && itemIdx === selectedItemIdx;
+    const isCursor = itemIdx === selectedItemIdx;
     if (!isCursor) {
       const orig = lines[hoverRow];
       const deBg = orig.replace(/\x1b\[48;2;[\d;]+m/g, '').replace(/\x1b\[10[0-9]m/g, '').replace(/\x1b\[44m/g, '');

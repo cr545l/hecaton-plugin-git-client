@@ -9,6 +9,7 @@ const SIXEL_PALETTE = [
   [80,  80,  80],
   [50,  50,  50],
   [160, 160, 160],
+  [64,  64,  64],   // 포커스 없는 선택 줄 — ansi.js 의 cursorBgInactive 와 같은 값
 ];
 
 function pxSet(buf, w, h, x, y, c) { if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c; }
@@ -172,6 +173,7 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
 
 const BG_CURSOR = 7;
 const BG_HOVER = 8;
+const BG_CURSOR_INACTIVE = 10;
 
 function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundary, nextBoundary) {
   const pw = numCols * cellW;
@@ -183,7 +185,9 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
-    const bgIdx = row.isCursor ? BG_CURSOR : row.isHover ? BG_HOVER : 0;
+    const bgIdx = row.isCursor ? BG_CURSOR
+      : row.isCursorInactive ? BG_CURSOR_INACTIVE
+      : row.isHover ? BG_HOVER : 0;
     if (bgIdx > 0) {
       const yStart = r * cellH;
       for (let y = yStart; y < yStart + cellH && y < ph; y++) {

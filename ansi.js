@@ -30,6 +30,9 @@ const colors = {
   sectionHeader: CSI + '39m', // default foreground
   cursor: CSI + '39m',        // default foreground
   cursorBg: CSI + '100m',     // bright black bg
+  // 포커스가 다른 패널로 가도 목록의 선택은 그대로 두고 이 색으로 흐리게만 그린다.
+  // sixel 그래프도 같은 값을 쓰므로 sixel.js 의 BG_CURSOR_INACTIVE 와 함께 바꿔야 한다.
+  cursorBgInactive: CSI + '48;2;64;64;64m',
   hoverBg: CSI + '48;2;50;50;50m', // dark gray bg (hover)
   diffAdd: CSI + '32m',       // green text
   diffDel: CSI + '31m',       // red text
