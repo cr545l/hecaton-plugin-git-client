@@ -143,8 +143,10 @@ function pushCurrentBranch() {
       showErrorDialog(err);
       render();
     } else {
+      // 후속 갱신까지가 "Push" 한 동작이다 — 라벨을 이어 주고, 스피너를 넘겨준 뒤 내린다
+      // (afterGitOp과 같은 이유: 사이에 참조가 0이 되면 제목이 한 번 깜빡인다).
+      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: 'Pushing...' });
       stopSpinner();
-      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true });
     }
   });
 }
@@ -854,8 +856,11 @@ function handleCommitInput(key) {
         state.commitMsg = '';
         state.commitCursor = 0;
         state.commitAmend = false;
+        refreshInBackground({}, {
+          refreshLog: true, refreshFresh: true,
+          message: isAmendCommit ? 'Amending...' : 'Committing...',
+        });
         stopSpinner();
-        refreshInBackground({}, { refreshLog: true, refreshFresh: true });
       });
     }
     return;
@@ -1668,8 +1673,8 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
+                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...' });
                   stopSpinner();
-                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true });
                 }
               });
               handled = true;
@@ -1683,8 +1688,8 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
+                  refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...' });
                   stopSpinner();
-                  refreshInBackground({}, { refreshLog: true, refreshFresh: true });
                 }
               });
               handled = true;

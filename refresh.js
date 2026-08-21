@@ -12,7 +12,7 @@ const FRESH_TIME_WINDOWS = [
 const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
-const { formatWindowTitle } = require('./title');
+const { applyWindowTitle } = require('./title');
 const { stripDiffFileHeaders } = require('./text');
 
 function findHeadCommitHash(commits) {
@@ -299,8 +299,16 @@ function renderNow() {
 function refreshInBackground(options = {}, followup = {}) {
   if (!state.cwd) return Promise.resolve();
   _backgroundRefreshCount++;
+  // followup.message 는 이 refresh가 어떤 작업에 딸린 것인지 알려 주는 이름이다
+  // (예: rename 뒤의 갱신은 계속 "Rename branch..."). 이름 없는 refresh가 나중에
+  // 겹쳐 들어와도 그 이름을 "Refreshing..."으로 끌어내리지 않는다 — 무슨 작업이
+  // 진행 중인지가 갱신 중이라는 사실보다 중요하다.
+  if (followup.message) {
+    state.refreshMessage = followup.message;
+  } else if (!state.refreshing || !state.refreshMessage) {
+    state.refreshMessage = 'Refreshing...';
+  }
   state.refreshing = true;
-  state.refreshMessage = followup.message || 'Refreshing...';
   acquireSpinner();
   renderNow();
 
@@ -385,7 +393,7 @@ function applyStageToState(filePaths) {
     }
   }
   state.untracked = remainUntracked;
-  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+  applyWindowTitle();
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -413,7 +421,7 @@ function applyUnstageToState(filePaths) {
     }
   }
   state.staged = remainStaged;
-  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+  applyWindowTitle();
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -631,7 +639,7 @@ function applyStatusSnapshot(snapshot, includeIgnored) {
   state.ignored = includeIgnored ? (snapshot.ignored || []) : [];
   state.ignoredLoaded = includeIgnored;
   state.ignoredLoading = false;
-  hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+  applyWindowTitle();
   remapSelectedFiles();
   clampCursor();
   updateDiff();
@@ -1149,7 +1157,7 @@ async function refreshAsync(options = {}) {
   state.ahead = parseInt(abParts[1]) || 0;
 
   if (metadataOnly) {
-    hecaton.window.set_title({ title: formatWindowTitle() }).catch(() => null);
+    applyWindowTitle();
   } else {
     remapSelectedFiles();
     clampCursor();

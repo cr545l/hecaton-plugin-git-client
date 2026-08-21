@@ -2555,13 +2555,18 @@ async function runHistoryRewrite(opName, fn) {
 
 async function afterGitOp(err, opName, refreshOpts = {}) {
   if (!state.spinnerActive) state.error = null;
+  // git 명령 자체는 대개 수십 ms 만에 끝나고, 결과를 화면에 반영하는 refresh가 그보다
+  // 훨씬 오래 걸린다. 라벨을 넘기지 않으면 사용자가 보는 거의 모든 시간 동안
+  // "Refreshing..."만 떠서 정작 무슨 작업이었는지 알 수 없다. 후속 갱신까지가 한 동작이다.
+  // 실패한 경우엔 이름을 잇지 않는다 — 되돌아간 상태를 다시 읽는 것뿐이고,
+  // 무슨 일이 있었는지는 곧 뜨는 오류 창이 말해 준다.
+  const followup = { refreshLog: !refreshOpts.statusOnly };
+  if (!err) followup.message = opName + '...';
+  // stopSpinner 보다 먼저 건다. 순서를 뒤집으면 스피너 참조가 잠깐 0이 되어
+  // 두 표시 사이에서 제목이 한 번 맨 상태로 떨어졌다 돌아온다.
+  refreshInBackground(refreshOpts, followup);
   stopSpinner();
-  if (err) {
-    refreshInBackground(refreshOpts, { refreshLog: !refreshOpts.statusOnly });
-    showError(opName + ' failed:\n' + err);
-  } else {
-    refreshInBackground(refreshOpts, { refreshLog: !refreshOpts.statusOnly });
-  }
+  if (err) showError(opName + ' failed:\n' + err);
 }
 
 function showError(msg) {

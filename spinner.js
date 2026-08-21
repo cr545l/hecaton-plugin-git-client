@@ -1,6 +1,6 @@
 const { state } = require('./state');
 // BRAILLE_FRAMES 원본은 title.js에 있다(순환 require 회피) — 기존 사용처를 위해 재수출.
-const { formatWindowTitle, BRAILLE_FRAMES } = require('./title');
+const { applyWindowTitle, BRAILLE_FRAMES } = require('./title');
 
 let spinnerTimer = null;
 let refCount = 0;
@@ -10,11 +10,13 @@ function acquireSpinner() {
   if (refCount === 1) {
     state.spinnerFrame = 0;
     updateTitle();
+    // 처리상태가 창 타이틀로 옮겨간 뒤로 화면에는 프레임마다 바뀌는 것이 없다.
+    // 여기서 render()를 돌리면 백그라운드 refresh가 도는 내내 80ms마다 전체 화면을
+    // 다시 그리게 된다 — 타이틀만 갱신한다. 화면은 상태가 실제로 바뀌는 시점에
+    // 호출부가 그린다(startSpinner/stopSpinner 전후).
     spinnerTimer = setInterval(() => {
       state.spinnerFrame = (state.spinnerFrame + 1) % BRAILLE_FRAMES.length;
       updateTitle();
-      const { render } = require('./render');
-      render();
     }, 80);
   }
 }
@@ -33,9 +35,7 @@ function releaseSpinner() {
 }
 
 function updateTitle() {
-  const title = formatWindowTitle();
-  if (!title) return;
-  hecaton.window.set_title({ title }).catch(() => null);
+  applyWindowTitle();
 }
 
 function isSpinning() {

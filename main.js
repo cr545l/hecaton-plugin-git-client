@@ -203,7 +203,7 @@ async function primeInitialBranchFromDisk() {
   state.isGitRepo = true;
   state.branch = branch || 'HEAD';
   state.error = null;
-  hecaton.window.set_title({ title: state.branch }).catch(() => null);
+  require('./title').applyWindowTitle();
   return true;
 }
 
