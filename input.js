@@ -12,7 +12,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
 } = require('./git');
 const { startSpinner, stopSpinner, guardWriteOp, showToast } = require('./spinner');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
-const { render } = require('./render');
+const { render, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
@@ -1897,6 +1897,8 @@ async function handleMouseData(data) {
                 ui.remoteRecentBranchUsage[entry.branch] = Date.now();
               }
               ui.leftPanelActiveBranch = entry.branch;
+              // 상단 브랜치명 줄 클릭 — 목록의 그 줄까지 상위 토글을 펼치고 스크롤한다.
+              if (entry.reveal) revealBranch(entry.branch);
               if (state.rightView !== 'log') {
                 state.rightView = 'log';
                 refreshLog();

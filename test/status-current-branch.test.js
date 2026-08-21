@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 global.hecaton = { fs: {}, process: {}, window: {}, initialState: { cols: 120, rows: 40 }, terminal: {} };
 
 const { state, ui } = require('../state');
-const { buildLeftPanel } = require('../render');
+const { buildLeftPanel, revealBranch } = require('../render');
 
 const PANEL_W = 40;
 const PANEL_H = 60;
@@ -32,6 +32,7 @@ function resetState({ branch = 'main', branches, isLinkedWorktree = false } = {}
   ui.collapsedSections = {};
   ui.collapsedGroups = {};
   ui.leftPanelScrollOffset = 0;
+  ui.leftRevealBranch = null;
   ui.leftPanelActiveBranch = null;
   ui.hoveredLeftPanelRow = -1;
   ui.hostScrollRegions = [];
@@ -85,6 +86,44 @@ test('상단 브랜치명 줄은 Branches 항목과 같은 goto-branch 액션을
   buildLeftPanel(PANEL_W, PANEL_H);
   const topEntry = ui.leftPanelClickMap[0];
   const branchEntry = ui.leftPanelClickMap.find((entry, row) => row > 0 && entry && entry.branch === 'feature/login');
-  assert.deepEqual(topEntry, { action: 'goto-branch', branch: 'feature/login' });
-  assert.deepEqual(topEntry, branchEntry);
+  // reveal은 상단 줄에만 붙는다 — 목록 줄은 눌린 자리가 곧 그 줄이라 스크롤할 이유가 없다.
+  assert.deepEqual(topEntry, { action: 'goto-branch', branch: 'feature/login', reveal: true });
+  assert.deepEqual(branchEntry, { action: 'goto-branch', branch: 'feature/login' });
+});
+
+// ── 접힌 토글 펼치기 + 스크롤 ──
+
+test('접혀 있으면 Branches 섹션과 prefix 그룹을 모두 펼친다', () => {
+  resetState({ branch: 'feature/login', branches: [{ name: 'feature/login', isCurrent: true }] });
+  ui.collapsedSections.branches = true;
+  ui.collapsedGroups['b:feature'] = true;
+  revealBranch('feature/login');
+  assert.equal(ui.collapsedSections.branches, false);
+  assert.equal(ui.collapsedGroups['b:feature'], false);
+});
+
+test('접힌 상태에서도 펼친 뒤 그 브랜치 줄이 화면 안으로 들어온다', () => {
+  const branches = [];
+  for (let i = 0; i < 40; i++) branches.push({ name: 'feature/b' + i, isCurrent: false });
+  branches.push({ name: 'feature/login', isCurrent: true });
+  resetState({ branch: 'feature/login', branches });
+  ui.collapsedSections.branches = true;
+  ui.collapsedGroups['b:feature'] = true;
+
+  revealBranch('feature/login');
+  buildLeftPanel(PANEL_W, 12);
+
+  const visible = ui.leftPanelClickMap.some(e => e && e.action === 'goto-branch' && e.branch === 'feature/login' && !e.reveal);
+  assert.ok(visible, '펼친 뒤 현재 브랜치 줄이 보이는 범위 안에 있어야 한다');
+  assert.equal(ui.leftRevealBranch, null, '스크롤한 뒤에는 요청이 소모돼야 한다');
+});
+
+test('스크롤 요청이 없으면 좌측 패널 오프셋을 건드리지 않는다', () => {
+  const branches = [];
+  for (let i = 0; i < 40; i++) branches.push({ name: 'feature/b' + i, isCurrent: false });
+  branches.push({ name: 'main', isCurrent: true });
+  resetState({ branch: 'main', branches });
+  ui.leftPanelScrollOffset = 3;
+  buildLeftPanel(PANEL_W, 12);
+  assert.equal(ui.leftPanelScrollOffset, 3);
 });

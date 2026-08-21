@@ -127,6 +127,7 @@ const ui = {
   leftPanelActiveBranch: null,
   pinnedBranches: [],              // 핀 고정한 로컬 브랜치 이름 — 핀 지정 순서 유지, 리포별 영속
   leftPanelScrollOffset: 0,
+  leftRevealBranch: null,          // 상단 브랜치명 클릭 → 다음 렌더에서 Branches 목록의 그 줄로 스크롤
   hoveredTitleZoneIndex: -1,
   hoveredFileHeaderIdx: -1,
   hoveredLeftPanelRow: -1,
