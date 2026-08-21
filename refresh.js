@@ -13,6 +13,7 @@ const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner } = require('./spinner');
 const { formatWindowTitle } = require('./title');
+const { stripDiffFileHeaders } = require('./text');
 
 function findHeadCommitHash(commits) {
   for (const c of commits) {
@@ -1817,7 +1818,9 @@ function updateFreshDetail() {
   }
   promise.then(raw => {
     if (_freshDetailSeq !== seq) return;
-    state.freshDetailLines = raw.split('\n');
+    // 여기서 걸러 두면 스크롤 한계 계산까지 한 배열만 보게 된다 — 이 목록은
+    // 화면 표시 전용이라(패치를 만들지 않는다) 원본을 남길 이유가 없다.
+    state.freshDetailLines = stripDiffFileHeaders(raw.split('\n'));
     require('./render').render();
   });
 }

@@ -1,6 +1,6 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
-const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs } = require('./text');
+const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine } = require('./text');
 const { state, ui, isPinnedBranch } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
@@ -1819,7 +1819,9 @@ function buildDiffCommitPanel(w, h) {
         for (let i = visible.length; i < diffH; i++) lines.push('');
         pushDiffRegion(sideBySideLines.length, state.diffScrollOffset, (i) => sideBySideLines[i]);
       } else {
-        const maxScroll = Math.max(0, state.diffLines.length - diffH);
+        // 실제로 그려지는 건 annotated 다 — 헤더를 걷어낸 만큼 state.diffLines 보다
+        // 짧으므로, 스크롤 한계를 원본 길이로 잡으면 끝을 지나 빈 화면까지 내려간다.
+        const maxScroll = Math.max(0, annotated.length - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
         const isHunkEntry = (entry) => entry && entry.inDiff && typeof entry.text === 'string' && entry.text.startsWith('@@');
@@ -1856,7 +1858,7 @@ function buildDiffCommitPanel(w, h) {
             ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + hunkBtnLabel.length, hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
           }
         }
-        ui.scrollPct.diff = state.diffLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
+        ui.scrollPct.diff = annotated.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
         for (let i = visible.length; i < diffH; i++) lines.push('');
         pushDiffRegion(annotated.length, state.diffScrollOffset, (i) => renderUnifiedRow(annotated[i], i));
       }
@@ -2913,6 +2915,13 @@ function buildSideBySideDiffRows(rawLines) {
     const line = rawLines[i].replace(/[\r\n]/g, '');
     if (i === rawLines.length - 1 && line === '') continue;
 
+    // 새 파일 헤더가 시작되면 hunk 밖으로 되돌린다 — 뒤따르는 index/---/+++ 를
+    // 본문이 아니라 헤더로 판정해야 한다(멀티 파일 diff).
+    if (line.startsWith('diff --git ')) {
+      inHunk = false;
+      continue;
+    }
+
     const hunk = parseHunkHeader(line);
     if (hunk) {
       oldLine = hunk.oldLine;
@@ -2923,6 +2932,7 @@ function buildSideBySideDiffRows(rawLines) {
     }
 
     if (!inHunk) {
+      if (isDiffFileHeaderLine(line)) continue;
       pushMeta(line);
       continue;
     }
@@ -3073,12 +3083,14 @@ function renderSideBySideDiffLines(layout, filePath, scrollX, hunkOpts) {
 
 function annotateDiffLineNumbers(lines) {
   const result = [];
-  let oldLine = 0, newLine = 0, maxLine = 0, inDiff = false;
+  let oldLine = 0, newLine = 0, maxLine = 0, inDiff = false, inHunk = false;
   for (const line of lines) {
-    if (line.match(/^diff --git /)) { inDiff = true; result.push({ text: line, inDiff: false }); continue; }
+    if (line.match(/^diff --git /)) { inDiff = true; inHunk = false; continue; }
     if (!inDiff) { result.push({ text: line, inDiff: false }); continue; }
     const hm = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hm) { oldLine = parseInt(hm[1]); newLine = parseInt(hm[2]); result.push({ text: line, inDiff: true, oldNum: null, newNum: null }); continue; }
+    if (hm) { oldLine = parseInt(hm[1]); newLine = parseInt(hm[2]); inHunk = true; result.push({ text: line, inDiff: true, oldNum: null, newNum: null }); continue; }
+    // hunk 밖의 index/---/+++ 만 헤더로 보고 걷어낸다 (본문의 '--- ' 삭제줄 보호).
+    if (!inHunk && isDiffFileHeaderLine(line)) continue;
     if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ') ||
         line.startsWith('new file') || line.startsWith('old mode') || line.startsWith('new mode') ||
         line.startsWith('deleted file') || line.startsWith('similarity') || line.startsWith('rename') ||
@@ -3096,14 +3108,17 @@ function filterLogDetailLines(lines, collapsedFiles) {
   let currentFile = null;
   let isCollapsed = false;
   let inDiff = false;
+  let inHunk = false;
   let oldLine = 0, newLine = 0;
   let maxLine = 0;
   for (const line of lines) {
     const diffMatch = line.match(/^diff --git a\/.+ b\/(.+)/);
     if (diffMatch) {
+      // 이 줄은 접을 수 있는 파일 헤더 UI로 대신 그린다(파일명만 보여 준다).
       currentFile = diffMatch[1];
       isCollapsed = collapsedFiles.has(currentFile);
       inDiff = true;
+      inHunk = false;
       result.push({ isFileHeader: true, file: currentFile, text: line });
       continue;
     }
@@ -3116,9 +3131,12 @@ function filterLogDetailLines(lines, collapsedFiles) {
     if (hunkMatch) {
       oldLine = parseInt(hunkMatch[1]);
       newLine = parseInt(hunkMatch[2]);
+      inHunk = true;
       result.push({ isFileHeader: false, text: line, inDiff: true, oldNum: null, newNum: null, file: currentFile });
       continue;
     }
+    // 파일명은 위 헤더가 맡았으니 남은 index/---/+++ 는 군더더기다.
+    if (!inHunk && isDiffFileHeaderLine(line)) continue;
     if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('index ') ||
         line.startsWith('new file') || line.startsWith('old mode') || line.startsWith('new mode') ||
         line.startsWith('similarity') || line.startsWith('rename') ||

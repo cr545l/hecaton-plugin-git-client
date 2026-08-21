@@ -159,4 +159,35 @@ function sliceByWidth(text, startCol, maxWidth) {
   return plain.substring(begin, i);
 }
 
-module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport, sliceByWidth, expandTabs, TAB_WIDTH };
+// ── git diff 파일 헤더 ──
+// git은 파일마다 `diff --git a/x b/x` / `index <blob>..<blob> <mode>` / `--- a/x` /
+// `+++ b/x` 네 줄을 앞에 붙인다. 여기서 a/ b/ 는 실제 경로가 아니라 "변경 전/후"를
+// 가리키는 git의 관례적 접두사이고(diff.srcPrefix/dstPrefix 기본값), 패치를 어디서
+// 적용하든 -p1 로 떼어 내라는 뜻이다. 화면에 그대로 내보내면 없는 경로처럼 보이는 데다
+// 파일명은 파일 목록·상세 헤더가 이미 보여 주고 blob 해시는 이 UI에서 쓸 데가 없다.
+//
+// 걷어내는 건 화면뿐이다. state.diffLines 원본은 손대지 않는다 — hunk 단위 스테이징이
+// 이 헤더로 적용 가능한 패치를 만든다(git.js buildHunkPatchText).
+// new file / deleted file / rename / similarity / Binary 처럼 정보가 있는 줄은 남긴다.
+function isDiffFileHeaderLine(line) {
+  return line.startsWith('diff --git ') || line.startsWith('index ') ||
+    line.startsWith('--- ') || line.startsWith('+++ ');
+}
+
+// 위 판정을 diff 텍스트 전체에 적용한다. hunk 본문(@@ 이후)에서는 걸러내지 않는데,
+// '--'로 시작하는 줄을 지운 diff 줄이 '--- ...' 로 보여 파일 헤더와 구분되지 않기
+// 때문이다. 위치로 갈라야 본문을 잃지 않는다.
+function stripDiffFileHeaders(lines) {
+  const out = [];
+  let inHunk = false;
+  for (const raw of lines) {
+    const line = raw.replace(/[\r\n]/g, '');
+    if (line.startsWith('diff --git ')) { inHunk = false; continue; }
+    if (line.startsWith('@@')) { inHunk = true; out.push(raw); continue; }
+    if (!inHunk && isDiffFileHeaderLine(line)) continue;
+    out.push(raw);
+  }
+  return out;
+}
+
+module.exports = { stripAnsi, isWide, visLen, padRight, truncate, viewport, sliceByWidth, expandTabs, TAB_WIDTH, isDiffFileHeaderLine, stripDiffFileHeaders };
