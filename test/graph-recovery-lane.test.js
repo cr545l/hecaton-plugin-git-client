@@ -117,7 +117,12 @@ test('리커버리 합류선이 관통해도 살아있는 레인은 제 색을 �
   const laneColor = (rows[crossRow].charColors[1] % 6) + 1;
   assert.notEqual(laneColor, RECOVERY_COLOR);
   assert.equal(buf[top * pw + cx], laneColor, '칸 위쪽 세로획은 레인색이어야 한다');
-  assert.equal(buf[cy * pw + CELL_W], RECOVERY_COLOR, '칸 왼쪽 수평획은 회색이어야 한다');
+  // 점선이라 특정 x 한 점은 비어 있을 수 있어 칸을 훑어서 본다. 칸 한가운데는 세로획이
+  // 지나가므로, 수평획만 남는 왼쪽 구간만 센다.
+  const hRun = [];
+  for (let x = CELL_W; x <= cx - 2; x++) hRun.push(buf[cy * pw + x]);
+  assert.ok(hRun.includes(RECOVERY_COLOR), '칸을 지나는 수평획은 회색이어야 한다');
+  assert.ok(!hRun.includes(laneColor), '수평획이 레인색으로 새어 나오면 안 된다');
 });
 
 test('리커버리가 없으면 레인 배치는 그대로다', () => {
@@ -128,4 +133,39 @@ test('리커버리가 없으면 레인 배치는 그대로다', () => {
     { hash: H(4), parents: [], subject: 'base' },
   ];
   assert.equal(shape(rowsOf(commits)), '●╮|●│|│●|●╯');
+});
+
+test('리커버리 세로선은 살아있는 레인보다 가늘고 끊어져 있다', () => {
+  // rows[1] = "│◌" (레인0 = 살아있는 통과선), rows[3] = "●│" (레인1 = 리커버리 통과선)
+  const rows = rowsOf([
+    { hash: H(1), parents: [H(2)], subject: 'main1' },
+    { hash: H(10), parents: [H(11)], subject: 'lost1', isRecovery: true },
+    { hash: H(11), parents: [H(4)], subject: 'lost2', isRecovery: true },
+    { hash: H(2), parents: [H(3)], subject: 'main2' },
+    { hash: H(3), parents: [H(4)], subject: 'main3' },
+    { hash: H(4), parents: [], subject: 'main4' },
+  ]);
+  const numCols = 2;
+  const pw = numCols * CELL_W;
+  const buf = renderCombinedGraphPixels(rows, numCols, CELL_W, CELL_H, null, null);
+
+  // 한 행 안에서 그 레인 칸이 몇 줄이나 칠해졌는지(=연속성), 가장 두꺼운 줄이 몇 px 인지.
+  const measure = (rowIdx, lane) => {
+    let painted = 0;
+    let width = 0;
+    for (let y = rowIdx * CELL_H; y < (rowIdx + 1) * CELL_H; y++) {
+      let w = 0;
+      for (let x = lane * CELL_W; x < (lane + 1) * CELL_W; x++) if (buf[y * pw + x]) w++;
+      if (w > 0) painted++;
+      if (w > width) width = w;
+    }
+    return { painted, width };
+  };
+
+  const live = measure(1, 0);
+  const lost = measure(3, 1);
+  assert.equal(live.painted, CELL_H, '살아있는 레인은 행 전체가 이어진 실선');
+  assert.ok(lost.painted > 0, '리커버리 레인도 그려지긴 해야 한다');
+  assert.ok(lost.painted < live.painted, '리커버리 레인은 끊어져 있어야 한다: ' + lost.painted);
+  assert.ok(lost.width < live.width, '리커버리 레인이 더 가늘어야 한다: ' + lost.width + ' vs ' + live.width);
 });

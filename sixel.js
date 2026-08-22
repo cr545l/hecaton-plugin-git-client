@@ -14,16 +14,28 @@ const SIXEL_PALETTE = [
 
 function pxSet(buf, w, h, x, y, c) { if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c; }
 
-function pxVLine(buf, w, h, x, y0, y1, c, t) {
-  const half = t >> 1;
-  for (let dx = -half; dx < t - half; dx++)
-    for (let y = y0; y <= y1; y++) pxSet(buf, w, h, x + dx, y, c);
+// 점선 위상은 버퍼 절대 좌표로 잡는다. 셀마다 패턴을 새로 시작하면 행 경계에서
+// 위상이 어긋나 이어진 선이 들쭉날쭉해 보인다. dash 가 0 이면 실선.
+function dashSkip(dash, pos) {
+  if (!dash) return false;
+  const period = dash * 2;
+  return (((pos % period) + period) % period) >= dash;
 }
 
-function pxHLine(buf, w, h, x0, x1, y, c, t) {
+function pxVLine(buf, w, h, x, y0, y1, c, t, dash) {
   const half = t >> 1;
-  for (let dy = -half; dy < t - half; dy++)
-    for (let x = x0; x <= x1; x++) pxSet(buf, w, h, x, y + dy, c);
+  for (let y = y0; y <= y1; y++) {
+    if (dashSkip(dash, y)) continue;
+    for (let dx = -half; dx < t - half; dx++) pxSet(buf, w, h, x + dx, y, c);
+  }
+}
+
+function pxHLine(buf, w, h, x0, x1, y, c, t, dash) {
+  const half = t >> 1;
+  for (let x = x0; x <= x1; x++) {
+    if (dashSkip(dash, x)) continue;
+    for (let dy = -half; dy < t - half; dy++) pxSet(buf, w, h, x, y + dy, c);
+  }
 }
 
 function pxCircle(buf, w, h, cx, cy, r, c) {
@@ -41,22 +53,35 @@ function pxRing(buf, w, h, cx, cy, rOuter, rInner, c) {
     const theta = (Math.PI * 2 * i) / steps;
     const x = Math.round(cx + Math.cos(theta) * radius);
     const y = Math.round(cy + Math.sin(theta) * radius);
-    for (let dx = -Math.floor(thickness / 2); dx <= Math.floor(thickness / 2); dx++) {
-      for (let dy = -Math.floor(thickness / 2); dy <= Math.floor(thickness / 2); dy++) {
+    // floor(t/2) 를 양쪽에 쓰면 두께 2와 3이 똑같이 3px 로 그려져 가는 링을 만들 수 없다.
+    const lead = Math.floor((thickness - 1) / 2);
+    for (let dx = -lead; dx <= thickness - 1 - lead; dx++) {
+      for (let dy = -lead; dy <= thickness - 1 - lead; dy++) {
         pxSet(buf, w, h, x + dx, y + dy, c);
       }
     }
   }
 }
 
-function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t) {
+function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t, dash) {
   const half = t >> 1;
-  const steps = 20;
+  // 제어점 둘레는 호 길이의 상한이다. 가는 선(t=1)은 걸음이 1px 를 넘으면 곡선에
+  // 구멍이 생기므로 걸음 수를 그 길이에 맞춘다.
+  const steps = Math.max(20,
+    Math.abs(x1 - x0) + Math.abs(y1 - y0) + Math.abs(x2 - x1) + Math.abs(y2 - y1));
+  let prevX = null;
+  let prevY = null;
+  let travelled = 0;
   for (let i = 0; i <= steps; i++) {
     const s = i / steps;
     const ms = 1 - s;
     const px = Math.round(ms * ms * x0 + 2 * ms * s * x1 + s * s * x2);
     const py = Math.round(ms * ms * y0 + 2 * ms * s * y1 + s * s * y2);
+    if (prevX !== null) travelled += Math.hypot(px - prevX, py - prevY);
+    prevX = px;
+    prevY = py;
+    // 곡선은 좌표축이 아니라 지나온 거리로 점선을 끊는다.
+    if (dashSkip(dash, Math.round(travelled))) continue;
     for (let bx = -half; bx < t - half; bx++)
       for (let by = -half; by < t - half; by++)
         pxSet(buf, w, h, px + bx, py + by, c);
@@ -86,7 +111,7 @@ function connectsUp(ch) { // 위 가장자리까지 획이 닿는 글자
          ch === '●' || ch === '◌';
 }
 
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, charStylesH, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, charStylesH, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR, thinW, dashLen) {
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
@@ -101,6 +126,12 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
     const csh = charStylesH && i < charStylesH.length ? charStylesH[i] : -1;
     const hStyle = csh >= 0 ? csh : style;
     const hc = hStyle === 1 ? 9 : ((cch >= 0 ? cch : cc) % 6) + 1;
+    // 리커버리 획은 가늘고 끊어진 선으로. 색만 회색이면 굵기가 같아 살아있는 레인과
+    // 같은 무게로 읽힌다 — 유실 가지가 많은 저장소에서 실제 트리가 묻힌다.
+    const lw = style === 1 ? thinW : lineW;
+    const dash = style === 1 ? dashLen : 0;
+    const hlw = hStyle === 1 ? thinW : lineW;
+    const hdash = hStyle === 1 ? dashLen : 0;
     // 코너(╭╮╯╰)가 수평 병합선 중간에 놓이면 관통선이 한쪽만 이어져 끊어져 보인다.
     // 좌우 이웃이 모두 이 셀 쪽으로 수평 획을 뻗으면 병합선이 관통하는 것이므로,
     // 코너 곡선에 더해 수평 브리지를 그려 선을 이어준다.
@@ -117,21 +148,23 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
     switch (ch) {
       case '\u2502':
       case '\u2506':
-        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lw, dash);
         break;
       case '\u25cf':
       case '\u25cc': {
         const hasAbove = prevChars && i < prevChars.length && connectsDown(prevChars[i]);
         const hasBelow = nextChars && i < nextChars.length && connectsUp(nextChars[i]);
-        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lineW);
-        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lineW);
-        if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - 3), c);
+        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lw, dash);
+        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lw, dash);
+        // 링도 획 굵기를 따른다. 거의 꽉 찬 원으로 그리면 선만 가벼워지고 노드는
+        // 살아있는 커밋만큼 무겁게 읽혀 대비가 흐려진다.
+        if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - thinW), c);
         else pxCircle(buf, pw, ph, cx, cy, dotR, c);
         if (i > 0 && connectsRight(chars[i - 1]) && chars[i - 1] !== '\u25cf' && chars[i - 1] !== '\u25cc') {
-          pxHLine(buf, pw, ph, left, cx - dotR - 1, cy, c, lineW);
+          pxHLine(buf, pw, ph, left, cx - dotR - 1, cy, hc, hlw, hdash);
         }
         if (i + 1 < numCols && i + 1 < chars.length && connectsLeft(chars[i + 1]) && chars[i + 1] !== '\u25cf' && chars[i + 1] !== '\u25cc') {
-          pxHLine(buf, pw, ph, cx + dotR + 1, right, cy, c, lineW);
+          pxHLine(buf, pw, ph, cx + dotR + 1, right, cy, hc, hlw, hdash);
         }
         break;
       }
@@ -139,37 +172,37 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
       // 아래쪽이므로 세로선은 그대로 두고, 옆으로 빠지는 연결선만 아래로 둥글게 말아
       // T자 접합 대신 Y자로 합류시킨다.
       case '\u251c':
-        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, hc, lineW);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lw, dash);
+        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, hc, hlw, hdash);
         break;
       case '\u2524':
-        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, hc, lineW);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lw, dash);
+        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, hc, hlw, hdash);
         break;
       case '\u256e':
-        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
-        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lineW);
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, hlw, hdash);
+        pxBezier(buf, pw, ph, left - 1, cy, cx, cy, cx, bot, c, lw, dash);
         break;
       case '\u256d':
-        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
-        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lineW);
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, hlw, hdash);
+        pxBezier(buf, pw, ph, right + 1, cy, cx, cy, cx, bot, c, lw, dash);
         break;
       case '\u256f':
-        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
-        pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, lineW);
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, hlw, hdash);
+        pxBezier(buf, pw, ph, cx, top, cx, cy, left - 1, cy, c, lw, dash);
         break;
       case '\u2570':
-        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
-        pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, lineW);
+        if (bridgeH) pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, hlw, hdash);
+        pxBezier(buf, pw, ph, cx, top, cx, cy, right + 1, cy, c, lw, dash);
         break;
       case '\u2500':
       case '\u2504':
-        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lineW);
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, c, lw, dash);
         break;
       case '\u253c':
       case '\u254c':
-        pxVLine(buf, pw, ph, cx, top, bot, c, lineW);
-        pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, lineW);
+        pxVLine(buf, pw, ph, cx, top, bot, c, lw, dash);
+        pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, hlw, hdash);
         break;
     }
   }
@@ -185,6 +218,9 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
   if (pw <= 0 || ph <= 0) return null;
   const lineW = Math.max(1, Math.round(cellW * 0.25));
   const dotR = Math.max(2, Math.round(cellW * 0.375));
+  // 리커버리 획: 한 단계 가늘게, 셀 높이의 1/6 길이로 끊어 그린다.
+  const thinW = Math.max(1, lineW - 1);
+  const dashLen = Math.max(2, Math.round(cellH / 6));
   const buf = new Uint8Array(pw * ph);
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
@@ -208,7 +244,7 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
     const next = r < graphRows.length - 1
       ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
       : (nextBoundary ? nextBoundary.chars : null);
-    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, row.charStylesH, numCols, prev, next, cellW, cellH, lineW, dotR);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, row.charStylesH, numCols, prev, next, cellW, cellH, lineW, dotR, thinW, dashLen);
   }
   return buf;
 }
