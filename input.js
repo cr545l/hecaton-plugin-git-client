@@ -1619,6 +1619,12 @@ async function handleMouseData(data) {
               updateLogDetail();
               render();
               handled = true;
+            } else if (zone.action === 'toggleLogRecovery') {
+              ui.logShowRecovery = !ui.logShowRecovery;
+              if (!rebuildLogGraphRows()) refreshLog();
+              updateLogDetail();
+              render();
+              handled = true;
             } else if (zone.action === 'toggleDetail') {
               ui.rightBottomCollapsed = !ui.rightBottomCollapsed;
               render();

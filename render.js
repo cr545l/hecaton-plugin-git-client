@@ -223,6 +223,7 @@ function computeLayoutSig() {
     ui.rightTopCollapsed ? '1' : '0',
     ui.rightBottomCollapsed ? '1' : '0',
     ui.logSortMode,
+    ui.logShowRecovery ? '1' : '0',
     ui.termCols,
     ui.termRows,
   ].join('|');
@@ -346,6 +347,12 @@ function render() {
       rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
       if (state.rightView === 'log') {
         rightParts.push({ label: '  Sort: ' + (ui.logSortMode === 'date' ? 'date' : 'branch'), action: 'toggleLogSort', collapsed: false });
+        // 꺼져 있으면 흐리게 — 목록에서 뭔가 빠진 상태라는 걸 버튼만 보고 알 수 있어야 한다.
+        rightParts.push({
+          label: '  Recovery: ' + (ui.logShowRecovery ? 'on' : 'off'),
+          action: 'toggleLogRecovery',
+          collapsed: !ui.logShowRecovery,
+        });
       }
     } else {
       rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Stage', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });

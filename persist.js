@@ -82,6 +82,7 @@ function applyLayout(src) {
   ui.logListRatio = clamp(src.logListRatio, 0.1, 0.9, ui.logListRatio);
   ui.remoteSortMode = pickEnum(src.remoteSortMode, ['alpha', 'alpha_desc', 'recent'], ui.remoteSortMode);
   ui.logSortMode = pickEnum(src.logSortMode, ['date', 'branch'], ui.logSortMode);
+  if (typeof src.logShowRecovery === 'boolean') ui.logShowRecovery = src.logShowRecovery;
   if (isPlainObject(src.panels)) {
     if (typeof src.panels.left === 'boolean') ui.leftPanelCollapsed = src.panels.left;
     if (typeof src.panels.rightTop === 'boolean') ui.rightTopCollapsed = src.panels.rightTop;
@@ -101,6 +102,7 @@ function captureLayout() {
     logListRatio: ui.logListRatio,
     remoteSortMode: ui.remoteSortMode,
     logSortMode: ui.logSortMode,
+    logShowRecovery: ui.logShowRecovery,
     panels: {
       left: ui.leftPanelCollapsed,
       rightTop: ui.rightTopCollapsed,

@@ -161,6 +161,9 @@ const ui = {
   // 커밋 그래프 정렬 — 'date': git --date-order 그대로(날짜 내림차순, 일반 GUI 클라이언트와 동일)
   //                  'branch': HEAD 기준 first-parent 줄기에 분기 그룹을 붙여 재배치
   logSortMode: 'date',
+  // 리커버리(reflog 에만 남은 유실) 커밋을 목록·그래프에 보일지. 끄면 그리기 단계에서만
+  // 걸러내고 조회는 그대로 두므로, 다시 켤 때 git 재조회 없이 즉시 되살아난다.
+  logShowRecovery: true,
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,

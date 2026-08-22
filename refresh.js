@@ -1236,9 +1236,13 @@ function buildLogGraphRows(rawCommits, stashFullHashes) {
   _lastGraphCommits = rawCommits;
   _lastGraphStashHashes = stashFullHashes;
 
+  // 리커버리 숨김. 캐시에는 원본을 남겨 두어 토글을 다시 켜면 git 재조회 없이 되살아난다.
+  // 유실 커밋의 자식은 언제나 유실 커밋이므로, 빼도 살아있는 커밋의 부모 사슬은 안 끊긴다.
+  const visibleCommits = ui.logShowRecovery ? rawCommits : rawCommits.filter(c => !c.isRecovery);
+
   // Filter stash sub-commits (index, untracked) to keep graph clean.
   const stashSubHashes = new Set();
-  for (const c of rawCommits) {
+  for (const c of visibleCommits) {
     if (stashFullHashes.has(c.hash) && c.parents.length > 1) {
       for (let i = 1; i < c.parents.length; i++) {
         stashSubHashes.add(c.parents[i]);
@@ -1246,13 +1250,13 @@ function buildLogGraphRows(rawCommits, stashFullHashes) {
     }
   }
   let commits = stashSubHashes.size > 0
-    ? rawCommits
+    ? visibleCommits
         .filter(c => !stashSubHashes.has(c.hash))
         .map(c => {
           const fp = c.parents.filter(p => !stashSubHashes.has(p));
           return fp.length === c.parents.length ? c : { ...c, parents: fp };
         })
-    : rawCommits;
+    : visibleCommits;
 
   // Reorder stash commits: place them right BEFORE their parent commit
   if (stashFullHashes.size > 0) {
@@ -1871,7 +1875,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, buildLogGraphRows, rebuildLogGraphRows, selectedLogRef, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
