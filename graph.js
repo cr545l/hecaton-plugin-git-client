@@ -10,10 +10,6 @@ function ensureWidth(row, width) {
   }
 }
 
-function laneStyleForHash(hash, recoveryHashes) {
-  return recoveryHashes.has(hash) ? STYLE_RECOVERY : STYLE_NORMAL;
-}
-
 function setCell(row, lane, ch, color, style) {
   if (lane < 0) return;
   ensureWidth(row, lane);
@@ -74,11 +70,15 @@ function fillHorizontal(row, fromLane, toLane, color, style) {
 function calcGraphRows(commits, stashHashes, stashMap) {
   const rows = [];
   let lanes = [];
+  // 간선의 주인은 부모가 아니라 자식 커밋이다. 레인이 가리키는 해시(= 다음에 올 부모)로
+  // 리커버리 여부를 판정하면, 유실 커밋의 부모는 대개 도달 가능한 커밋이라 리커버리 가지의
+  // 꼬리 구간이 정상 레인색으로 되살아난다. 그래서 레인별로 간선 스타일을 따로 들고 간다.
+  let laneStyles = [];
   let maxLanes = 0;
-  const recoveryHashes = new Set(commits.filter(c => c.isRecovery).map(c => c.hash));
 
   for (const commit of commits) {
     const { hash, parents } = commit;
+    const nodeStyle = commit.isRecovery ? STYLE_RECOVERY : STYLE_NORMAL;
 
     let baseLane = lanes.indexOf(hash);
     if (baseLane === -1) {
@@ -86,8 +86,10 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       if (baseLane === -1) {
         baseLane = lanes.length;
         lanes.push(hash);
+        laneStyles.push(nodeStyle);
       } else {
         lanes[baseLane] = hash;
+        laneStyles[baseLane] = nodeStyle;
       }
     }
 
@@ -113,20 +115,21 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       recoveryRef: commit.recoveryRef || null,
     };
 
-    const nodeStyle = commit.isRecovery ? STYLE_RECOVERY : STYLE_NORMAL;
     setCell(row, baseLane, commit.isRecovery ? '\u25cc' : '\u25cf', baseLane, nodeStyle);
 
     for (let lane = 0; lane < lanes.length; lane++) {
       if (lane === baseLane) continue;
       if (lanes[lane] === null) continue;
-      setCell(row, lane, '\u2502', lane, laneStyleForHash(lanes[lane], recoveryHashes));
+      setCell(row, lane, '\u2502', lane, laneStyles[lane]);
     }
 
     const merges = [];
     if (parents.length === 0) {
       lanes[baseLane] = null;
+      laneStyles[baseLane] = STYLE_NORMAL;
     } else {
       lanes[baseLane] = parents[0];
+      laneStyles[baseLane] = nodeStyle;
       for (let p = 1; p < parents.length; p++) {
         const parentHash = parents[p];
         const existing = lanes.indexOf(parentHash);
@@ -137,8 +140,10 @@ function calcGraphRows(commits, stashHashes, stashMap) {
           if (newLane === -1) {
             newLane = lanes.length;
             lanes.push(parentHash);
+            laneStyles.push(nodeStyle);
           } else {
             lanes[newLane] = parentHash;
+            laneStyles[newLane] = nodeStyle;
           }
           merges.push({ lane: newLane, isNew: true, hash: parentHash });
         }
@@ -146,7 +151,8 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     }
 
     for (const merge of merges) {
-      const style = commit.isRecovery || recoveryHashes.has(merge.hash) ? STYLE_RECOVERY : STYLE_NORMAL;
+      const style = nodeStyle === STYLE_RECOVERY || laneStyles[merge.lane] === STYLE_RECOVERY
+        ? STYLE_RECOVERY : STYLE_NORMAL;
       addHorizontalConnector(row, baseLane, baseLane, style, merge.lane > baseLane);
       fillHorizontal(row, baseLane, merge.lane, merge.lane, style);
       if (merge.isNew) {
@@ -163,10 +169,12 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       // \ub36e\uc73c\uba74\uc11c charColorsH\ub97c \ucd08\uae30\ud654\ud558\ub294\ub370, \uadf8 \uac12\uc744 \ub418\uc0b4\ub824\uc57c \ub80c\ub354\uac00 \uad00\ud1b5 \uc218\ud3c9\uc120\uc744
       // \uc6d0\ub798 \uc0c9\uc73c\ub85c \uc774\uc5b4 \uadf8\ub9b4 \uc218 \uc788\ub2e4(\ucf54\ub108\uac00 \uc218\ud3c9\uc120 \uc911\uac04\uc744 \ub04a\uc9c0 \uc54a\ub3c4\ub85d).
       const priorH = row.charColorsH[lane];
-      setCell(row, lane, lane > baseLane ? '\u256f' : '\u2570', lane, laneStyleForHash(hash, recoveryHashes));
+      const closeStyle = laneStyles[lane];
+      setCell(row, lane, lane > baseLane ? '\u256f' : '\u2570', lane, closeStyle);
       if (priorH >= 0) row.charColorsH[lane] = priorH;
-      fillHorizontal(row, baseLane, lane, lane, laneStyleForHash(hash, recoveryHashes));
+      fillHorizontal(row, baseLane, lane, lane, closeStyle);
       lanes[lane] = null;
+      laneStyles[lane] = STYLE_NORMAL;
     }
 
     let decoration = '';
@@ -188,6 +196,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
 
     while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
       lanes.pop();
+      laneStyles.pop();
     }
     maxLanes = Math.max(maxLanes, lanes.length, row.chars.length);
   }

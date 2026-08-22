@@ -2205,7 +2205,9 @@ function buildLogPanel(w, h) {
     const nextIdx = off + listH + (useHostScroll ? logDepth.after : 0);
     const prevItem = prevIdx >= 0 ? state.logItems[prevIdx] : null;
     const nextItem = nextIdx < state.logItems.length ? state.logItems[nextIdx] : null;
-    const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
+    const prevBoundary = prevItem && prevItem.chars
+      ? { chars: prevItem.chars, charStyles: prevItem.charStyles }
+      : null;
     const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
     const pixBuf = renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
     if (pixBuf) {

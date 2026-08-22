@@ -86,7 +86,14 @@ function connectsUp(ch) { // 위 가장자리까지 획이 닿는 글자
          ch === '●' || ch === '◌';
 }
 
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
+// 위 칸이 내려보내는 획이 오직 그 레인의 것인가. 교차(┼ ├ ┤)는 수평 병합선이 스타일을
+// 덮어쓰므로 그 칸의 스타일을 세로획 것으로 믿으면 안 된다.
+function inheritsVStyle(ch) {
+  return ch === '│' || ch === '┆' || ch === '●' || ch === '◌' ||
+         ch === '╭' || ch === '╮';
+}
+
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, numCols, prevChars, prevStyles, nextChars, cellW, cellH, lineW, dotR) {
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
@@ -119,7 +126,13 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
       case '\u25cc': {
         const hasAbove = prevChars && i < prevChars.length && connectsDown(prevChars[i]);
         const hasBelow = nextChars && i < nextChars.length && connectsUp(nextChars[i]);
-        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lineW);
+        // 위쪽 꼬리는 이 노드가 아니라 위 커밋이 주인인 간선이다. 리커버리 가지가
+        // 도달 가능한 부모에 닿는 지점에서 노드 색으로 그리면 반 칸만 색이 튄다.
+        if (hasAbove) {
+          const upStyle = prevStyles && i < prevStyles.length && inheritsVStyle(prevChars[i])
+            ? prevStyles[i] : style;
+          pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, upStyle === 1 ? 9 : c, lineW);
+        }
         if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lineW);
         if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - 3), c);
         else pxCircle(buf, pw, ph, cx, cy, dotR, c);
@@ -201,10 +214,13 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
     const prev = r > 0
       ? (graphRows[r - 1] ? graphRows[r - 1].chars : null)
       : (prevBoundary ? prevBoundary.chars : null);
+    const prevSty = r > 0
+      ? (graphRows[r - 1] ? graphRows[r - 1].charStyles : null)
+      : (prevBoundary ? prevBoundary.charStyles : null);
     const next = r < graphRows.length - 1
       ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
       : (nextBoundary ? nextBoundary.chars : null);
-    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, numCols, prev, next, cellW, cellH, lineW, dotR);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, numCols, prev, prevSty, next, cellW, cellH, lineW, dotR);
   }
   return buf;
 }
@@ -212,9 +228,19 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
 function encodeSixel(buf, w, h, palette) {
   let out = '\x1bP0;1;0q';
   out += '"1;1;' + w + ';' + h;
+  // 팔레트 항목이 숫자면 호스트 예약 팔레트 인덱스를 그대로 참조하고 색을 정의하지
+  // 않는다. RGB 를 적어 보내면 그 순간의 색이 박제돼 터미널 색 구성표를 따라가지
+  // 못한다 — 밝은 구성표에서 스크롤바가 배경에 묻히던 원인이다.
+  const slots = [];
   for (let i = 0; i < palette.length; i++) {
-    const [r, g, b] = palette[i];
+    const entry = palette[i];
+    if (typeof entry === 'number') {
+      slots.push(entry);
+      continue;
+    }
+    const [r, g, b] = entry;
     out += '#' + (i + 1) + ';2;' + Math.round(r * 100 / 255) + ';' + Math.round(g * 100 / 255) + ';' + Math.round(b * 100 / 255);
+    slots.push(i + 1);
   }
   for (let bandY = 0; bandY < h; bandY += 6) {
     const bandH = Math.min(6, h - bandY);
@@ -247,7 +273,7 @@ function encodeSixel(buf, w, h, palette) {
       }
       if (row.replace(/[!0-9]/g, '').replace(/\?/g, '') === '') continue;
       bandHasData = true;
-      out += '#' + ci + row + '$';
+      out += '#' + slots[ci - 1] + row + '$';
     }
     if (bandHasData && out.endsWith('$')) out = out.slice(0, -1);
     out += '-';
@@ -272,9 +298,12 @@ function encodeSixelClear(w, h) {
   return out;
 }
 
-const SCROLLBAR_PALETTE = [[100, 110, 130]];
-const SCROLLBAR_HOVER_PALETTE = [[160, 175, 200]];
-const SCROLLBAR_ACTIVE_PALETTE = [[210, 225, 245]];
+// 호스트 예약 팔레트 인덱스(hecaton SIXEL_PALETTE_UI_*). 터미널 전경색을 각각
+// 40% / 80% / 100% 알파로 쓴다. 색을 옮기지 않고 알파만 올리므로 밝은 구성표든
+// 어두운 구성표든 상호작용할수록 배경에서 멀어진다.
+const SCROLLBAR_PALETTE = [16];
+const SCROLLBAR_HOVER_PALETTE = [17];
+const SCROLLBAR_ACTIVE_PALETTE = [18];
 
 function renderScrollbarPixels(cellW, cellH, viewportRows, scrollOffset, maxScroll) {
   if (maxScroll <= 0) return null;
