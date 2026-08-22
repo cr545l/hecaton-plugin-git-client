@@ -2119,7 +2119,8 @@ function buildLogPanel(w, h) {
       return {
         text: (isCursor ? cursorBgColor : '') + padRight(line, innerW) + ansi.reset,
         graph: item.chars ? {
-          chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles,
+          chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH,
+          charStyles: item.charStyles, charStylesH: item.charStylesH,
           isCursor: isCursor && logFocused, isCursorInactive: isCursor && !logFocused,
         } : null,
       };
@@ -2128,7 +2129,10 @@ function buildLogPanel(w, h) {
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
         text: ' ' + graphPart,
-        graph: item.chars ? { chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH, charStyles: item.charStyles } : null,
+        graph: item.chars ? {
+          chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH,
+          charStyles: item.charStyles, charStylesH: item.charStylesH,
+        } : null,
       };
     }
   }
@@ -2205,9 +2209,7 @@ function buildLogPanel(w, h) {
     const nextIdx = off + listH + (useHostScroll ? logDepth.after : 0);
     const prevItem = prevIdx >= 0 ? state.logItems[prevIdx] : null;
     const nextItem = nextIdx < state.logItems.length ? state.logItems[nextIdx] : null;
-    const prevBoundary = prevItem && prevItem.chars
-      ? { chars: prevItem.chars, charStyles: prevItem.charStyles }
-      : null;
+    const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
     const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
     const pixBuf = renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
     if (pixBuf) {

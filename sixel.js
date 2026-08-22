@@ -86,14 +86,7 @@ function connectsUp(ch) { // 위 가장자리까지 획이 닿는 글자
          ch === '●' || ch === '◌';
 }
 
-// 위 칸이 내려보내는 획이 오직 그 레인의 것인가. 교차(┼ ├ ┤)는 수평 병합선이 스타일을
-// 덮어쓰므로 그 칸의 스타일을 세로획 것으로 믿으면 안 된다.
-function inheritsVStyle(ch) {
-  return ch === '│' || ch === '┆' || ch === '●' || ch === '◌' ||
-         ch === '╭' || ch === '╮';
-}
-
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, numCols, prevChars, prevStyles, nextChars, cellW, cellH, lineW, dotR) {
+function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, charStylesH, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR) {
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
@@ -103,7 +96,11 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
     // 수평 획 전용 색. -1이면 세로색(cc)과 동일. 교차/T 지점에서 수평(병합)선이
     // 세로 레인색에 묻히지 않고 제 색을 유지하도록 분리해 칠한다.
     const cch = charColorsH && i < charColorsH.length ? charColorsH[i] : -1;
-    const hc = style === 1 ? 9 : ((cch >= 0 ? cch : cc) % 6) + 1;
+    // 스타일도 같은 이유로 갈라진다. 리커버리 합류선이 살아있는 레인을 관통할 때
+    // 세로획까지 회색으로 물들면 그 브랜치가 죽은 것처럼 보인다.
+    const csh = charStylesH && i < charStylesH.length ? charStylesH[i] : -1;
+    const hStyle = csh >= 0 ? csh : style;
+    const hc = hStyle === 1 ? 9 : ((cch >= 0 ? cch : cc) % 6) + 1;
     // 코너(╭╮╯╰)가 수평 병합선 중간에 놓이면 관통선이 한쪽만 이어져 끊어져 보인다.
     // 좌우 이웃이 모두 이 셀 쪽으로 수평 획을 뻗으면 병합선이 관통하는 것이므로,
     // 코너 곡선에 더해 수평 브리지를 그려 선을 이어준다.
@@ -126,13 +123,7 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
       case '\u25cc': {
         const hasAbove = prevChars && i < prevChars.length && connectsDown(prevChars[i]);
         const hasBelow = nextChars && i < nextChars.length && connectsUp(nextChars[i]);
-        // 위쪽 꼬리는 이 노드가 아니라 위 커밋이 주인인 간선이다. 리커버리 가지가
-        // 도달 가능한 부모에 닿는 지점에서 노드 색으로 그리면 반 칸만 색이 튄다.
-        if (hasAbove) {
-          const upStyle = prevStyles && i < prevStyles.length && inheritsVStyle(prevChars[i])
-            ? prevStyles[i] : style;
-          pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, upStyle === 1 ? 9 : c, lineW);
-        }
+        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lineW);
         if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lineW);
         if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - 3), c);
         else pxCircle(buf, pw, ph, cx, cy, dotR, c);
@@ -214,13 +205,10 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
     const prev = r > 0
       ? (graphRows[r - 1] ? graphRows[r - 1].chars : null)
       : (prevBoundary ? prevBoundary.chars : null);
-    const prevSty = r > 0
-      ? (graphRows[r - 1] ? graphRows[r - 1].charStyles : null)
-      : (prevBoundary ? prevBoundary.charStyles : null);
     const next = r < graphRows.length - 1
       ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
       : (nextBoundary ? nextBoundary.chars : null);
-    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, numCols, prev, prevSty, next, cellW, cellH, lineW, dotR);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, row.charStylesH, numCols, prev, next, cellW, cellH, lineW, dotR);
   }
   return buf;
 }
