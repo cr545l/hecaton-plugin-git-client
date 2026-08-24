@@ -112,9 +112,10 @@ function isWriteOpActive() {
   return state.spinnerActive;
 }
 
-// 쓰기 작업의 단일 진입 게이트. 다른 쓰기 작업이 도는 동안 새 쓰기 요청이 오면
-// false 를 반환하고 힌트바를 잠깐 강조해 왜 무시됐는지 보여준다.
-// 탐색/조회 같은 읽기 인터렉션은 이 게이트를 거치지 않으므로 작업 중에도 동작한다.
+// "다른 쓰기 작업이 도는 중인가"만 보는 최소 게이트. 상황별(진행 중인 rebase, 리모트
+// 없음, 스테이지 없음 …) 판정까지 포함한 실제 진입점은 actions.guardAction 이며,
+// 호출부는 그쪽을 쓴다 — 화면의 딤 처리와 같은 규칙을 봐야 하기 때문이다.
+// 이 함수는 그중 busy 조건만 떼어 놓은 것이다.
 function guardWriteOp() {
   if (!state.spinnerActive) return true;
   flashBusy();

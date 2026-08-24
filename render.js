@@ -7,6 +7,18 @@ const { highlightCode, getLanguage } = require('./highlighter');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
 const { panelLoadingLabel } = require('./spinner');
+const actions = require('./actions');
+
+// ── 버튼 스타일의 단일 규칙 ──
+// 지금 눌러도 되는 버튼만 평상시 기본 전경색으로 그리고, 막힌 버튼은 흐리게(dim) 둔다.
+// hover 강조도 활성일 때만 얹는다 — 딤드인데 마우스에 반응하면 눌리는 것처럼 읽힌다.
+// enabledStyle 을 넘기면 활성 평상시 색을 그걸로 바꾼다(카운트가 붙은 Pull/Push 등).
+function buttonStyle(enabled, hovered, enabledStyle, hoverStyle) {
+  if (!enabled) return colors.disabled;
+  if (hovered) return hoverStyle || (colors.value + ansi.bold + CSI + '4m');
+  return enabledStyle || colors.value;
+}
+
 // 목록의 선택 줄 배경. 포커스가 diff/detail 쪽으로 가도 선택 자체는 그대로 두고 흐리게만
 // 그린다 — 고른 대상이 바뀐 게 아니므로 표시가 사라지면 "선택이 풀렸다"로 읽힌다.
 function listCursorBg() {
@@ -49,18 +61,25 @@ function buildCommitterHint(maxWidth) {
   let content = colors.dim + prefix + ansi.reset;
   let offset = visLen(prefix);
 
+  // 이름/이메일 편집과 초기화는 git config 를 고치는 쓰기 동작이다 — 다른 작업이 도는
+  // 동안에는 다른 버튼과 같은 규칙으로 흐려지고 hover 에도 반응하지 않아야 한다.
   function appendZone(label, action, normalStyle, hoverStyle) {
     const labelWidth = visLen(label);
-    const style = ui.hoveredCommitterAction === action ? hoverStyle : normalStyle;
-    zones.push({ offset, width: labelWidth, action });
+    const on = caps().isEnabled(action);
+    const style = buttonStyle(on, ui.hoveredCommitterAction === action, normalStyle, hoverStyle);
+    zones.push({ offset, width: labelWidth, action, enabled: on });
     content += style + label + ansi.reset;
     offset += labelWidth;
   }
 
+  // 리포 로컬 설정은 cyan 으로 구분하고, 전역 설정을 그대로 쓰는 값은 기본 전경색으로 둔다.
+  // 예전에는 이쪽도 dim 이라 "지금 못 누른다"와 구분이 되지 않았다 — 비활성 표시가 dim 인 이상
+  // 활성 평상시 색은 dim 보다 진해야 한다. 앞의 ' Committer: ' 라벨은 그대로 dim 이라
+  // 이 줄이 부가 정보라는 인상은 유지된다.
   appendZone(
     nameTag + shownName,
     'committer-name',
-    state.committerNameIsLocal ? colors.cyan : colors.dim,
+    state.committerNameIsLocal ? colors.cyan : colors.value,
     colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
   );
   if (nameReset) {
@@ -71,7 +90,7 @@ function buildCommitterHint(maxWidth) {
   appendZone(
     '<' + emailTag + shownEmail + '>',
     'committer-email',
-    state.committerEmailIsLocal ? colors.cyan : colors.dim,
+    state.committerEmailIsLocal ? colors.cyan : colors.value,
     colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
   );
   if (emailReset) {
@@ -239,9 +258,27 @@ function appendLogSixelClear(buf) {
   ui.logSixelRegion = null;
 }
 
+// 한 프레임 안에서 재사용하는 활성/비활성 판정. 버튼이 열 개 남짓이라 상황 스냅샷을
+// 매번 새로 계산할 이유가 없다. 프레임이 끝나면 비워, 패널 빌더를 단독 호출할 때는
+// 항상 최신 상태로 다시 계산되게 한다.
+let frameCaps = null;
+function caps() {
+  if (!frameCaps) frameCaps = actions.context();
+  return frameCaps;
+}
+
 function render() {
   // 모든 상태 변경은 render를 거치므로 여기서 영속화 디바운스를 건다
   persist.schedule();
+  frameCaps = actions.context();
+  try {
+    renderBody();
+  } finally {
+    frameCaps = null;
+  }
+}
+
+function renderBody() {
   if (state.minimized) {
     const clearBuf = [];
     appendLogSixelClear(clearBuf);
@@ -432,10 +469,10 @@ function render() {
         // Abort button (모든 작업)
         const abortLabel = ' Abort ';
         const abortIdx = zoneIdx++;
-        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'op-abort' });
-        const abortStyle = abortIdx === ui.hoveredTitleZoneIndex
-          ? colors.cursorBg + colors.red + ansi.bold + CSI + '4m'
-          : colors.red + ansi.bold;
+        const abortOn = caps().isEnabled('op-abort');
+        ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'op-abort', enabled: abortOn });
+        const abortStyle = buttonStyle(abortOn, abortIdx === ui.hoveredTitleZoneIndex,
+          colors.red + ansi.bold, colors.cursorBg + colors.red + ansi.bold + CSI + '4m');
         row1 += abortStyle + abortLabel + ansi.reset;
         col1 += visLen(abortLabel);
 
@@ -443,10 +480,10 @@ function render() {
         if (op.type !== 'merge') {
           const skipLabel = ' Skip ';
           const skipIdx = zoneIdx++;
-          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'op-skip' });
-          const skipStyle = skipIdx === ui.hoveredTitleZoneIndex
-            ? colors.cursorBg + colors.orange + ansi.bold + CSI + '4m'
-            : colors.orange;
+          const skipOn = caps().isEnabled('op-skip');
+          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'op-skip', enabled: skipOn });
+          const skipStyle = buttonStyle(skipOn, skipIdx === ui.hoveredTitleZoneIndex,
+            colors.orange, colors.cursorBg + colors.orange + ansi.bold + CSI + '4m');
           row1 += skipStyle + skipLabel + ansi.reset;
           col1 += visLen(skipLabel);
         }
@@ -463,12 +500,13 @@ function render() {
           const btn = actionBtns[i];
           const label = ' ' + btn.label + ' ';
           const si = zoneIdx++;
-          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action });
+          const on = caps().isEnabled(btn.action);
+          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action, enabled: on });
           const hasCount = (btn.action === 'git-pull' && state.behind > 0)
             || (btn.action === 'git-push' && state.ahead > 0);
-          const style = si === ui.hoveredTitleZoneIndex
-            ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m'
-            : hasCount ? colors.orange + ansi.bold : colors.dim;
+          const style = buttonStyle(on, si === ui.hoveredTitleZoneIndex,
+            hasCount ? colors.orange + ansi.bold : colors.value,
+            colors.cursorBg + colors.value + ansi.bold + CSI + '4m');
           row1 += style + label + ansi.reset;
           col1 += visLen(label);
         }
@@ -722,6 +760,9 @@ function render() {
     const isInProgress = state.error.endsWith('...');
     const msgColor = isInProgress ? colors.yellow : colors.red;
     hintContent = ' ' + msgColor + state.error + ansi.reset;
+  } else if (ui.hoveredAction && caps().disabledReason(ui.hoveredAction)) {
+    // 딤드 버튼에 마우스를 올린 동안만 사유를 보여 준다 — 색만으로는 "왜"를 알 수 없다.
+    hintContent = ' ' + colors.dim + caps().disabledReason(ui.hoveredAction) + ansi.reset;
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else if (state.operationState) {
@@ -757,6 +798,7 @@ function render() {
     colStart: committerStartCol + zone.offset,
     colEnd: committerStartCol + zone.offset + zone.width - 1,
     action: zone.action,
+    enabled: zone.enabled,
   }));
 
   // Host-owned scroll: emit overscan banks (off-screen buffer rows the host
@@ -999,17 +1041,13 @@ function render() {
       ui.commitClearZone = null;
     }
     if (state.conflictView) {
-      const conflictIndices = state.conflictView.chunks
-        .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
-        .filter(idx => idx >= 0);
-      const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
-      const canApply = conflictIndices.length > 0 && selectedCount === conflictIndices.length;
-      const applyLabel = canApply ? ' Apply resolution ' : ' Select every conflict to apply ';
+      const allSelected = actions.allConflictChunksSelected();
+      const applyLabel = allSelected ? ' Apply resolution ' : ' Select every conflict to apply ';
       ui.mergeApplyZone = {
         row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1,
         colStart: rpStartCol + 1,
         colEnd: rpStartCol + applyLabel.length,
-        enabled: canApply,
+        enabled: allSelected && caps().isEnabled('merge-apply'),
         label: applyLabel,
       };
     } else {
@@ -1551,20 +1589,20 @@ function buildFileListPanel(w, h) {
     let unlockSeg = '';
     if (unlockLabel) {
       const unlockZoneIdx = ui.fileHeaderZones.length;
-      const unlockHovered = ui.hoveredFileHeaderIdx === unlockZoneIdx;
-      const unlockStyle = unlockHovered ? colors.value + ansi.bold + CSI + '4m' : colors.red + ansi.bold;
-      ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: cursorCol, btnColEnd: cursorCol + unlockLabel.length - 1, action: 'unlockIndex' });
+      const unlockOn = caps().isEnabled('unlockIndex');
+      const unlockStyle = buttonStyle(unlockOn, ui.hoveredFileHeaderIdx === unlockZoneIdx, colors.red + ansi.bold);
+      ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: cursorCol, btnColEnd: cursorCol + unlockLabel.length - 1, action: 'unlockIndex', enabled: unlockOn });
       unlockSeg = unlockStyle + unlockLabel + ansi.reset + ' ';
       cursorCol += unlockLabel.length + 1;
     }
 
     const allZoneIdx = ui.fileHeaderZones.length;
-    const allHovered = ui.hoveredFileHeaderIdx === allZoneIdx;
-    const allBtnStyle = allHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+    const allOn = caps().isEnabled('stageAll');
+    const allBtnStyle = buttonStyle(allOn, ui.hoveredFileHeaderIdx === allZoneIdx);
 
     const zoneIdx = ui.fileHeaderZones.length + 1;
-    const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
-    const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+    const selOn = caps().isEnabled('stageSelected');
+    const btnStyle = buttonStyle(selOn, ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = cursorCol;
     const btnStart = allBtnStart + allBtnLabel.length + 1;
@@ -1573,8 +1611,8 @@ function buildFileListPanel(w, h) {
       + unlockSeg
       + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'stageAll' });
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'stageSelected' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'stageAll', enabled: allOn });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'stageSelected', enabled: selOn });
     pushFileLine(headerLine, -1);
   }
   for (let i = 0; i < state.unstaged.length; i++) {
@@ -1614,12 +1652,12 @@ function buildFileListPanel(w, h) {
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
 
     const allZoneIdx = ui.fileHeaderZones.length;
-    const allHovered = ui.hoveredFileHeaderIdx === allZoneIdx;
-    const allBtnStyle = allHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+    const allOn = caps().isEnabled('unstageAll');
+    const allBtnStyle = buttonStyle(allOn, ui.hoveredFileHeaderIdx === allZoneIdx);
 
     const zoneIdx = ui.fileHeaderZones.length + 1;
-    const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
-    const btnStyle = isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+    const selOn = caps().isEnabled('unstageSelected');
+    const btnStyle = buttonStyle(selOn, ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = headerLabelLen + gap;
     const btnStart = allBtnStart + allBtnLabel.length + 1;
@@ -1627,8 +1665,8 @@ function buildFileListPanel(w, h) {
       + ' '.repeat(gap)
       + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'unstageAll' });
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'unstageSelected' });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'unstageAll', enabled: allOn });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'unstageSelected', enabled: selOn });
     pushFileLine(headerLine, -1);
   }
   for (let i = 0; i < state.staged.length; i++) {
@@ -1790,9 +1828,10 @@ function buildDiffCommitPanel(w, h) {
   const canHunk = !isConflictView && diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffLines.length > 0;
   const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? '[Unstage hunk]' : '[Stage hunk]') : '';
   const hunkAvail = hunkBtnLabel ? Math.max(8, innerW - hunkBtnLabel.length - 2) : 0;
+  const hunkOn = canHunk && caps().isEnabled('hunk-apply');
   const renderHunkButton = (hunkIdx) => {
-    const hovered = ui.hoveredDiffHunkIdx === hunkIdx;
-    const style = hovered ? colors.green + ansi.bold + CSI + '4m' : colors.dim;
+    const style = buttonStyle(hunkOn, ui.hoveredDiffHunkIdx === hunkIdx,
+      colors.value, colors.green + ansi.bold + CSI + '4m');
     return style + hunkBtnLabel + ansi.reset;
   };
 
@@ -1923,15 +1962,13 @@ function buildDiffCommitPanel(w, h) {
     lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
 
     if (state.conflictView) {
-      const conflictIndices = state.conflictView.chunks
-        .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
-        .filter(idx => idx >= 0);
-      const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
-      const canApply = conflictIndices.length > 0 && selectedCount === conflictIndices.length;
-      const applyLabel = canApply ? ' Apply resolution ' : ' Select every conflict to apply ';
-      const applyStyle = canApply
-        ? (ui.hoveredMergeApplyButton ? colors.cursorBg + colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold)
-        : (ui.hoveredMergeApplyButton ? colors.cursorBg + colors.value + ansi.bold + CSI + '4m' : colors.dim);
+      // 라벨은 "모든 충돌을 골랐는가"만 따르고(무엇을 더 해야 하는지 알려 주는 안내다),
+      // 색은 지금 실제로 누를 수 있는지를 따른다 — 쓰기 작업 중이면 흐려진다.
+      const allSelected = actions.allConflictChunksSelected();
+      const canApply = allSelected && caps().isEnabled('merge-apply');
+      const applyLabel = allSelected ? ' Apply resolution ' : ' Select every conflict to apply ';
+      const applyStyle = buttonStyle(canApply, ui.hoveredMergeApplyButton,
+        colors.green + ansi.bold, colors.cursorBg + colors.green + ansi.bold + CSI + '4m');
       lines.push(' ' + applyStyle + applyLabel + ansi.reset);
     }
 
@@ -1988,21 +2025,22 @@ function buildDiffCommitPanel(w, h) {
 
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    const isAmendCommit = state.mode === 'commit' && state.commitAmend && !state.operationState;
     // amend 여부는 오른쪽 토글이 표시하므로 메인 버튼 라벨은 'Commit' 유지(중복 'Amend' 방지)
     const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : 'Commit';
-    const canCommit = state.mode === 'commit' && state.commitMsg.trim().length > 0 && (state.staged.length > 0 || isAmendCommit);
-    const isHovered = ui.hoveredCommitButton;
-    const commitStyle = canCommit
-      ? (isHovered ? colors.green + ansi.bold + CSI + '4m' : colors.green + ansi.bold)
-      : (isHovered ? colors.value + ansi.bold + CSI + '4m' : colors.dim);
+    // 커밋 모드에서는 제출, 일반 모드에서는 커밋 모드 진입 — 누르면 실제로 일어나는 일과
+    // 같은 판정을 본다. input.js 의 클릭 처리도 같은 두 id 로 게이트한다.
+    const canCommit = state.mode === 'commit'
+      ? caps().isEnabled('commit-submit')
+      : caps().isEnabled('commit-enter');
+    const commitStyle = buttonStyle(canCommit, ui.hoveredCommitButton,
+      colors.green + ansi.bold, colors.green + ansi.bold + CSI + '4m');
     let btnLine = ' ' + commitStyle + commitLabel + ansi.reset;
     // Amend 토글: 작업(merge/rebase 등) 중이 아니면 Commit 버튼 오른쪽에 항상 표시
     if (!state.operationState) {
       const amendLabel = (state.commitAmend ? '[x]' : '[ ]') + ' Amend last commit';
-      const amendStyle = ui.hoveredCommitAmend
-        ? colors.value + ansi.bold + CSI + '4m'
-        : (state.commitAmend ? colors.yellow : colors.dim);
+      const amendOn = caps().isEnabled('commit-amend');
+      const amendStyle = buttonStyle(amendOn, ui.hoveredCommitAmend,
+        state.commitAmend ? colors.yellow : colors.value);
       ui.commitAmendBtnOffset = 1 + commitLabel.length + 2; // 선행공백 + commitLabel + 간격(2)
       ui.commitAmendBtnLen = amendLabel.length;
       btnLine += '  ' + amendStyle + amendLabel + ansi.reset;

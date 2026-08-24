@@ -243,6 +243,9 @@ test('Pull 계열 항목은 체크아웃 여부와 무관하게 그대로 낸다
 
 function setupPullDialog({ ahead = 0, behind = 5, worktrees } = {}) {
   dialogs.length = 0;
+  // 실행 게이트(actions.js)가 보는 전제 — 저장소가 열려 있고 초기 로딩이 끝난 상태
+  state.loading = false;
+  state.isGitRepo = true;
   state.cwd = 'C:/repo';
   state.branch = 'work';
   state.branches = [
@@ -325,6 +328,8 @@ test('취소하면 아무 git 명령도 돌지 않는다', async () => {
 // 실제 저장소를 대상으로 다이얼로그 → 선택 → 실행까지 태운다.
 function attachRepo(local, { branch = 'dev', upstream = 'origin/dev' } = {}) {
   dialogs.length = 0;
+  state.loading = false;
+  state.isGitRepo = true;
   state.cwd = local;
   state.gitDir = ''; state.gitCommonDir = '';
   state.branch = git(local, 'rev-parse', '--abbrev-ref', 'HEAD').trim();

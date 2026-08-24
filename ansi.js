@@ -20,6 +20,10 @@ const colors = {
   label: CSI + '39m',         // default foreground
   value: CSI + '39m',         // default foreground
   dim: CSI + '2m',            // SGR dim (faint)
+  // 비활성 버튼. 터미널 배경색을 모르므로 절대 색상 대신 "기본 전경색을 흐리게"로
+  // 표현한다 — 밝은 테마에서도 어두운 테마에서도 항상 평상시보다 약해 보인다.
+  // 그래서 활성 버튼의 평상시 색은 colors.value(기본 전경색)여야 대비가 생긴다.
+  disabled: CSI + '2m',       // SGR dim (faint)
   green: CSI + '32m',         // green
   red: CSI + '31m',           // red
   yellow: CSI + '33m',        // yellow

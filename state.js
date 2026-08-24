@@ -69,7 +69,13 @@ const state = {
   freshTimeWindowMode: false,
   ahead: 0,
   behind: 0,
-  spinnerActive: false,  // 쓰기 작업(커밋/푸시/스테이징 등) 진행 중 — spinner.js guardWriteOp의 기준
+  spinnerActive: false,  // 쓰기 작업(커밋/푸시/스테이징 등) 진행 중 — actions.js 판정의 busy 조건
+  // 쓰기 작업의 git 명령은 끝났지만 그 결과를 다시 읽어오는 갱신이 아직 도는 중.
+  // 이 구간의 목록(staged/unstaged/branches)은 커밋 직전 상태 그대로라, 여기에 대고
+  // 새 쓰기를 걸면 사라진 대상을 상대로 명령을 쏘게 된다. 창 타이틀도 이 동안 계속
+  // "Committing..."을 보여 주므로, 사용자 눈에도 아직 끝나지 않은 한 동작이다.
+  // → actions.js 는 spinnerActive 와 똑같이 busy 로 취급한다.
+  settlingWrite: false,
   busyFlashUntil: 0,     // 쓰기 작업 중 차단된 입력 피드백 표시 만료 시각 (ms epoch)
   spinnerFrame: 0,
   // 읽기 작업(diff/상세 로드)의 진행 표시 — 쓰기 작업의 spinnerActive 와 달리 입력을 막지 않고
@@ -143,6 +149,9 @@ const ui = {
   hoveredLogRow: -1,          // hover row in log list (right panel)
   hoveredFreshRow: -1,        // hover row in fresh list (right panel)
   hoveredCommitButton: false, // hover on [Commit] button
+  // 마우스가 올라간 버튼의 동작 id. 막혀 있으면 힌트바에 사유를 띄운다(actions.js 판정).
+  // 사유 문자열이 아니라 id 를 들고 있어야 상황이 바뀔 때 렌더가 다시 판정한다.
+  hoveredAction: null,
   hoveredMergeApplyButton: false,
   hoveredMergeZoneIndex: -1,
   hoveredDetailCopyZone: null,

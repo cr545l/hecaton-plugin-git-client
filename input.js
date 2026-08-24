@@ -10,7 +10,10 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
   buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
-const { startSpinner, stopSpinner, guardWriteOp, showToast } = require('./spinner');
+const { startSpinner, stopSpinner, showToast } = require('./spinner');
+// 동작 가능 여부는 actions.js 한 곳에서 판정한다 — 화면의 딤 처리와 여기의 차단이
+// 같은 규칙을 봐야 "보이는데 안 눌린다"가 생기지 않는다.
+const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTargets } = require('./actions');
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
@@ -39,9 +42,15 @@ function actionToKey(action) {
   }
 }
 
+const COMMITTER_ACTIONS = new Set([
+  'committer-name', 'committer-email', 'reset-committer-name', 'reset-committer-email',
+]);
+
 async function handleCommitterAction(action) {
+  // 이 함수는 "내가 처리했는가"를 돌려주므로, 내 소관이 아닌 액션은 게이트도 태우지 않는다.
+  if (!COMMITTER_ACTIONS.has(action)) return false;
   // committer 설정 변경은 git config 를 고친다 — 쓰기 작업 중에는 미룬다.
-  if (!guardWriteOp()) return true;
+  if (!guardAction(action)) return true;
   if (action === 'reset-committer-name' || action === 'reset-committer-email') {
     const key = action === 'reset-committer-name' ? 'user.name' : 'user.email';
     const err = await gitUnsetConfigLocal(state.cwd, key);
@@ -120,7 +129,7 @@ function showPushNameMismatchDialog(info) {
 // context menu (handled by 'push_to_remote:' in context-menu.js); otherwise
 // push directly to the tracked/sole remote.
 function pushCurrentBranch() {
-  if (!guardWriteOp()) return;
+  if (!guardAction('git-push')) return;
   if (state.remotes.length > 1) {
     hecaton.menu.show({ items: buildPushRemoteMenuItems() }).catch(() => null);
     return;
@@ -145,7 +154,7 @@ function pushCurrentBranch() {
     } else {
       // 후속 갱신까지가 "Push" 한 동작이다 — 라벨을 이어 주고, 스피너를 넘겨준 뒤 내린다
       // (afterGitOp과 같은 이유: 사이에 참조가 0이 되면 제목이 한 번 깜빡인다).
-      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: 'Pushing...' });
+      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: 'Pushing...', settle: true });
       stopSpinner();
     }
   });
@@ -271,9 +280,47 @@ function enterAmendCommitMode() {
   }).catch(() => null);
 }
 
+// ── 스테이징 실행부 ──
+// [s]/[u] 키, 파일 목록 헤더의 Stage/Unstage 버튼이 같은 코드를 쓴다. 대상 계산도
+// 활성 여부 판정과 같은 함수(actions.stageableTargets)를 쓰므로, 버튼이 살아 있는데
+// 눌러도 아무 일이 없는 어긋남이 생기지 않는다.
+async function runStageSelection(isStage) {
+  const files = (isStage ? stageableTargets() : unstageableTargets()).map(t => t.file);
+  if (files.length === 0) return;
+  state.selectedFiles.clear();
+  startSpinner(isStage ? 'Staging...' : 'Unstaging...');
+  const err = isStage
+    ? await gitStageMultiple(state.cwd, files)
+    : await gitUnstageMultiple(state.cwd, files);
+  finishStageOp(isStage, files, err);
+}
+
+async function runStageAll(isStage) {
+  const files = buildFileList()
+    .filter(item => (isStage ? item.type !== 'staged' && item.type !== 'ignored' : item.type === 'staged'))
+    .map(item => item.file);
+  if (files.length === 0) return;
+  state.selectedFiles.clear();
+  startSpinner(isStage ? 'Staging all...' : 'Unstaging all...');
+  const err = isStage ? await gitStageAll(state.cwd) : await gitUnstageAll(state.cwd);
+  finishStageOp(isStage, files, err);
+}
+
+function finishStageOp(isStage, files, err) {
+  stopSpinner();
+  if (err) {
+    showErrorDialog(err);
+    render();
+    return;
+  }
+  if (isStage) applyStageToState(files);
+  else applyUnstageToState(files);
+  refreshInBackground({ statusOnly: true });
+}
+
 // diff 패널의 [Stage hunk]/[Unstage hunk] 버튼 동작
 async function applyHunkAction(hunkIdx) {
-  if (!guardWriteOp()) return;
+  if (!guardAction('hunk-apply')) return;
   const item = selectedItem();
   if (!item || (item.type !== 'staged' && item.type !== 'unstaged')) return;
   const patch = buildHunkPatchText(state.diffLines, hunkIdx);
@@ -299,14 +346,8 @@ async function applyHunkAction(hunkIdx) {
 }
 
 async function applyConflictSelections() {
-  if (!guardWriteOp()) return;
+  if (!guardAction('conflict-apply')) return;
   const sel = selectedItem();
-  if (!sel || sel.status !== 'U' || !state.conflictView) {
-    showErrorDialog('Select a conflicted file first');
-    render();
-    return;
-  }
-
   const resolved = buildResolvedConflictContent();
   if (!resolved.ok) {
     showErrorDialog(resolved.message);
@@ -516,73 +557,23 @@ async function handleKey(key) {
     }
     case 's': {
       if (state.rightView === 'log') break;
-      const fileList = buildFileList();
-      const targets = state.selectedFiles.size > 0
-        ? Array.from(state.selectedFiles).sort((a, b) => a - b)
-        : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
-      if (targets.length > 0) {
-        const filesToStage = targets
-          .map(i => fileList[i])
-          .filter(item => item && item.type !== 'staged')
-          .map(item => item.file);
-        if (filesToStage.length > 0) {
-          if (!guardWriteOp()) break;
-          state.selectedFiles.clear();
-          startSpinner('Staging...');
-          const err = await gitStageMultiple(state.cwd, filesToStage);
-          if (err) {
-            stopSpinner();
-            showErrorDialog(err);
-            render();
-          } else {
-            stopSpinner();
-            applyStageToState(filesToStage);
-            refreshInBackground({ statusOnly: true });
-          }
-        }
-      }
+      if (!guardAction('stageSelected')) break;
+      await runStageSelection(true);
       break;
     }
     case 'u': {
       if (state.rightView === 'log') break;
-      const fileList = buildFileList();
-      const targets = state.selectedFiles.size > 0
-        ? Array.from(state.selectedFiles).sort((a, b) => a - b)
-        : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
-      if (targets.length > 0) {
-        const filesToUnstage = targets
-          .map(i => fileList[i])
-          .filter(item => item && item.type === 'staged')
-          .map(item => item.file);
-        if (filesToUnstage.length > 0) {
-          if (!guardWriteOp()) break;
-          state.selectedFiles.clear();
-          startSpinner('Unstaging...');
-          const err = await gitUnstageMultiple(state.cwd, filesToUnstage);
-          if (err) {
-            stopSpinner();
-            showErrorDialog(err);
-            render();
-          } else {
-            stopSpinner();
-            applyUnstageToState(filesToUnstage);
-            refreshInBackground({ statusOnly: true });
-          }
-        }
-      }
+      if (!guardAction('unstageSelected')) break;
+      await runStageSelection(false);
       break;
     }
     case 'c': {
-      if (state.staged.length === 0) {
-        showErrorDialog('Nothing staged to commit');
-        render();
-        break;
-      }
+      if (!guardAction('commit-enter')) break;
       enterCommitMode();
       break;
     }
     case 'A': {
-      if (state.operationState) break;
+      if (!guardAction('commit-amend')) break;
       enterAmendCommitMode();
       break;
     }
@@ -630,11 +621,13 @@ async function handleKey(key) {
       break;
     }
     case 'b': {
-      // rebase 시작/continue/abort 모두 저장소를 바꾼다 — 쓰기 작업 중에는 무시.
-      if (!guardWriteOp()) break;
+      // 진행 중인 작업이 있으면 Continue/Abort/Skip 메뉴, 없으면 고른 커밋으로 rebase.
+      // 둘은 전제가 다르므로 서로 다른 id 로 판정한다.
       if (state.operationState) {
+        if (!guardAction('op-menu')) break;
         openOperationMenu();
       } else {
+        if (!guardAction('rebase')) break;
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
           showErrorDialog('Select a commit in log view to rebase onto');
@@ -786,25 +779,17 @@ function handleCommitInput(key) {
   }
   // Ctrl+A / Cmd+A → toggle amend
   if (key === '\x01' || key === CSI + '97;9u') {
+    if (!guardAction('commit-amend')) return;
     toggleCommitAmend();
     return;
   }
   // Ctrl+Enter (13;5u) / Cmd+Enter (13;9u, macOS) → submit commit or continue rebase
   if (key === CSI + '13;5u' || key === CSI + '13;9u') {
-    // 다른 쓰기 작업이 도는 동안의 제출은 무시 — 모드와 메시지는 그대로 남아
-    // 작업이 끝난 뒤 다시 제출할 수 있다.
-    if (!guardWriteOp()) return;
+    // 제출 조건은 [Commit] 버튼의 딤 처리와 같은 판정을 쓴다 — 초록으로 보이는데
+    // 제출이 거부되거나, 흐린데 눌리는 어긋남이 생기지 않는다. 막혀도 모드와 메시지는
+    // 그대로 남아 조건이 갖춰지면 다시 제출할 수 있다.
+    if (!guardAction('commit-submit')) return;
     const isAmendCommit = state.commitAmend && !state.operationState;
-    if (state.commitMsg.trim().length === 0) {
-      showErrorDialog('Commit message cannot be empty');
-      render();
-      return;
-    }
-    if (state.staged.length === 0 && !isAmendCommit) {
-      showErrorDialog('Nothing staged to commit');
-      render();
-      return;
-    }
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     state.mode = 'normal';
     if (isRebaseOp) {
@@ -856,9 +841,12 @@ function handleCommitInput(key) {
         state.commitMsg = '';
         state.commitCursor = 0;
         state.commitAmend = false;
+        // settle: 커밋은 끝났지만 목록은 아직 커밋 직전 상태다. 이 갱신이 끝날 때까지
+        // 새 쓰기를 받으면 이미 커밋된 파일을 상대로 Unstage 를 쏘게 된다.
         refreshInBackground({}, {
           refreshLog: true, refreshFresh: true,
           message: isAmendCommit ? 'Amending...' : 'Committing...',
+          settle: true,
         });
         stopSpinner();
       });
@@ -1396,7 +1384,29 @@ async function handleMouseData(data) {
         newCommitClearHover = true;
       }
 
-      if (newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
+      // 마우스가 올라간 버튼의 동작 id. 막혀 있으면 힌트바에 사유를 띄우고 커서를
+      // 금지 모양으로 바꾼다 — 흐린 색만으로는 "지금은 안 된다"는 알아도 "왜"는 모른다.
+      // 사유 문자열이 아니라 id 를 들고 있어야, 상황이 바뀌면 렌더가 알아서 다시 판정한다.
+      let newHoveredAction = null;
+      if (newTitleHover >= 0 && ui.titleClickZones[newTitleHover]) {
+        newHoveredAction = ui.titleClickZones[newTitleHover].action;
+      } else if (newFileHeaderHover >= 0 && ui.fileHeaderZones[newFileHeaderHover]) {
+        newHoveredAction = ui.fileHeaderZones[newFileHeaderHover].action;
+      } else if (newCommitButtonHover) {
+        newHoveredAction = state.mode === 'commit' ? 'commit-submit' : 'commit-enter';
+      } else if (newMergeApplyHover) {
+        newHoveredAction = 'merge-apply';
+      } else if (newDiffHunkHover >= 0) {
+        newHoveredAction = 'hunk-apply';
+      } else if (newCommitAmendHover) {
+        newHoveredAction = 'commit-amend';
+      } else if (newCommitterHover) {
+        newHoveredAction = newCommitterHover;
+      }
+      const newDisabledReason = newHoveredAction ? disabledReason(newHoveredAction) : null;
+
+      if (newHoveredAction !== ui.hoveredAction
+        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredCommitterAction = newCommitterHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
@@ -1417,14 +1427,18 @@ async function handleMouseData(data) {
         ui.hoveredDiffHunkIdx = newDiffHunkHover;
         ui.hoveredCommitAmend = newCommitAmendHover;
         ui.hoveredCommitClear = newCommitClearHover;
+        ui.hoveredAction = newHoveredAction;
         // Update mouse cursor shape
         // 호버 시 밑줄이 그어지는 요소(= 클릭 가능한 버튼/메뉴)는 모두 손가락 커서로 맞춘다.
         // Status 패널의 브랜치명·섹션 헤더·브랜치/워크트리/스태시 줄(leftPanelClickMap)도 포함된다.
+        // 지금 막혀 있는 버튼은 손가락 대신 금지 커서로 바꿔, 누르기 전에 알 수 있게 한다.
         if (!ui.dragging) {
           if (newDivHover === 'vertical' || newDivHover === 'vertical2') {
             setMouseShape('ew-resize');
           } else if (newDivHover === 'horizontal') {
             setMouseShape('ns-resize');
+          } else if (newDisabledReason) {
+            setMouseShape('not-allowed');
           } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
             setMouseShape('pointer');
           } else {
@@ -1605,6 +1619,12 @@ async function handleMouseData(data) {
         let handled = false;
         for (const zone of ui.titleClickZones) {
           if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
+            // 딤드로 그린 버튼은 여기서 끝낸다 — 렌더가 판정한 그대로 막고 사유만 알린다.
+            if (zone.enabled === false) {
+              handled = true;
+              guardAction(zone.action);
+              break;
+            }
             if (zone.action === 'toggleStatus') {
               ui.leftPanelCollapsed = !ui.leftPanelCollapsed;
               render();
@@ -1671,7 +1691,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'git-fetch') {
               handled = true;
-              if (!guardWriteOp()) break;
+              if (!guardAction('git-fetch')) break;
               startSpinner('Fetching...');
               gitFetchAsync(state.cwd).then(async err => {
                 if (err) {
@@ -1679,14 +1699,14 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
-                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...' });
+                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...', settle: true });
                   stopSpinner();
                 }
               });
               handled = true;
             } else if (zone.action === 'git-pull') {
               handled = true;
-              if (!guardWriteOp()) break;
+              if (!guardAction('git-pull')) break;
               startSpinner('Pulling...');
               gitPullAsync(state.cwd).then(async err => {
                 if (err) {
@@ -1694,7 +1714,7 @@ async function handleMouseData(data) {
                   showErrorDialog(err);
                   render();
                 } else {
-                  refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...' });
+                  refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...', settle: true });
                   stopSpinner();
                 }
               });
@@ -1704,7 +1724,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'git-stash') {
               handled = true;
-              if (!guardWriteOp()) break;
+              if (!guardAction('git-stash')) break;
               state.pendingStash = true;
               hecaton.dialog.show({
                 type: 'message',
@@ -1718,7 +1738,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'op-abort') {
               handled = true;
-              if (!guardWriteOp()) break;
+              if (!guardAction('op-abort')) break;
               const opType = state.operationState ? state.operationState.type : null;
               const opLabel = opType === 'merge' ? 'merge' : opType === 'cherry-pick' ? 'cherry-pick' : opType === 'revert' ? 'revert' : 'rebase';
               const abortFn = opType === 'merge' ? () => gitMergeAbort(state.cwd)
@@ -1736,7 +1756,7 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'op-skip') {
               handled = true;
-              if (!guardWriteOp()) break;
+              if (!guardAction('op-skip')) break;
               const opType = state.operationState ? state.operationState.type : null;
               const skipFn = opType === 'cherry-pick' ? () => gitCherryPickSkip(state.cwd)
                 : opType === 'revert' ? () => gitRevertSkip(state.cwd)
@@ -1942,8 +1962,8 @@ async function handleMouseData(data) {
               render();
             } else if (entry.action === 'goto-stash') {
               const now = Date.now();
-              // 더블클릭 Apply는 쓰기 작업 — 진행 중이면 선택 동작으로만 처리한다.
-              if (ui.lastClickStashRef === entry.ref && now - ui.lastClickStashTime < 400 && guardWriteOp()) {
+              // 더블클릭 Apply는 쓰기 작업 — 지금 불가능하면 선택 동작으로만 처리한다.
+              if (ui.lastClickStashRef === entry.ref && now - ui.lastClickStashTime < 400 && guardAction('stash_apply')) {
                 // Double-click: show Apply Stash dialog
                 ui.lastClickStashRef = null;
                 ui.lastClickStashTime = 0;
@@ -2067,6 +2087,7 @@ async function handleMouseData(data) {
       // Click on amend 토글 (Commit 버튼 오른쪽)
       if (ui.commitAmendZone && cy === ui.commitAmendZone.row && cx >= ui.commitAmendZone.colStart && cx <= ui.commitAmendZone.colEnd) {
         // 커밋 모드에서는 amend on/off 토글, 일반 모드에서는 amend 커밋 모드로 진입
+        if (!guardAction('commit-amend')) continue;
         if (state.mode === 'commit') {
           toggleCommitAmend();
         } else {
@@ -2077,19 +2098,20 @@ async function handleMouseData(data) {
 
       // Click on commit button zone
       if (ui.commitButtonZone && cy === ui.commitButtonZone.row && cx >= ui.commitButtonZone.colStart && cx <= ui.commitButtonZone.colEnd) {
-        const clickIsAmend = state.commitAmend && !state.operationState;
-        if (state.mode === 'commit' && state.commitMsg.trim().length > 0 && (state.staged.length > 0 || clickIsAmend)) {
-          // Trigger commit via button click
-          handleCommitInput(CSI + '13;5u');
-        } else if (state.staged.length > 0 && state.mode !== 'commit') {
+        // 커밋 모드면 제출, 아니면 커밋 모드 진입 — 버튼 색을 정한 판정과 같은 id 를 쓴다.
+        if (state.mode === 'commit') {
+          if (guardAction('commit-submit')) handleCommitInput(CSI + '13;5u');
+        } else if (guardAction('commit-enter')) {
           enterCommitMode();
         }
         continue;
       }
 
       // Click on commit input row -> enter commit mode
+      // 버튼이 아니라 입력 영역이라 막혔을 때 사유를 띄우지 않는다 — 지나가는 클릭까지
+      // 안내가 뜨면 잔소리가 된다. 왜 안 되는지는 바로 아래 [Commit] 버튼이 알려 준다.
       if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= rightStart && cx < L.startCol + L.width) {
-        if (state.mode !== 'commit' && state.staged.length > 0) {
+        if (state.mode !== 'commit' && isEnabled('commit-enter')) {
           enterCommitMode();
         }
         continue;
@@ -2132,11 +2154,16 @@ async function handleMouseData(data) {
                   headerHandled = true;
                   break;
                 }
+                headerHandled = true;
+                // 딤드로 그린 버튼은 렌더가 판정한 그대로 막고 사유만 알린다.
+                if (zone.enabled === false) {
+                  guardAction(zone.action);
+                  break;
+                }
                 if (zone.action === 'unlockIndex') {
-                  headerHandled = true;
                   // 쓰기 작업이 도는 동안 락 삭제를 허용하면 그 작업의 index.lock을
                   // 지울 수 있다 — 반드시 작업 종료 후에만.
-                  if (!guardWriteOp()) break;
+                  if (!guardAction('unlockIndex')) break;
                   hecaton.dialog.show({
                     type: 'message',
                     title: 'Unlock Git Index',
@@ -2147,78 +2174,15 @@ async function handleMouseData(data) {
                     ],
                   });
                   state.pendingDialogAction = 'unlock-index-confirm';
-                  headerHandled = true;
                   break;
                 }
                 if (zone.action === 'stageAll' || zone.action === 'unstageAll') {
-                  headerHandled = true;
-                  if (!guardWriteOp()) break;
-                  const fileList = buildFileList();
-                  const isStage = zone.action === 'stageAll';
-                  const files = fileList
-                    .filter(item => isStage
-                      ? item.type !== 'staged' && item.type !== 'ignored'
-                      : item.type === 'staged')
-                    .map(item => item.file);
-                  if (files.length > 0) {
-                    const label = isStage ? 'Staging all' : 'Unstaging all';
-                    startSpinner(`${label}...`);
-                    (async () => {
-                      const err = isStage
-                        ? await gitStageAll(state.cwd)
-                        : await gitUnstageAll(state.cwd);
-                      state.selectedFiles.clear();
-                      if (err) {
-                        stopSpinner();
-                        showErrorDialog(err);
-                        render();
-                      } else {
-                        stopSpinner();
-                        if (isStage) applyStageToState(files);
-                        else applyUnstageToState(files);
-                        refreshInBackground({ statusOnly: true });
-                      }
-                    })();
-                  }
-                  headerHandled = true;
+                  if (!guardAction(zone.action)) break;
+                  runStageAll(zone.action === 'stageAll');
                   break;
                 }
-                headerHandled = true;
-                if (!guardWriteOp()) break;
-                const fileList = buildFileList();
-                const targets = state.selectedFiles.size > 0
-                  ? Array.from(state.selectedFiles).sort((a, b) => a - b)
-                  : (fileList.length > 0 ? [Math.min(state.cursor, fileList.length - 1)] : []);
-                if (targets.length > 0) {
-                  const label = zone.action === 'stageSelected' ? 'Staging' : 'Unstaging';
-                  const isStage = zone.action === 'stageSelected';
-                  const files = targets
-                    .map(i => fileList[i])
-                    .filter(item => item && (isStage ? item.type !== 'staged' : item.type === 'staged'))
-                    .map(item => item.file);
-                  if (files.length === 0) {
-                    headerHandled = true;
-                    break;
-                  }
-                  startSpinner(`${label}...`);
-                  (async () => {
-                    const err = isStage
-                      ? await gitStageMultiple(state.cwd, files)
-                      : await gitUnstageMultiple(state.cwd, files);
-                    state.selectedFiles.clear();
-                    if (err) {
-                      stopSpinner();
-                      showErrorDialog(err);
-                      render();
-                    } else {
-                      stopSpinner();
-                      if (isStage) applyStageToState(files);
-                      else applyUnstageToState(files);
-                      refreshInBackground({ statusOnly: true });
-                    }
-                  })();
-                }
-                headerHandled = true;
+                if (!guardAction(zone.action)) break;
+                runStageSelection(zone.action === 'stageSelected');
                 break;
               }
             }
@@ -2231,25 +2195,13 @@ async function handleMouseData(data) {
             const now = Date.now();
 
             if (fileIdx === ui.lastClickFileIdx && now - ui.lastClickTime < 400) {
-              // Double-click: stage/unstage toggle — 쓰기 작업 중에는 선택만 남기고 무시
-              const fileList = buildFileList();
-              const item = guardWriteOp() ? fileList[fileIdx] : null;
-              if (item) {
-                const isUnstage = item.type === 'staged';
-                const msg = isUnstage ? 'Unstaging...' : 'Staging...';
-                startSpinner(msg);
-                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file)).then(async err => {
-                  if (err) {
-                    stopSpinner();
-                    showErrorDialog(err);
-                    render();
-                    return;
-                  }
-                  stopSpinner();
-                  if (isUnstage) applyUnstageToState([item.file]);
-                  else applyStageToState([item.file]);
-                  refreshInBackground({ statusOnly: true });
-                });
+              // Double-click: stage/unstage toggle — 막혀 있으면 선택만 남기고 사유를 알린다.
+              const item = buildFileList()[fileIdx];
+              const isUnstage = item && item.type === 'staged';
+              if (item && item.type !== 'ignored' && guardAction(isUnstage ? 'unstageSelected' : 'stageSelected')) {
+                startSpinner(isUnstage ? 'Unstaging...' : 'Staging...');
+                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file))
+                  .then(err => finishStageOp(!isUnstage, [item.file], err));
               }
               ui.lastClickFileIdx = -1;
               ui.lastClickTime = 0;

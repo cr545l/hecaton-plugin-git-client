@@ -31,39 +31,11 @@ const {
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
-const { startSpinner, stopSpinner, guardWriteOp } = require('./spinner');
-
-// ── 컨텍스트 메뉴 액션 read/write 분류 ──
-// 저장소를 바꾸지 않는 액션만 나열한다(허용 목록). 여기 없는 액션은 전부 쓰기로
-// 간주해, 다른 쓰기 작업이 도는 동안에는 guardWriteOp가 막는다. 새 항목을 빠뜨리면
-// 잠깐 과하게 막힐 뿐이지만, 쓰기를 잘못 통과시키면 작업이 중첩된다 — 기본은 차단.
-const READ_ONLY_MENU_ACTIONS = new Set([
-  // 새로고침/보기 전환
-  'tab_refresh', 'stash_compare',
-  // 클립보드 복사
-  'copy_sha', 'copy_info', 'save_patch',
-  'stash_copy_sha', 'stash_copy_info',
-  'branch_copy_name', 'remotebranch_copy_name', 'remote_copy_url',
-  'file_copy_path', 'file_copy_full_path', 'file_save_patch',
-  'file_external_diff_head', 'file_external_diff_index',
-  'file_blame', 'file_history',
-  'worktree_copy_path',
-  // 파일/탐색기 열기 (현재 저장소를 바꾸지 않음)
-  'file_open', 'file_open_explorer', 'file_show_in_explorer',
-  'worktree_open_explorer', 'worktree_show_in_explorer',
-  // UI 상태만 바꾸는 것들
-  'branch_pin',
-  'remote_sort_alpha', 'remote_sort_alpha_desc', 'remote_sort_recent',
-  'remote_sort_title', 'push_remote_title',
-  // 페이지네이션/서브메뉴 열기
-  'history_branch_open', 'branch_tracking_open',
-]);
-const READ_ONLY_MENU_PREFIXES = ['history_branch_page:', 'branch_tracking_page:', 'tag_menu:'];
-
-function isReadOnlyMenuAction(actionId) {
-  if (READ_ONLY_MENU_ACTIONS.has(actionId)) return true;
-  return READ_ONLY_MENU_PREFIXES.some(p => actionId.startsWith(p));
-}
+const { startSpinner, stopSpinner } = require('./spinner');
+// read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
+// 메뉴를 만들 때(decorateMenuItems)와 실행할 때(guardAction)가 같은 표를 보므로,
+// "메뉴에선 살아 있는데 눌러도 안 되는" 어긋남이 생기지 않는다.
+const { guardAction, decorateMenuItems } = require('./actions');
 
 // 커밋 하나에 달린 태그 수만큼 서브메뉴가 늘어나므로 상한을 둔다.
 // 배경은 REF_INLINE_MAX 주석과 test/menu-payload.test.js 참고.
@@ -154,7 +126,7 @@ function buildHistoryContextMenuItems() {
     { id: 'copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   );
 
-  return items;
+  return decorateMenuItems(items);
 }
 
 function buildStashContextMenuItems(stashRef, stashMessage) {
@@ -169,7 +141,7 @@ function buildStashContextMenuItems(stashRef, stashMessage) {
     { id: 'stash_copy_sha', label: 'Copy Commit SHA', icon: 'copy', shortcut: 'Ctrl+C' },
     { id: 'stash_copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   ];
-  return items;
+  return decorateMenuItems(items);
 }
 
 function isConflictFile(item) {
@@ -236,7 +208,7 @@ function buildFileContextMenuItems(fileItem, fileItems) {
     { id: 'file_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' },
   ];
 
-  return items;
+  return decorateMenuItems(items);
 }
 
 function buildTabContextMenuItems() {
@@ -254,7 +226,7 @@ function buildTabContextMenuItems() {
   if (!state.isGitRepo) {
     items.push({ id: 'tab_init', label: 'Init Repository Here' });
   }
-  return items;
+  return decorateMenuItems(items);
 }
 
 function buildWorktreeContextMenuItems(wtPath) {
@@ -276,7 +248,7 @@ function buildWorktreeContextMenuItems(wtPath) {
     items.push({ id: 'worktree_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' });
     items.push({ id: 'worktree_copy_path', label: 'Copy Path', icon: 'copy' });
   }
-  return items;
+  return decorateMenuItems(items);
 }
 
 // 호스트 menu.show는 한 번에 받을 수 있는 항목 수에 한계가 있고, 넘치면 뒤쪽 항목을
@@ -317,7 +289,7 @@ function buildPagedRefMenu({ titleId, title, entries, page, pagePrefix, tail }) 
     if (start + slice.length < entries.length) items.push({ id: pagePrefix + (pageIdx + 1), label: 'More...' });
   }
   for (const item of (tail || [])) items.push(item);
-  return items;
+  return decorateMenuItems(items);
 }
 
 // 업스트림 후보를 쓸모 있는 순서로 놓는다 — 지금 업스트림, 같은 이름의 리모트 브랜치,
@@ -444,7 +416,7 @@ function buildBranchContextMenuItems(branchName) {
   items.push({ type: 'separator' });
   items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
 
-  return items;
+  return decorateMenuItems(items);
 }
 
 function buildPullRequestUrl(remoteUrl, branch) {
@@ -481,7 +453,7 @@ function buildRemotesContextMenuItems(remoteName) {
     { id: 'remote_sort_alpha_desc', label: 'Alphabetically backward', checked: mode === 'alpha_desc' },
     { id: 'remote_sort_recent', label: 'Recently used', checked: mode === 'recent' },
   );
-  return items;
+  return decorateMenuItems(items);
 }
 
 function buildPushRemoteMenuItems() {
@@ -499,7 +471,7 @@ function buildPushRemoteMenuItems() {
       checked: r === upstreamRemote,
     });
   }
-  return items;
+  return decorateMenuItems(items);
 }
 
 function buildRemoteBranchContextMenuItems(remoteBranchName) {
@@ -522,14 +494,15 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
     { id: 'remotebranch_copy_name', label: 'Copy Branch Name', icon: 'copy' },
   );
 
-  return items;
+  return decorateMenuItems(items);
 }
 
 async function handleContextMenuAction(actionId) {
-  // menu_activated는 stdin 게이트를 거치지 않는다 — 저장소를 바꾸는 액션은
-  // 여기서 직접 막아야 쓰기 작업 중 중첩 실행(커밋 중 discard 등)이 안 생긴다.
-  // 복사/열기 같은 읽기 액션은 작업 중에도 그대로 통과시킨다.
-  if (!isReadOnlyMenuAction(actionId) && !guardWriteOp()) return;
+  // menu_activated는 stdin 게이트를 거치지 않는다 — 지금 불가능한 액션은 여기서
+  // 직접 막아야 중첩 실행(커밋 중 discard, rebase 중 checkout 등)이 안 생긴다.
+  // 메뉴에서 이미 딤 처리된 항목이라도 호스트가 흘려보낼 수 있으니 한 번 더 본다.
+  // 복사/열기 같은 읽기 액션은 어떤 상황에서도 그대로 통과한다.
+  if (!guardAction(actionId)) return;
 
   // Tab context menu actions
   if (actionId === 'tab_refresh') {
@@ -2560,8 +2533,13 @@ async function afterGitOp(err, opName, refreshOpts = {}) {
   // "Refreshing..."만 떠서 정작 무슨 작업이었는지 알 수 없다. 후속 갱신까지가 한 동작이다.
   // 실패한 경우엔 이름을 잇지 않는다 — 되돌아간 상태를 다시 읽는 것뿐이고,
   // 무슨 일이 있었는지는 곧 뜨는 오류 창이 말해 준다.
+  // settle: 이 갱신이 끝나야 목록이 작업 결과를 반영한다 — 그때까지는 새 쓰기를 받지 않는다.
+  // 실패한 경우엔 저장소가 그대로라 목록도 낡지 않았으므로 걸지 않는다.
   const followup = { refreshLog: !refreshOpts.statusOnly };
-  if (!err) followup.message = opName + '...';
+  if (!err) {
+    followup.message = opName + '...';
+    followup.settle = true;
+  }
   // stopSpinner 보다 먼저 건다. 순서를 뒤집으면 스피너 참조가 잠깐 0이 되어
   // 두 표시 사이에서 제목이 한 번 맨 상태로 떨어졌다 돌아온다.
   refreshInBackground(refreshOpts, followup);

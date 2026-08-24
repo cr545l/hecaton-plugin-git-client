@@ -86,7 +86,7 @@ async function main() {
 
   process.stdin.on('data', async (data) => {
     // 초기 로딩 중에만 전체 입력을 막는다. 쓰기 작업(spinnerActive) 중에는 입력을
-    // 통과시키고, 저장소를 변경하는 액션만 각 dispatch 지점의 guardWriteOp가 막는다 —
+    // 통과시키고, 지금 불가능한 액션만 각 dispatch 지점의 actions.guardAction이 막는다 —
     // 히스토리 조회/리비전 선택/스크롤 같은 읽기 인터렉션은 작업 중에도 동작해야 한다.
     if (state.loading) return;
 
