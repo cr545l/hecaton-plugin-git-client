@@ -1,4 +1,8 @@
-const { state, ui, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch } = require('./state');
+const {
+  state, ui, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
+  localRefKey, remoteRefKey, isFilteredRef, isHiddenRef, toggleFilteredRef, toggleHiddenRef,
+  clearFilteredRefs, clearHiddenRefs, forgetRef, renameRef,
+} = require('./state');
 function baseName(p) { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return s.substring(s.lastIndexOf('/') + 1); }
 function extName(p) { const b = baseName(p); const i = b.lastIndexOf('.'); return i <= 0 ? '' : b.substring(i); }
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
@@ -29,7 +33,7 @@ const {
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
   resolveWorkTreeRoot, splitUpstreamRef,
 } = require('./git');
-const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
+const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
@@ -338,6 +342,33 @@ function buildHistoryBranchMenuItems(page) {
   });
 }
 
+// 히스토리 Filter/Hide 묶음 — 로컬/리모트 브랜치 메뉴가 같은 모양으로 쓴다.
+// idPrefix 만 다르다(핸들러가 actionId 앞머리로 대상을 가른다).
+//
+// 전체 해제 항목은 지정이 하나라도 있을 때만 낸다. 이 기능의 상태는 좌측 목록의 색으로만
+// 드러나는데, 필터를 걸어 둔 브랜치가 접힌 그룹 안에 있으면 그마저 안 보인다 — 아무
+// 브랜치나 우클릭해서 빠져나올 길이 항상 있어야 한다.
+// allowHide=false 면 Hide 를 빼고 낸다(현재 브랜치. 지금 체크아웃한 것을 감추는 건
+// 의미가 없고, 그래프에서 HEAD 가 사라져 어디에 있는지 알 수 없게 된다).
+function buildRefFilterMenuItems(idPrefix, refKey, label, allowHide) {
+  const items = [{ type: 'separator' }];
+  items.push(isFilteredRef(refKey)
+    ? { id: idPrefix + 'filter', label: "Unfilter '" + label + "'" }
+    : { id: idPrefix + 'filter', label: "Filter '" + label + "'" });
+  if (allowHide) {
+    items.push(isHiddenRef(refKey)
+      ? { id: idPrefix + 'hide', label: "Unhide '" + label + "'" }
+      : { id: idPrefix + 'hide', label: "Hide '" + label + "'" });
+  }
+  if (ui.filteredRefs.length > 0) {
+    items.push({ id: idPrefix + 'clear_filters', label: 'Clear All Filters (' + ui.filteredRefs.length + ')' });
+  }
+  if (ui.hiddenRefs.length > 0) {
+    items.push({ id: idPrefix + 'show_all', label: 'Show All Branches (' + ui.hiddenRefs.length + ')' });
+  }
+  return items;
+}
+
 function buildBranchContextMenuItems(branchName) {
   const branch = state.branches.find(b => b.name === branchName);
   if (!branch) return [];
@@ -412,6 +443,10 @@ function buildBranchContextMenuItems(branchName) {
   items.push(isPinnedBranch(branchName)
     ? { id: 'branch_pin', label: "Unpin '" + branchName + "'", icon: 'pinned' }
     : { id: 'branch_pin', label: "Pin '" + branchName + "'", icon: 'pin' });
+
+  for (const item of buildRefFilterMenuItems('branch_', localRefKey(branchName), branchName, !branch.isCurrent)) {
+    items.push(item);
+  }
 
   items.push({ type: 'separator' });
   items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
@@ -490,6 +525,16 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
     { id: 'remotebranch_new_branch', label: 'New Branch from Here...' },
     { type: 'separator' },
     { id: 'remotebranch_delete_remote', label: "Delete '" + remoteBranchName + "' on Remote...", icon: 'warning' },
+  );
+
+  // 리모트 추적 브랜치는 동명 로컬 브랜치와 따로 지정한다. 핀은 일부러 둘을 묶어 두지만,
+  // 히스토리에서는 origin/foo 만 있고 로컬 foo 는 없는(또는 그 반대인) 커밋 줄기가 흔해
+  // 각각 걸 수 있어야 쓸모가 있다.
+  for (const item of buildRefFilterMenuItems('remotebranch_', remoteRefKey(remoteBranchName), remoteBranchName, true)) {
+    items.push(item);
+  }
+
+  items.push(
     { type: 'separator' },
     { id: 'remotebranch_copy_name', label: 'Copy Branch Name', icon: 'copy' },
   );
@@ -1129,6 +1174,22 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = { remote: remoteName, branch: localName };
         break;
       }
+      case 'remotebranch_filter':
+        toggleFilteredRef(remoteRefKey(remoteBranchName));
+        applyRefFilterChange();
+        break;
+      case 'remotebranch_hide':
+        toggleHiddenRef(remoteRefKey(remoteBranchName));
+        applyRefFilterChange();
+        break;
+      case 'remotebranch_clear_filters':
+        clearFilteredRefs();
+        applyRefFilterChange();
+        break;
+      case 'remotebranch_show_all':
+        clearHiddenRefs();
+        applyRefFilterChange();
+        break;
       case 'remotebranch_copy_name':
         copyToClipboard(remoteBranchName);
         break;
@@ -1290,6 +1351,22 @@ async function handleContextMenuAction(actionId) {
         // 핀은 순수 UI 상태다 — git 호출 없이 토글하고 render()로 다시 그리며 저장까지 맡긴다.
         togglePinnedBranch(branchName);
         render();
+        break;
+      case 'branch_filter':
+        toggleFilteredRef(localRefKey(branchName));
+        applyRefFilterChange();
+        break;
+      case 'branch_hide':
+        toggleHiddenRef(localRefKey(branchName));
+        applyRefFilterChange();
+        break;
+      case 'branch_clear_filters':
+        clearFilteredRefs();
+        applyRefFilterChange();
+        break;
+      case 'branch_show_all':
+        clearHiddenRefs();
+        applyRefFilterChange();
         break;
       case 'branch_copy_name':
         copyToClipboard(branchName);
@@ -1787,7 +1864,9 @@ async function handleDialogResult(params) {
       if (buttonId === 'delete') {
         startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, false);
-        if (!err) unpinBranch(target);   // 사라진 브랜치의 핀은 남기지 않는다
+        // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
+        // 지정한 적 없는 브랜치가 핀·필터 상태로 되살아난다.
+        if (!err) { unpinBranch(target); forgetRef(localRefKey(target)); }
         if (!state.spinnerActive) state.error = null;
         await refreshAsync();
         if (state.rightView === 'log') refreshLog();
@@ -1804,7 +1883,9 @@ async function handleDialogResult(params) {
       } else if (buttonId === 'force') {
         startSpinner('Deleting branch...');
         const err = await gitDeleteBranch(state.cwd, target, true);
-        if (!err) unpinBranch(target);   // 사라진 브랜치의 핀은 남기지 않는다
+        // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
+        // 지정한 적 없는 브랜치가 핀·필터 상태로 되살아난다.
+        if (!err) { unpinBranch(target); forgetRef(localRefKey(target)); }
         await afterGitOp(err, 'Delete branch');
       }
       return;
@@ -1974,7 +2055,11 @@ async function handleDialogResult(params) {
     if (action === 'delete-remote-branch-confirm') {
       if (buttonId === 'delete' && target) {
         startSpinner('Deleting remote branch...');
-        gitPushDeleteBranchAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Delete remote branch', { metadataOnly: true }); });
+        gitPushDeleteBranchAsync(state.cwd, target.remote, target.branch).then(async err => {
+          // 사라진 리모트 브랜치의 필터/숨김 지정은 남기지 않는다(로컬 삭제와 같은 이유).
+          if (!err) forgetRef(remoteRefKey(target.remote + '/' + target.branch));
+          await afterGitOp(err, 'Delete remote branch', { metadataOnly: true });
+        });
       }
       return;
     }
@@ -2168,7 +2253,11 @@ async function handleDialogResult(params) {
       if (action === 'rename-branch') {
         const renameRes = await gitRenameBranch(state.cwd, target, name);
         // ref 가 옮겨졌으면 config 갱신이 실패했더라도 핀은 새 이름을 따라가야 한다
-        if (renameRes.renamed) renamePinnedBranch(target, name);   // 핀은 이름으로 물려 있어 함께 옮긴다
+        // 핀도 필터 지정도 이름으로 물려 있어 함께 옮긴다
+        if (renameRes.renamed) {
+          renamePinnedBranch(target, name);
+          renameRef(localRefKey(target), localRefKey(name));
+        }
         err = renameRes.error;
       } else if (action === 'rename-stash') {
         err = await gitStashRename(state.cwd, target, name);
@@ -2466,6 +2555,20 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
     stopSpinner();
     showError('Cherry-pick failed:\n' + ((e && e.message) || e || 'Operation failed'));
   }
+}
+
+// 히스토리 Filter/Hide 를 바꾼 뒤 화면에 반영한다. 지정은 순수 UI 상태라 git 을 다시
+// 부르지 않는다 — 캐시된 커밋으로 그래프만 다시 만들고(rebuildLogGraphRows) render()가
+// 저장까지 맡는다. 캐시가 아직 없으면(로그를 한 번도 안 읽었으면) 그때만 refreshLog 로
+// 채우고, 그것도 히스토리를 보고 있을 때만 한다 — 다른 탭에서 우클릭했다고 로그를
+// 새로 읽을 이유가 없다(다음에 탭을 열 때 어차피 읽는다).
+function applyRefFilterChange() {
+  const rebuilt = rebuildLogGraphRows();
+  if (state.rightView === 'log') {
+    if (rebuilt) updateLogDetail();
+    else refreshLog();
+  }
+  render();
 }
 
 function hasLocalChanges() {

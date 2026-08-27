@@ -5,7 +5,8 @@
 //
 // 모든 UI 설정을 리포(폴더)별로 저장한다.
 // 리포별(repos): 레이아웃(탭/diff 뷰·패널 접기·분할 비율·fresh 기간·원격/커밋 정렬 모드),
-//               섹션·그룹 접힘, 핀 고정 브랜치, recent 정렬용 사용 기록, 커밋 메시지 드래프트.
+//               섹션·그룹 접힘, 핀 고정 브랜치, 히스토리 Filter/Hide 지정,
+//               recent 정렬용 사용 기록, 커밋 메시지 드래프트.
 // 전역(global): 더 이상 사용하지 않음(빈 객체로 유지, 다음 저장 때 정리).
 //
 // 예전엔 UI 설정을 global에 저장해 모든 폴더가 같은 배치를 공유했다. 이제 리포별로
@@ -24,6 +25,7 @@ const MAX_WAIT_MS = 5000;        // 연속 render(스피너/호버)로 디바운
 const MAX_REPOS = 30;            // repos 맵 LRU 상한
 const MAX_BRANCH_USAGE = 50;     // remoteRecentBranchUsage 항목 상한
 const MAX_PINNED = 50;           // pinnedBranches 항목 상한
+const MAX_REF_FILTERS = 100;     // filteredRefs / hiddenRefs 각각의 항목 상한
 const FRESH_WINDOW_MAX = 5;      // FRESH_TIME_WINDOWS.length - 1
 
 const PLUGIN_DIR_NAME = (function () {
@@ -122,18 +124,28 @@ function sanitizeBoolMap(v) {
   return out;
 }
 
-// 핀 목록 — 지정 순서를 유지하며 중복/빈 값만 걸러낸다. 삭제된 브랜치의 핀은 그리는 쪽에서
-// 걸러지므로 여기서 존재 여부를 따지지 않는다(리포를 옮겨 다니는 동안 살아 있어야 한다).
-function sanitizePinnedList(v) {
+// 이름 목록 — 지정 순서를 유지하며 중복/빈 값만 걸러낸다. 삭제된 브랜치의 지정은 그리는
+// 쪽에서 걸러지므로 여기서 존재 여부를 따지지 않는다(리포를 옮겨 다니는 동안 살아 있어야 한다).
+function sanitizeNameList(v, max) {
   if (!Array.isArray(v)) return [];
   const out = [];
   for (const name of v) {
     if (typeof name !== 'string' || !name) continue;
     if (out.includes(name)) continue;
     out.push(name);
-    if (out.length >= MAX_PINNED) break;
+    if (out.length >= max) break;
   }
   return out;
+}
+
+function sanitizePinnedList(v) {
+  return sanitizeNameList(v, MAX_PINNED);
+}
+
+// Filter/Hide 목록 — 값은 풀 refname 이라 'refs/' 로 시작하지 않는 것은 버린다.
+// (예전 형식이나 손상된 파일이 그대로 들어와 어떤 ref 와도 안 맞는 지정이 남는 것을 막는다.)
+function sanitizeRefList(v) {
+  return sanitizeNameList(v, MAX_REF_FILTERS).filter(r => r.startsWith('refs/'));
 }
 
 function sanitizeUsageMap(v) {
@@ -151,6 +163,8 @@ function captureRepo() {
     collapsedSections: { ...ui.collapsedSections },
     collapsedGroups: { ...ui.collapsedGroups },
     pinnedBranches: sanitizePinnedList(ui.pinnedBranches),
+    filteredRefs: sanitizeRefList(ui.filteredRefs),
+    hiddenRefs: sanitizeRefList(ui.hiddenRefs),
     remoteRecentBranchUsage: sanitizeUsageMap(ui.remoteRecentBranchUsage),
     // 커밋 모드 중에만 드래프트 저장 — Esc/커밋 완료로 모드를 벗어나면 비워진다
     commitDraft: state.mode === 'commit' ? state.commitMsg : '',
@@ -255,6 +269,8 @@ function attachRepo(cwd) {
   ui.collapsedSections = sanitizeBoolMap(entry && entry.collapsedSections);
   ui.collapsedGroups = sanitizeBoolMap(entry && entry.collapsedGroups);
   ui.pinnedBranches = sanitizePinnedList(entry && entry.pinnedBranches);
+  ui.filteredRefs = sanitizeRefList(entry && entry.filteredRefs);
+  ui.hiddenRefs = sanitizeRefList(entry && entry.hiddenRefs);
   ui.remoteRecentBranchUsage = sanitizeUsageMap(entry && entry.remoteRecentBranchUsage);
   _commitDraft = (entry && typeof entry.commitDraft === 'string') ? entry.commitDraft : '';
   _data.repos[key] = { ...(entry || {}), _lastUsed: Date.now() };

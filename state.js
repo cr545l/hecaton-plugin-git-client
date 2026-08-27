@@ -140,6 +140,11 @@ const ui = {
   collapsedGroups: {},
   leftPanelActiveBranch: null,
   pinnedBranches: [],              // 핀 고정한 로컬 브랜치 이름 — 핀 지정 순서 유지, 리포별 영속
+  // 히스토리 Filter/Hide — 값은 풀 refname('refs/heads/x' | 'refs/remotes/origin/x')이다.
+  // 이름만 들고 다니면 로컬 'foo'와 리모트 'origin/foo'를 구분할 수 없어 한쪽 지정이
+  // 다른 쪽까지 걸린다(핀은 일부러 그렇게 묶여 있지만, 이쪽은 각각 지정할 수 있어야 한다).
+  filteredRefs: [],                // 화이트리스트 — 비어 있지 않으면 여기서 닿는 커밋만 그린다
+  hiddenRefs: [],                  // 블랙리스트 — 그래프 루트에서 뺀다(공유 커밋은 남는다)
   leftPanelScrollOffset: 0,
   leftRevealBranch: null,          // 상단 브랜치명 클릭 → 다음 렌더에서 Branches 목록의 그 줄로 스크롤
   hoveredTitleZoneIndex: -1,
@@ -255,4 +260,67 @@ function renamePinnedBranch(oldName, newName) {
   else ui.pinnedBranches[idx] = newName;
 }
 
-module.exports = { state, ui, init, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch };
+// ── 히스토리 Filter / Hide ──
+// Filter 는 "이 브랜치들만 보기"(화이트리스트), Hide 는 "이 브랜치는 빼고 보기"(블랙리스트)다.
+// 실제 걸러내기는 그리기 단계(refresh.buildLogGraphRows)에서만 일어나므로, 토글해도
+// git 재조회 없이 캐시된 커밋으로 그래프만 다시 만든다.
+
+function localRefKey(name) { return name ? 'refs/heads/' + name : ''; }
+function remoteRefKey(name) { return name ? 'refs/remotes/' + name : ''; }
+
+function isFilteredRef(key) { return !!key && ui.filteredRefs.includes(key); }
+function isHiddenRef(key) { return !!key && ui.hiddenRefs.includes(key); }
+
+// Filter 와 Hide 는 서로 반대 방향의 지정이다. 한 ref 에 둘 다 걸리면 "골라 놓고 감췄다"가
+// 되어 결과를 예측할 수 없으므로, 한쪽을 켤 때 다른 쪽에서 뺀다. 결과 상태를 반환.
+function toggleFilteredRef(key) {
+  if (!key) return false;
+  const idx = ui.filteredRefs.indexOf(key);
+  if (idx >= 0) { ui.filteredRefs.splice(idx, 1); return false; }
+  const hid = ui.hiddenRefs.indexOf(key);
+  if (hid >= 0) ui.hiddenRefs.splice(hid, 1);
+  ui.filteredRefs.push(key);
+  return true;
+}
+
+function toggleHiddenRef(key) {
+  if (!key) return false;
+  const idx = ui.hiddenRefs.indexOf(key);
+  if (idx >= 0) { ui.hiddenRefs.splice(idx, 1); return false; }
+  const flt = ui.filteredRefs.indexOf(key);
+  if (flt >= 0) ui.filteredRefs.splice(flt, 1);
+  ui.hiddenRefs.push(key);
+  return true;
+}
+
+function clearFilteredRefs() { ui.filteredRefs = []; }
+function clearHiddenRefs() { ui.hiddenRefs = []; }
+
+// 사라진 ref 의 지정은 남기지 않는다 — 이름이 유일한 식별자라, 나중에 같은 이름이 다시
+// 생기면 지정한 적 없는 브랜치가 필터/숨김 상태로 되살아난다.
+function forgetRef(key) {
+  if (!key) return;
+  const flt = ui.filteredRefs.indexOf(key);
+  if (flt >= 0) ui.filteredRefs.splice(flt, 1);
+  const hid = ui.hiddenRefs.indexOf(key);
+  if (hid >= 0) ui.hiddenRefs.splice(hid, 1);
+}
+
+// 리네임을 따라가게 한다(핀과 같은 이유). 새 이름이 이미 있으면 중복을 만들지 않는다.
+function renameRef(oldKey, newKey) {
+  if (!oldKey || !newKey) return;
+  for (const list of [ui.filteredRefs, ui.hiddenRefs]) {
+    const idx = list.indexOf(oldKey);
+    if (idx < 0) continue;
+    if (list.includes(newKey)) list.splice(idx, 1);
+    else list[idx] = newKey;
+  }
+}
+
+module.exports = {
+  state, ui, init,
+  isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
+  localRefKey, remoteRefKey,
+  isFilteredRef, isHiddenRef, toggleFilteredRef, toggleHiddenRef,
+  clearFilteredRefs, clearHiddenRefs, forgetRef, renameRef,
+};

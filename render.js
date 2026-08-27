@@ -1,7 +1,7 @@
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine } = require('./text');
-const { state, ui, isPinnedBranch } = require('./state');
+const { state, ui, isPinnedBranch, localRefKey, remoteRefKey, isFilteredRef, isHiddenRef } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const hostScroll = require('./scroll');
@@ -1224,8 +1224,16 @@ function buildLeftPanel(w, h) {
     const abText = track ? track.text : (isCurrent ? trackTag : '');
     const abPart = track ? track.part : (isCurrent ? trackPart : '');
     const maxW = Math.max(1, innerW - indent - visLen(tagText) - visLen(abText));
+    // \ud788\uc2a4\ud1a0\ub9ac Filter/Hide \uc9c0\uc815\uc740 \uc774 \uc904\uc758 \uc0c9\uc73c\ub85c\ub9cc \ub4dc\ub7ec\ub09c\ub2e4(\ubcc4\ub3c4 \uc139\uc158\ub3c4 \ud5e4\ub354 \ubc84\ud2bc\ub3c4 \uc5c6\ub2e4).
+    // \ud540\uacfc \ub2ec\ub9ac \ub85c\uceec/\ub9ac\ubaa8\ud2b8\ub97c \uac01\uac01 \uc9c0\uc815\ud558\ubbc0\ub85c \uc81c refname \uc73c\ub85c\ub9cc \ubcf8\ub2e4.
+    const refKey = isRemote ? remoteRefKey(fullRef) : localRefKey(fullRef);
+    const filtered = isFilteredRef(refKey);
+    const hidden = isHiddenRef(refKey);
     if (isCurrent) {
-      const content = ' '.repeat(indent) + colors.green + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + abPart + tagPart;
+      // \ud604\uc7ac \ube0c\ub79c\uce58\ub294 Hide \ub300\uc0c1\uc774 \uc544\ub2c8\ub2e4(\uba54\ub274\uc5d0 \ud56d\ubaa9\uc744 \ub0b4\uc9c0 \uc54a\ub294\ub2e4) \u2014 Filter \ub9cc \ubc18\uc601\ud55c\ub2e4.
+      // \u2713 \ub294 \uadf8\ub300\ub85c \ub450\ubbc0\ub85c \uc0c9\uc774 \ubc14\ub00c\uc5b4\ub3c4 \uc5b4\ub514\uc5d0 \uc788\ub294\uc9c0\ub294 \uacc4\uc18d \ubcf4\uc778\ub2e4.
+      const curClr = filtered ? colors.filtered : colors.green;
+      const content = ' '.repeat(indent) + curClr + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + abPart + tagPart;
       return isActive ? rowBg(content, colors.cursorBg) : content;
     } else {
       // 다른 워크트리가 점유한 브랜치는 [worktree] 표기와 같은 색으로 구분한다.
@@ -1233,10 +1241,15 @@ function buildLeftPanel(w, h) {
       // bold만 얹는다 — 그래도 주변 브랜치와 구분된다.
       // 리모트 추적 브랜치는 동명 로컬 브랜치의 핀을 따라간다(origin/develop ← develop).
       const pinned = isRemote ? isPinnedRemoteRef(fullRef) : isPinnedBranch(fullRef);
-      const clr = heldByWorktree ? colors.cyan
+      // Hide/Filter 는 다른 어떤 표시보다 앞선다 — 지금 히스토리에서 무엇이 빠졌는지가
+      // 누가 그 브랜치를 점유했는지보다 먼저 보여야 한다. 감춘 브랜치는 목록에서 지우지
+      // 않고 흐리게(dim)만 둔다. 지워 버리면 다시 우클릭해서 켤 길이 사라진다.
+      const clr = hidden ? colors.dim
+        : filtered ? colors.filtered
+        : heldByWorktree ? colors.cyan
         : pinned ? colors.pinned
         : isRemote ? colors.red : colors.value;
-      const emph = pinned ? ansi.bold : '';
+      const emph = (pinned && !hidden) ? ansi.bold : '';
       const content = ' '.repeat(indent) + clr + emph + truncate(name, maxW) + ansi.reset + abPart + tagPart;
       return isActive ? rowBg(content, colors.cursorBg) : content;
     }
@@ -2059,6 +2072,15 @@ function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
     if (state.logLoading) {
       return [colors.dim + ' Loading commits...' + ansi.reset];
+    }
+    // Filter/Hide 때문에 비었으면 "커밋이 없다"가 아니다. 그대로 두면 저장소가 텅 빈 것처럼
+    // 보이고, 지정을 걸어 둔 걸 잊었을 때 왜 이렇게 됐는지 알 길이 없다 — 되돌리는 길까지 적는다.
+    if (ui.filteredRefs.length > 0 || ui.hiddenRefs.length > 0) {
+      return [
+        colors.dim + ' ' + truncate('No commits match the branch filter', w - 1) + ansi.reset,
+        '',
+        colors.dim + ' ' + truncate('Right-click a branch → Clear All Filters / Show All Branches', w - 1) + ansi.reset,
+      ];
     }
     return [colors.dim + ' No commits yet' + ansi.reset];
   }

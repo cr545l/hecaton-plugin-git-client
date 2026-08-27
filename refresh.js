@@ -1280,6 +1280,91 @@ function parseLogRaw(raw, recovery, recoveryHashSet) {
   });
 }
 
+// decoration(%D) 한 줄에서 ref 키를 뽑는다. Filter/Hide 가 쓰는 키와 같은 형식이어야
+// 하므로 풀 refname 으로 맞춘다.
+//   - 'HEAD -> main' 은 main 하나로 본다. HEAD 를 따로 루트로 세우면 현재 브랜치를 숨겨도
+//     HEAD 가 남아 아무것도 사라지지 않는다.
+//   - '<remote>/HEAD' 는 다른 ref 의 별칭일 뿐이라 건너뛴다. 남겨 두면 origin/HEAD 때문에
+//     origin/main 숨김이 통째로 무력해진다.
+//   - 로컬/리모트 판별은 실제 브랜치 목록으로 한다. 'origin/foo' 라는 로컬 브랜치가 있어도
+//     리모트로 오인하지 않는다.
+//   - 정체를 모르는 ref(refs/stash 등)는 'ref:' 를 붙여 그대로 둔다 — 지정 대상이 될 일은
+//     없지만 루트로는 살아 있어야 그 커밋이 사라지지 않는다.
+function refKeysOfDecoration(deco, localNames, remoteNames) {
+  if (!deco) return [];
+  const keys = [];
+  for (let token of String(deco).split(',')) {
+    token = token.trim();
+    if (!token) continue;
+    if (token.startsWith('HEAD -> ')) token = token.substring('HEAD -> '.length).trim();
+    if (!token) continue;
+    if (token === 'HEAD') { keys.push('HEAD'); continue; }
+    if (token.startsWith('tag: ')) { keys.push('refs/tags/' + token.substring('tag: '.length).trim()); continue; }
+    if (localNames.has(token)) { keys.push('refs/heads/' + token); continue; }
+    if (token.endsWith('/HEAD')) continue;
+    if (remoteNames.has(token)) { keys.push('refs/remotes/' + token); continue; }
+    keys.push('ref:' + token);
+  }
+  return keys;
+}
+
+// 히스토리 Filter/Hide 적용 — 그래프에 남길 커밋을 ref 도달성으로 고른다.
+//
+// 루트 = (Filter 가 있으면 그 ref 들, 없으면 로그에 등장한 모든 ref) − Hide 한 ref.
+// 거기서 부모를 따라 내려가며 닿는 커밋만 남긴다. Hide 로는 "그 브랜치에서만 닿는" 커밋이
+// 사라지고 다른 ref 와 공유하는 커밋은 그대로 남는데, 다른 ref 들이 여전히 루트라서 그렇다.
+//
+// 팁 해시는 %D(decoration)에서 읽는다 — 이미 받아 둔 로그 안에 있어 추가 조회가 없고,
+// 태그나 detached HEAD 처럼 for-each-ref 로 따로 받지 않는 ref 도 같은 자리에 들어 있다.
+// 팁이 max-count 밖으로 밀려난 브랜치는 애초에 그릴 커밋이 없으니 루트로 세울 일도 없다.
+function applyRefFilters(commits, stashFullHashes) {
+  const filterList = ui.filteredRefs || [];
+  const hiddenList = ui.hiddenRefs || [];
+  if (filterList.length === 0 && hiddenList.length === 0) return commits;
+
+  const localNames = new Set(state.branches.map(b => b.name));
+  const remoteNames = new Set(state.remoteBranches);
+  const filterSet = new Set(filterList);
+  const hiddenSet = new Set(hiddenList);
+  const whitelist = filterList.length > 0;
+
+  const byHash = new Map();
+  for (const c of commits) byHash.set(c.hash, c);
+
+  const keep = new Set();
+  const stack = [];
+  const addRoot = (hash) => {
+    if (keep.has(hash) || !byHash.has(hash)) return;
+    keep.add(hash);
+    stack.push(hash);
+  };
+
+  for (const c of commits) {
+    // Filter 는 "이 브랜치만 보기"다 — 지정 밖이면 스태시도 유실 커밋도 함께 빠진다.
+    // Filter 가 없을 때(Hide 만 걸렸을 때)는 어떤 브랜치에도 매달리지 않은 이 커밋들이
+    // 루트를 잃고 통째로 사라지므로 여기서 살려 둔다.
+    if (!whitelist && (stashFullHashes.has(c.hash) || c.isRecovery)) { addRoot(c.hash); continue; }
+    for (const key of refKeysOfDecoration(c.refs, localNames, remoteNames)) {
+      if (hiddenSet.has(key)) continue;
+      if (whitelist && !filterSet.has(key)) continue;
+      addRoot(c.hash);
+      break;
+    }
+  }
+
+  while (stack.length > 0) {
+    const commit = byHash.get(stack.pop());
+    if (!commit) continue;
+    for (const parent of commit.parents) {
+      if (keep.has(parent) || !byHash.has(parent)) continue;
+      keep.add(parent);
+      stack.push(parent);
+    }
+  }
+
+  return commits.filter(c => keep.has(c.hash));
+}
+
 // 정렬 모드 토글 시 git 재조회 없이 그래프만 다시 만들기 위한 마지막 입력 캐시
 let _lastGraphCommits = null;
 let _lastGraphStashHashes = null;
@@ -1290,7 +1375,13 @@ function buildLogGraphRows(rawCommits, stashFullHashes) {
 
   // 리커버리 숨김. 캐시에는 원본을 남겨 두어 토글을 다시 켜면 git 재조회 없이 되살아난다.
   // 유실 커밋의 자식은 언제나 유실 커밋이므로, 빼도 살아있는 커밋의 부모 사슬은 안 끊긴다.
-  const visibleCommits = ui.logShowRecovery ? rawCommits : rawCommits.filter(c => !c.isRecovery);
+  const afterRecovery = ui.logShowRecovery ? rawCommits : rawCommits.filter(c => !c.isRecovery);
+
+  // 브랜치 Filter/Hide. 리커버리 토글과 같은 이유로 그리기 단계에서만 걸러 낸다 —
+  // 지정을 바꿔도 git 을 다시 부르지 않고 rebuildLogGraphRows() 로 즉시 반영된다.
+  // 스태시 서브커밋 정리보다 먼저 돌려야 한다: 스태시 커밋이 남으면 그 부모인 서브커밋도
+  // 도달 가능하므로 따라 남고, 아래 정리 단계가 평소대로 걷어 간다.
+  const visibleCommits = applyRefFilters(afterRecovery, stashFullHashes);
 
   // Filter stash sub-commits (index, untracked) to keep graph clean.
   const stashSubHashes = new Set();

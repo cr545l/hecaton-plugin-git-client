@@ -78,6 +78,10 @@ const READ_ONLY_ACTIONS = new Set([
   'worktree_open_explorer', 'worktree_show_in_explorer',
   // UI 상태만 바꾸는 것들
   'branch_pin',
+  // 히스토리 Filter/Hide — 그리기 단계에서만 걸러 낸다. 저장소를 건드리지 않으므로
+  // 다른 작업이 도는 중에도 열어 둔다(오히려 그때 그래프를 좁혀 보고 싶을 수 있다).
+  'branch_filter', 'branch_hide', 'branch_clear_filters', 'branch_show_all',
+  'remotebranch_filter', 'remotebranch_hide', 'remotebranch_clear_filters', 'remotebranch_show_all',
   'remote_sort_alpha', 'remote_sort_alpha_desc', 'remote_sort_recent',
   'remote_sort_title', 'push_remote_title',
   // 페이지네이션/서브메뉴 열기
