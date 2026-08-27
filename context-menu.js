@@ -31,7 +31,7 @@ const {
 } = require('./git');
 const { refreshAsync, refreshLog, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
 const { render } = require('./render');
-const { startSpinner, stopSpinner } = require('./spinner');
+const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
 // 메뉴를 만들 때(decorateMenuItems)와 실행할 때(guardAction)가 같은 표를 보므로,
 // "메뉴에선 살아 있는데 눌러도 안 되는" 어긋남이 생기지 않는다.
@@ -1295,14 +1295,17 @@ async function handleContextMenuAction(actionId) {
         copyToClipboard(branchName);
         break;
       case 'branch_rebase_onto': {
+        startSpinner('Checking rebase...');
         // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
         if (await gitIsRebaseNoop(state.cwd, branchName)) {
+          stopSpinner();
           showRebaseNoopDialog(branchName);
           break;
         }
         // Pre-check for conflicts
         const conflictCheck = await gitCheckRebaseConflicts(state.cwd, branchName);
         if (conflictCheck.willConflict) {
+          stopSpinner();
           const fileList = conflictCheck.files.length > 0
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
@@ -1319,7 +1322,7 @@ async function handleContextMenuAction(actionId) {
           render();
           break;
         }
-        startSpinner('Rebasing...');
+        updateSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, branchName).then(async err => {
           await refreshAsync();
           stopSpinner();
@@ -1490,12 +1493,15 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'rebase': {
+      startSpinner('Checking rebase...');
       // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
       if (await gitIsRebaseNoop(state.cwd, hash)) {
+        stopSpinner();
         showRebaseNoopDialog(hash);
         break;
       }
       if (state.staged.length > 0 || state.unstaged.length > 0) {
+        stopSpinner();
         state.pendingRebaseRef = hash;
         hecaton.dialog.show({
           type: 'message',
@@ -1510,6 +1516,7 @@ async function handleContextMenuAction(actionId) {
         // Pre-check for conflicts
         const conflictCheck = await gitCheckRebaseConflicts(state.cwd, hash);
         if (conflictCheck.willConflict) {
+          stopSpinner();
           const fileList = conflictCheck.files.length > 0
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
@@ -1526,7 +1533,7 @@ async function handleContextMenuAction(actionId) {
           render();
           break;
         }
-        startSpinner('Rebasing...');
+        updateSpinner('Rebasing...');
         gitRebaseAsync(state.cwd, hash).then(async err => {
           await refreshAsync();
           stopSpinner();
@@ -2274,11 +2281,11 @@ async function handleDialogResult(params) {
         showError('Stash failed:\n' + stashErr);
         return;
       }
-      state.error = label + ' (2/3) Creating branch';
+      updateSpinner(label + ' (2/3) Creating branch');
       const createErr = await gitCreateBranch(state.cwd, req.name, req.startPoint);
       if (createErr) {
         // 브랜치가 만들어지지 않았으니 원래 자리에서 그대로 되돌려 놓는다.
-        state.error = label + ' (3/3) Restoring stash';
+        updateSpinner(label + ' (3/3) Restoring stash');
         await gitStashPopAsync(state.cwd);
         await refreshAsync();
         stopSpinner();
@@ -2286,7 +2293,7 @@ async function handleDialogResult(params) {
         showError(req.opName + ' failed:\n' + createErr);
         return;
       }
-      state.error = label + ' (3/3) Restoring stash';
+      updateSpinner(label + ' (3/3) Restoring stash');
       const popErr = await gitStashPopAsync(state.cwd);
       await refreshAsync();
       stopSpinner();
@@ -2348,7 +2355,7 @@ async function handleDialogResult(params) {
     (async () => {
       startSpinner('Aborting stale rebase...');
       await gitRebaseAbort(state.cwd);
-      state.error = 'Retrying rebase...';
+      updateSpinner('Retrying rebase...');
       const retryErr = await gitRebaseAsync(state.cwd, ref);
       await refreshAsync();
       stopSpinner();
@@ -2378,10 +2385,10 @@ async function handleDialogResult(params) {
         showError('Stash failed:\n' + stashErr);
         return;
       }
-      state.error = 'Stash & Rebase... (2/3) Rebasing';
+      updateSpinner('Stash & Rebase... (2/3) Rebasing');
       let rebaseErr = await gitRebaseAsync(state.cwd, ref);
       if (rebaseErr && isStaleRebaseError(rebaseErr)) {
-        state.error = 'Stash & Rebase... (2/3) Aborting stale rebase & retrying';
+        updateSpinner('Stash & Rebase... (2/3) Aborting stale rebase & retrying');
         await gitRebaseAbort(state.cwd);
         rebaseErr = await gitRebaseAsync(state.cwd, ref);
       }
@@ -2397,7 +2404,7 @@ async function handleDialogResult(params) {
         return;
       }
       if (rebaseErr) {
-        state.error = 'Stash & Rebase... (3/3) Restoring stash';
+        updateSpinner('Stash & Rebase... (3/3) Restoring stash');
         await gitStashPopAsync(state.cwd);
         await refreshAsync();
         stopSpinner();
@@ -2405,7 +2412,7 @@ async function handleDialogResult(params) {
         showError('Rebase failed:\n' + rebaseErr);
         return;
       }
-      state.error = 'Stash & Rebase... (3/3) Restoring stash';
+      updateSpinner('Stash & Rebase... (3/3) Restoring stash');
       const popErr = await gitStashPopAsync(state.cwd);
       await refreshAsync();
       stopSpinner();

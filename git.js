@@ -19,7 +19,10 @@ async function gitExec(args, cwd, timeout) {
 async function gitExecChecked(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   const ok = !!(result && result.ok);
-  return { ok, text: ok ? (result.stdout || '').replace(/\r\n/g, '\n') : '' };
+  const exitCode = result && result.exit_code !== undefined
+    ? result.exit_code
+    : (result && result.code !== undefined ? result.code : null);
+  return { ok, text: ok ? (result.stdout || '').replace(/\r\n/g, '\n') : '', exitCode };
 }
 
 async function git(args, cwd, timeout) {

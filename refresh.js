@@ -512,11 +512,37 @@ let _cachedMaxFilesDisplayed = 5000;
 let _guiConfigLoaded = false;
 
 // 메타 데이터 캐시 — .git 내부 mtime fingerprint가 동일하면 재호출 생략.
-// 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees, user.* config(글로벌+로컬), ahead/behind.
+// 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees, ahead/behind.
+// user.* config는 글로벌 설정 변경과 일시적 조회 실패가 캐시에 고착되지 않도록 매번 다시 읽는다.
 // status는 워킹트리 변경을 잡아야 하므로 항상 새로 호출한다.
 let _metaCache = null;
 let _metaFingerprint = '';
 let _metaCacheCwd = '';
+
+function configLookupCompleted(result) {
+  // `git config --get-regexp` uses exit 1 for a valid "no matching key" result.
+  return !!(result && (result.ok || result.exitCode === 1));
+}
+
+async function queryCommitterConfig(cwd) {
+  const [effective, local] = await Promise.all([
+    gitExecChecked(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], cwd),
+    gitExecChecked(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], cwd),
+  ]);
+  return {
+    ok: configLookupCompleted(effective) && configLookupCompleted(local),
+    effective: effective.text,
+    local: local.text,
+  };
+}
+
+async function readCommitterConfig(cwd) {
+  let result = await queryCommitterConfig(cwd);
+  // A failed host/Git call used to look like an unset config and was cached.
+  // Retry once so a brief startup failure does not leave placeholders behind.
+  if (!result.ok) result = await queryCommitterConfig(cwd);
+  return result;
+}
 
 // 브랜치가 올라가 있는 리모트 이름 — 없으면 '' (아직 push 하지 않은 로컬 전용 브랜치).
 // upstream이 우선이지만, 다른 도구가 `git push origin HEAD`처럼 추적 설정 없이 올린 브랜치는
@@ -929,10 +955,10 @@ async function refreshAsync(options = {}) {
 
   const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
   if (!metadataOnly) state.ignoredLoading = includeIgnored;
-  let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw;
-  // refs/worktrees 조회가 실제로 성공했는지 — 실패를 "0건"으로 오인해 목록을 지우지 않기 위한 플래그.
+  let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw;
+  // refs/remote/worktrees 조회가 실제로 성공했는지 — 실패를 "0건"으로 오인해 목록을 지우지 않기 위한 플래그.
   // 캐시에는 성공한 결과만 넣으므로 캐시 적중 경로는 항상 true다.
-  let refsOk = true, worktreesOk = true;
+  let refsOk = true, remoteNamesOk = true, worktreesOk = true;
   const statusPromise = metadataOnly
     ? Promise.resolve(null)
     : gitStatusSplit(state.cwd, {
@@ -941,36 +967,42 @@ async function refreshAsync(options = {}) {
         maxFilesDisplayed,
         timeout: statusTimeout,
       });
+  const committerConfigPromise = readCommitterConfig(state.cwd);
+  let committerConfig;
   if (metaHit) {
-    statusSnapshot = await statusPromise;
+    [statusSnapshot, committerConfig] = await Promise.all([statusPromise, committerConfigPromise]);
     stashRaw = _metaCache.stashRaw;
     refsRaw = _metaCache.refsRaw;
     remoteNamesRaw = _metaCache.remoteNamesRaw;
     worktrees = _metaCache.worktrees;
-    userCfgRaw = _metaCache.userCfgRaw;
-    localUserCfgRaw = _metaCache.localUserCfgRaw;
     aheadBehindRaw = _metaCache.aheadBehindRaw;
   } else {
-    let refsRes;
-    [statusSnapshot, stashRaw, refsRes, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw] =
+    let refsRes, remoteNamesRes;
+    [statusSnapshot, stashRaw, refsRes, remoteNamesRes, worktrees, aheadBehindRaw, committerConfig] =
       await Promise.all([
         statusPromise,
         gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
         gitExecChecked(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd, REFS_TIMEOUT_MS),
-        gitExec(['--no-optional-locks', 'remote'], state.cwd),
+        gitExecChecked(['--no-optional-locks', 'remote'], state.cwd),
         gitWorktrees(state.cwd),
-        gitExec(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], state.cwd),
-        gitExec(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], state.cwd),
         gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
+        committerConfigPromise,
       ]);
     refsOk = refsRes.ok;
     refsRaw = refsRes.text;
+    // 일시적인 host/Git 실패를 "리모트 0개"로 캐시하면 원격 브랜치는 보이는데
+    // Fetch/Pull만 막히는 상태가 된다. 한 번 더 읽고, 그래도 실패하면 이전 값을 보존한다.
+    if (!remoteNamesRes.ok) {
+      remoteNamesRes = await gitExecChecked(['--no-optional-locks', 'remote'], state.cwd);
+    }
+    remoteNamesOk = remoteNamesRes.ok;
+    remoteNamesRaw = remoteNamesRes.text;
     // 정상 저장소의 worktree list는 최소 메인 워크트리 한 줄을 낸다. 빈 결과는 조회 실패다.
     worktreesOk = worktrees.length > 0;
     // 실패한 조회 결과를 캐시에 넣으면 fingerprint(.git 내부 mtime)가 바뀔 때까지 빈 목록이
     // 계속 재사용된다. 브랜치가 한참 동안 사라져 보이는 원인이므로 성공했을 때만 캐시한다.
-    if (fingerprint && refsOk && worktreesOk) {
-      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, userCfgRaw, localUserCfgRaw, aheadBehindRaw };
+    if (fingerprint && refsOk && remoteNamesOk && worktreesOk) {
+      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw };
       _metaFingerprint = fingerprint;
       _metaCacheCwd = state.cwd;
     }
@@ -1029,7 +1061,10 @@ async function refreshAsync(options = {}) {
   }
 
   // remotes (remote 이름 목록 — 브랜치 없이 remote만 있을 수 있어 별도 조회)
-  state.remotes = remoteNamesRaw.trim() ? remoteNamesRaw.trim().split('\n').filter(Boolean) : [];
+  // 조회 실패를 실제 0개와 구분해, 화면에 이미 보이던 리모트와 버튼 상태를 지킨다.
+  if (remoteNamesOk) {
+    state.remotes = remoteNamesRaw.trim() ? remoteNamesRaw.trim().split('\n').filter(Boolean) : [];
+  }
 
   if (worktreesOk) {
     state.worktrees = worktrees;
@@ -1140,12 +1175,14 @@ async function refreshAsync(options = {}) {
     }
     return out;
   };
-  const userCfg = parseUserCfg(userCfgRaw);
-  const localUserCfg = parseUserCfg(localUserCfgRaw);
-  state.committerName = userCfg.name;
-  state.committerEmail = userCfg.email;
-  state.committerNameIsLocal = !!localUserCfg.name;
-  state.committerEmailIsLocal = !!localUserCfg.email;
+  if (committerConfig.ok) {
+    const userCfg = parseUserCfg(committerConfig.effective);
+    const localUserCfg = parseUserCfg(committerConfig.local);
+    state.committerName = userCfg.name;
+    state.committerEmail = userCfg.email;
+    state.committerNameIsLocal = !!localUserCfg.name;
+    state.committerEmailIsLocal = !!localUserCfg.email;
+  }
 
   // ahead/behind
   // upstream이 없으면 `@{u}` 조회가 실패해 빈 값이 온다. 그래도 같은 이름의 원격 브랜치가 있으면

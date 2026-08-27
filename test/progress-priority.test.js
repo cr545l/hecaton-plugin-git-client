@@ -37,7 +37,7 @@ process.stdout.write = (chunk, ...rest) => {
 
 const { state } = require('../state');
 const { formatProgressStatus, applyWindowTitle, BRAILLE_FRAMES } = require('../title');
-const { startSpinner, stopSpinner, releaseSpinner, isSpinning } = require('../spinner');
+const { startSpinner, updateSpinner, stopSpinner, releaseSpinner, isSpinning } = require('../spinner');
 
 function resetState() {
   titles.length = 0;
@@ -183,4 +183,16 @@ test('스피너 프레임이 돌면 타이틀도 따라 바뀐다', () => {
   assert.notEqual(t0, t1, '프레임이 바뀌면 새 제목이 나가야 애니메이션이 된다');
   assert.equal(t0, BRAILLE_FRAMES[0] + ' Fetching... | main');
   assert.equal(t1, BRAILLE_FRAMES[1] + ' Fetching... | main');
+});
+
+test('복합 작업의 단계 변경은 다음 타이머를 기다리지 않고 타이틀에 반영된다', () => {
+  resetState();
+  startSpinner('Stash & Rebase... (1/3) Stashing');
+  const emittedBeforeUpdate = titles.length;
+
+  updateSpinner('Stash & Rebase... (2/3) Rebasing');
+
+  assert.equal(titles.length, emittedBeforeUpdate + 1);
+  assert.match(titles[titles.length - 1], /\(2\/3\) Rebasing/);
+  stopSpinner();
 });

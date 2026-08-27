@@ -58,6 +58,15 @@ function startSpinner(msg) {
   render();
 }
 
+// 여러 Git 명령으로 이어지는 작업은 단계가 바뀐 직후 곧바로 다음 명령을 시작한다.
+// 메시지만 바꾸고 80ms 타이머에 맡기면 타이틀은 그동안 직전 단계를 가리키므로,
+// 상태 변경과 타이틀 반영을 한 동작으로 묶는다. 화면 전체는 다시 그릴 필요가 없다.
+function updateSpinner(msg) {
+  if (!state.spinnerActive) return;
+  state.error = msg;
+  updateTitle();
+}
+
 function stopSpinner() {
   state.spinnerActive = false;
   state.error = null;
@@ -148,4 +157,4 @@ function showToast(msg, ttlMs = 1000) {
   }, ttlMs);
 }
 
-module.exports = { BRAILLE_FRAMES, startSpinner, stopSpinner, acquireSpinner, releaseSpinner, isSpinning, isWriteOpActive, guardWriteOp, flashBusy, showToast, beginPanelLoading, endPanelLoading, panelLoadingLabel };
+module.exports = { BRAILLE_FRAMES, startSpinner, updateSpinner, stopSpinner, acquireSpinner, releaseSpinner, isSpinning, isWriteOpActive, guardWriteOp, flashBusy, showToast, beginPanelLoading, endPanelLoading, panelLoadingLabel };

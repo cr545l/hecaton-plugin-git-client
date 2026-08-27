@@ -45,7 +45,7 @@ function worktreeRaw(cwd) {
 function installHost(cwd) {
   // mtime은 메타 캐시 지문의 재료다. 값을 바꾸면 캐시 미스가 나 git을 실제로 다시 호출한다
   // — 조회 실패는 캐시가 미스일 때만 일어나므로, 실패 시나리오에는 이 조작이 필요하다.
-  const host = { refsOk: true, worktreeOk: true, refsCalls: 0, mtime: 1000 };
+  const host = { refsOk: true, remoteOk: true, worktreeOk: true, refsCalls: 0, remoteCalls: 0, mtime: 1000 };
 
   hecaton.process.exec = async ({ args }) => {
     const joined = args.join(' ');
@@ -59,7 +59,11 @@ function installHost(cwd) {
       return { ok: true, stdout: worktreeRaw(cwd) };
     }
     if (joined.includes('stash list')) return { ok: true, stdout: '' };
-    if (joined.includes('remote')) return { ok: true, stdout: 'origin\n' };
+    if (joined.endsWith('remote')) {
+      host.remoteCalls++;
+      if (!host.remoteOk) return { ok: false, stdout: '', stderr: 'temporary remote read failure', exit_code: 128 };
+      return { ok: true, stdout: 'origin\n' };
+    }
     if (joined.includes('user.')) return { ok: true, stdout: 'user.name tester\nuser.email t@example.com\n' };
     if (joined.includes('rev-list')) return { ok: true, stdout: '0\t0\n' };
     return { ok: true, stdout: '' };
@@ -124,6 +128,7 @@ test('조회에 성공하면 브랜치/원격/워크트리를 채운다', async 
 
   assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev', 'stale', 'solo']);
   assert.deepEqual(state.remoteBranches, ['origin/dev']);   // origin/HEAD는 제외
+  assert.deepEqual(state.remotes, ['origin']);
   assert.equal(state.branch, 'work5');
   assert.equal(state.worktrees.length, 2);
   assert.equal(host.refsCalls, 1);
@@ -186,6 +191,29 @@ test('for-each-ref 실패 결과는 캐시하지 않아 다음 refresh에서 복
 
   assert.equal(host.refsCalls, 2, '실패분이 캐시됐다면 재조회하지 않는다');
   assert.deepEqual(state.branches.map(b => b.name), ['work5', 'dev', 'stale', 'solo']);
+});
+
+test('remote 조회가 일시 실패해도 기존 목록을 지우거나 실패 결과를 캐시하지 않는다', async () => {
+  const cwd = 'C:/remote-keep';
+  const host = installHost(cwd);
+  resetState(cwd);
+
+  await refreshAsync(OPTS);
+  assert.deepEqual(state.remotes, ['origin']);
+  assert.equal(host.remoteCalls, 1);
+
+  host.remoteOk = false;
+  host.mtime = 2000;   // 캐시 미스 → remote 조회와 즉시 재시도가 모두 실패
+  await refreshAsync(OPTS);
+
+  assert.equal(host.remoteCalls, 3);
+  assert.deepEqual(state.remotes, ['origin'], '조회 실패를 리모트 0개로 오인하면 안 된다');
+
+  host.remoteOk = true;
+  await refreshAsync(OPTS);
+
+  assert.equal(host.remoteCalls, 4, '실패 결과가 캐시됐다면 같은 지문에서 다시 조회하지 않는다');
+  assert.deepEqual(state.remotes, ['origin']);
 });
 
 test('worktree list가 실패해도 기존 워크트리 목록을 지우지 않는다', async () => {

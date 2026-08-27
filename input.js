@@ -10,7 +10,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
   buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
-const { startSpinner, stopSpinner, showToast } = require('./spinner');
+const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinner');
 // 동작 가능 여부는 actions.js 한 곳에서 판정한다 — 화면의 딤 처리와 여기의 차단이
 // 같은 규칙을 봐야 "보이는데 안 눌린다"가 생기지 않는다.
 const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTargets } = require('./actions');
@@ -647,8 +647,10 @@ async function handleKey(key) {
           });
         } else {
           // Pre-check for conflicts before rebasing
+          startSpinner('Checking rebase...');
           const conflictCheck = await gitCheckRebaseConflicts(state.cwd, logItem.ref);
           if (conflictCheck.willConflict) {
+            stopSpinner();
             const fileList = conflictCheck.files.length > 0
               ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
               : '';
@@ -665,7 +667,7 @@ async function handleKey(key) {
             render();
             break;
           }
-          startSpinner('Rebasing...');
+          updateSpinner('Rebasing...');
           gitRebaseAsync(state.cwd, logItem.ref).then(async err => {
             await refreshAsync();
             stopSpinner();
