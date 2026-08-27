@@ -12,9 +12,14 @@
 //   3. dispatch    — 실행 직전에 다시 막고 사유를 알린다 (guardAction)
 // 화면 표시와 실제 차단이 같은 규칙을 보므로 "보이는데 안 된다"가 생길 수 없다.
 //
+// "다른 작업이 도는 중"의 판정은 자원 단위다. 예전에는 불리언 하나였고, 그래서
+// 브랜치 리네임처럼 ref 만 옮기는 작업이 도는 동안에도 스테이징까지 함께 막혔다.
+// 지금은 작업이 붙잡는 자원과 동작이 필요로 하는 자원이 겹칠 때만 막는다(SCOPE 참고).
+//
 // 규칙을 더할 때의 원칙:
 //   - 기본은 차단이다. 여기 등록되지 않은 id 는 쓰기로 보고 공통 전제를 적용한다.
 //     읽기 동작을 빠뜨리면 잠깐 과하게 막힐 뿐이지만, 쓰기를 통과시키면 작업이 겹친다.
+//   - 자원도 마찬가지다. ACTION_SCOPES 에 적지 않은 동작은 전부를 필요로 한다고 본다.
 //   - 단, 판단 근거가 불확실하면 열어 둔다(fail open). 예를 들어 refs 조회가 실패해
 //     브랜치 목록이 비어 있는 상태를 detached 로 단정하면 멀쩡한 push 까지 막힌다.
 const { state, ui } = require('./state');
@@ -43,6 +48,109 @@ const REASON = {
   NOT_LOCKED: 'Index is not locked',
   PARTIAL_CONFLICT: 'Select every conflict to apply',
 };
+
+// ── 자원 축 ──
+// "무언가 돌고 있으니 전부 막는다"가 아니라 "겹치는 것만 막는다"로 판정하기 위한 축이다.
+// 진행 중인 작업은 자기가 붙잡는 자원을(spinner.startSpinner 의 scopes),
+// 동작은 자기가 필요로 하는 자원을(아래 ACTION_SCOPES) 밝히고, 둘이 겹칠 때만 막는다.
+//
+// 겹치지 않으면 git 도 서로를 방해하지 않는다 — `branch -m`/`fetch`/`push`/`config` 는
+// .git/index.lock 을 잡지 않고, 상태 조회는 --no-optional-locks 로 돌린다.
+const SCOPE = {
+  INDEX: 'index',        // .git/index — 스테이징 영역
+  WORKTREE: 'worktree',  // 작업 디렉터리의 파일 내용
+  REFS: 'refs',          // 로컬 ref(HEAD 포함)와 reflog
+  REMOTE: 'remote',      // 리모트, remote-tracking ref
+  STASH: 'stash',        // refs/stash
+  CONFIG: 'config',      // .git/config
+};
+const ALL_SCOPES = Object.freeze(Object.values(SCOPE));
+const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
+
+// ── 동작이 필요로 하는 자원 ──
+// 여기 없는 id 는 전부 필요한 것으로 본다(ALL_SCOPES). 빠뜨리면 예전처럼 조금 과하게
+// 막힐 뿐이지만, 실제보다 좁게 적으면 겹치는 작업이 함께 돌아 index.lock 을 다툰다.
+//
+// 대상 선정에 쓰는 자원도 포함해야 한다. 예를 들어 Unstage 는 인덱스만 고치지만,
+// 무엇을 unstage 할지는 화면의 Staged 목록에서 고른다 — 커밋이 그 목록을 갈아엎는
+// 동안 눌리면 이미 사라진 대상에 명령을 쏘게 되므로 커밋과 같은 INDEX 를 문다.
+//
+// ★ 여기에 좁게 적어도 되는 것은 "그 동작이 시작하는 작업도 같은 자원으로 등록될 때"
+//    뿐이다(startSpinner 의 scopes). 동작만 좁고 작업이 전부를 붙잡으면, 좁은 판정을
+//    통과해 시작된 전면 점유 작업이 이미 돌던 작업과 겹치고 — 그러면 끝낼 때 서로를
+//    잘못 끝낸다. 그래서 체크아웃·머지·리베이스·커밋처럼 작업 쪽이 아직 자원을 밝히지
+//    않은 동작은 일부러 여기 넣지 않았다.
+const ACTION_SCOPES = {
+  // 인덱스만 — 워킹트리의 파일 내용은 그대로다
+  stageAll: [INDEX], stageSelected: [INDEX],
+  unstageAll: [INDEX], unstageSelected: [INDEX],
+  file_stage: [INDEX], file_unstage: [INDEX], file_stage_all: [INDEX],
+  'hunk-apply': [INDEX],
+  unlockIndex: [INDEX],
+
+  // 워킹트리의 파일을 고쳐 인덱스에 반영
+  file_accept_ours: [INDEX, WORKTREE], file_accept_theirs: [INDEX, WORKTREE],
+  // .gitignore 파일만 고친다
+  file_ignore_name: [WORKTREE], file_ignore_ext: [WORKTREE], file_ignore_path: [WORKTREE],
+
+  // 리모트만 — 로컬 인덱스·워킹트리를 건드리지 않는다
+  'git-fetch': [REMOTE],
+  'git-push': [REMOTE], branch_push: [REMOTE], branch_push_pr: [REMOTE],
+  branch_force_push: [REMOTE],
+  branch_delete_remote: [REMOTE], remotebranch_delete_remote: [REMOTE],
+  remote_push_tags: [REMOTE],
+  remote_prune: [REMOTE, REFS],
+
+  // 로컬 ref 만
+  branch_rename: [REFS, CONFIG],
+  branch_delete: [REFS],
+  new_tag: [REFS], branch_new_tag: [REFS],
+
+  // 설정만
+  branch_track: [CONFIG], branch_untrack: [CONFIG],
+  'committer-name': [CONFIG], 'committer-email': [CONFIG],
+  'reset-committer-name': [CONFIG], 'reset-committer-email': [CONFIG],
+  remote_add: [CONFIG], remote_remove: [CONFIG], remote_set_url: [CONFIG],
+  remote_rename: [CONFIG, REMOTE],
+
+  // 스태시 목록만 — 저장/적용(git-stash, stash_apply)은 워킹트리를 오가므로 여기 없다
+  stash_drop: [STASH], stash_rename: [STASH],
+};
+
+const ACTION_SCOPE_PREFIXES = [
+  ['push_to_remote:', [REMOTE]],
+  ['tag_push:', [REMOTE]],
+  ['tag_delete_remote:', [REMOTE]],
+  ['tag_delete:', [REFS]],
+  ['branch_track:', [CONFIG]],
+];
+
+function scopesOf(id) {
+  const known = ACTION_SCOPES[id];
+  if (known) return known;
+  for (const [prefix, scopes] of ACTION_SCOPE_PREFIXES) {
+    if (id.startsWith(prefix)) return scopes;
+  }
+  return ALL_SCOPES;
+}
+
+// 지금 이 동작과 자원이 겹치는 작업 — 없으면 null.
+function busyBlocker(id, s) {
+  if (s.ops.length === 0) return null;
+  const need = scopesOf(id);
+  return s.ops.find(op => (op.scopes || ALL_SCOPES).some(sc => need.includes(sc))) || null;
+}
+
+// 진행 중인 작업 목록. 자원을 밝히지 않은 채 진행 표시만 켜진 경로(스코프를 아직
+// 지정하지 않은 호출부, 상태를 직접 세팅하는 테스트)는 무엇을 붙잡고 있는지 알 수
+// 없으므로 전부 붙잡고 있다고 본다 — 판단이 불확실할 때는 막는 쪽이 안전하다.
+const UNSCOPED_OP = Object.freeze({ label: '', scopes: ALL_SCOPES });
+function activeOps() {
+  const ops = Array.isArray(state.activeOps) ? state.activeOps : [];
+  if (ops.length > 0) return ops;
+  if (state.spinnerActive || state.settlingWrite) return [UNSCOPED_OP];
+  return [];
+}
 
 function operationLabel(type) {
   switch (type) {
@@ -117,11 +225,13 @@ function snapshot() {
   const isUnmerged = (f) => f && f.status === 'U';
   return {
     loading: !!state.loading,
-    // git 명령이 도는 동안(spinnerActive)만이 아니라, 그 결과를 다시 읽어오는 뒷정리
-    // 갱신이 끝날 때까지(settlingWrite) 한 동작으로 본다. 창 타이틀도 그동안 계속
-    // "Committing..."을 보여 주므로, 여기서 풀어 버리면 "끝났다는 말이 없는데 버튼은
-    // 살아 있는" 상태가 되고, 실제로도 커밋 직전의 낡은 목록에 대고 명령을 쏘게 된다.
-    busy: !!state.spinnerActive || !!state.settlingWrite,
+    // 진행 중인 작업 목록. git 명령이 도는 동안(running)만이 아니라, 그 결과를 다시
+    // 읽어오는 뒷정리 갱신이 끝날 때까지(settling) 한 동작으로 남는다. 창 타이틀도
+    // 그동안 계속 "Committing..."을 보여 주므로, 여기서 풀어 버리면 "끝났다는 말이
+    // 없는데 버튼은 살아 있는" 상태가 되고, 실제로도 커밋 직전의 낡은 목록에 대고
+    // 명령을 쏘게 된다. 다만 막는 대상은 그 작업과 자원이 겹치는 동작뿐이다 —
+    // 리네임(ref)이 도는 동안 스테이징(index)까지 세울 이유는 없다.
+    ops: activeOps(),
     repo: !!state.isGitRepo,
     locked: !!state.indexLocked,
     op,
@@ -319,7 +429,7 @@ function hasCommitSelection() {
 // 어떤 쓰기 동작이든 먼저 통과해야 하는 공통 전제.
 function baseReason(id, s) {
   if (s.loading) return REASON.LOADING;
-  if (s.busy) return REASON.BUSY;
+  if (busyBlocker(id, s)) return REASON.BUSY;
   if (!s.repo && !REPO_FREE_ACTIONS.has(id)) return REASON.NO_REPO;
   if (s.locked && !isIndexFree(id)) return REASON.INDEX_LOCKED;
   return null;
@@ -339,7 +449,7 @@ function disabledReason(id, extra, snap) {
   // 다른 어떤 규칙보다 먼저 본다.
   if (REQUIRES_OPERATION.has(id)) {
     if (!s.op) return REASON.NO_OPERATION;
-    if (s.busy) return REASON.BUSY;
+    if (busyBlocker(id, s)) return REASON.BUSY;
     return null;
   }
 
@@ -429,6 +539,10 @@ function decorateMenuItems(items, snap) {
 
 module.exports = {
   REASON,
+  SCOPE,
+  ALL_SCOPES,
+  ACTION_SCOPES,
+  scopesOf,
   isReadOnlyAction,
   snapshot,
   context,

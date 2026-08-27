@@ -69,13 +69,20 @@ const state = {
   freshTimeWindowMode: false,
   ahead: 0,
   behind: 0,
-  spinnerActive: false,  // 쓰기 작업(커밋/푸시/스테이징 등) 진행 중 — actions.js 판정의 busy 조건
+  // ── 진행 중인 쓰기 작업 목록 ──
+  // [{ label, scopes: string[], phase: 'running' | 'settling' }]
+  // 예전에는 "무언가 돌고 있다"는 사실만 불리언 하나로 들고 있었다. 그래서 브랜치
+  // 리네임처럼 ref 만 건드리는 작업이 도는 동안에도 스테이징까지 전부 막혔다.
+  // 지금은 각 작업이 무엇을 붙잡고 있는지(scopes)를 함께 들고, actions.js 가 그것과
+  // 겹치는 동작만 막는다. spinner.js 가 유일한 관리자이며 아래 두 플래그를 파생시킨다.
+  activeOps: [],
+  spinnerActive: false,  // activeOps 에 running 이 하나라도 있는가 (파생값)
   // 쓰기 작업의 git 명령은 끝났지만 그 결과를 다시 읽어오는 갱신이 아직 도는 중.
   // 이 구간의 목록(staged/unstaged/branches)은 커밋 직전 상태 그대로라, 여기에 대고
   // 새 쓰기를 걸면 사라진 대상을 상대로 명령을 쏘게 된다. 창 타이틀도 이 동안 계속
   // "Committing..."을 보여 주므로, 사용자 눈에도 아직 끝나지 않은 한 동작이다.
-  // → actions.js 는 spinnerActive 와 똑같이 busy 로 취급한다.
-  settlingWrite: false,
+  // → 뒷정리 갱신도 원래 작업과 같은 scopes 를 물려받은 activeOps 항목으로 남는다.
+  settlingWrite: false,  // activeOps 에 settling 이 하나라도 있는가 (파생값)
   busyFlashUntil: 0,     // 쓰기 작업 중 차단된 입력 피드백 표시 만료 시각 (ms epoch)
   spinnerFrame: 0,
   // 읽기 작업(diff/상세 로드)의 진행 표시 — 쓰기 작업의 spinnerActive 와 달리 입력을 막지 않고

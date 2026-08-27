@@ -11,7 +11,7 @@ const FRESH_TIME_WINDOWS = [
 ];
 const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
-const { acquireSpinner, releaseSpinner, beginPanelLoading, endPanelLoading } = require('./spinner');
+const { acquireSpinner, releaseSpinner, beginPanelLoading, endPanelLoading, startSettleOp, endSettleOp } = require('./spinner');
 const { applyWindowTitle } = require('./title');
 const { stripDiffFileHeaders } = require('./text');
 
@@ -291,9 +291,6 @@ let _freshDetailSeq = 0;
 let _logSeq = 0;
 let _freshSeq = 0;
 let _backgroundRefreshCount = 0;
-// 그중 "쓰기 작업의 뒷정리"인 갱신만 따로 센다 — 이름 없는 워처 갱신이 끼어들어도
-// 쓰기 뒷정리가 끝나는 시점을 잘못 잡지 않는다.
-let _settleRefreshCount = 0;
 
 function renderNow() {
   require('./render').render();
@@ -316,9 +313,13 @@ function refreshInBackground(options = {}, followup = {}) {
   // 그때까지 목록은 작업 직전 상태 그대로이므로 새 쓰기를 받으면 안 된다 — 예를 들어
   // 커밋 직후 이 구간에 Unstage 를 누르면 이미 커밋된 53개 파일을 상대로 명령이 나간다.
   // 낙관적 갱신(applyStageToState 등)으로 목록을 이미 맞춰 둔 호출부는 넘기지 않는다.
+  //
+  // 막을 범위는 원래 작업이 붙잡던 자원 그대로다 — 낡는 것은 그 작업이 바꾼 부분뿐이다.
+  // 리네임 뒷정리 중의 파일 목록은 낡지 않았으므로 스테이징은 그대로 열려 있어야 한다.
+  // scopes 를 따로 넘기지 않으면 아직 살아 있는 원래 작업의 것을 물려받는다.
+  let settleOp = null;
   if (followup.settle) {
-    _settleRefreshCount++;
-    state.settlingWrite = true;
+    settleOp = startSettleOp(followup.message || state.refreshMessage, followup.scopes);
   }
   acquireSpinner();
   renderNow();
@@ -334,10 +335,7 @@ function refreshInBackground(options = {}, followup = {}) {
     })
     .finally(() => {
       _backgroundRefreshCount = Math.max(0, _backgroundRefreshCount - 1);
-      if (followup.settle) {
-        _settleRefreshCount = Math.max(0, _settleRefreshCount - 1);
-        if (_settleRefreshCount === 0) state.settlingWrite = false;
-      }
+      if (settleOp) endSettleOp(settleOp);
       // releaseSpinner가 마지막 updateTitle을 부르므로, 타이틀에 남을 처리상태
       // 플래그를 먼저 내려야 스피너가 사라진 타이틀로 원복된다.
       if (_backgroundRefreshCount === 0) {

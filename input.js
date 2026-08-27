@@ -13,7 +13,10 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
 const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinner');
 // 동작 가능 여부는 actions.js 한 곳에서 판정한다 — 화면의 딤 처리와 여기의 차단이
 // 같은 규칙을 봐야 "보이는데 안 눌린다"가 생기지 않는다.
-const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTargets } = require('./actions');
+const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTargets, SCOPE } = require('./actions');
+// 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
+// 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
+const { INDEX, REMOTE } = SCOPE;
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
 const { render, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
@@ -140,7 +143,7 @@ function pushCurrentBranch() {
     showPushNameMismatchDialog(mismatch);
     return;
   }
-  startSpinner('Pushing...');
+  const pushOp = startSpinner('Pushing...', [REMOTE]);
   const pushPromise = currentBranch && !currentBranch.upstream
     ? (state.remotes.length > 0
         ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
@@ -148,14 +151,14 @@ function pushCurrentBranch() {
     : gitPushAsync(state.cwd);
   pushPromise.then(async err => {
     if (err) {
-      stopSpinner();
+      stopSpinner(pushOp);
       showErrorDialog(err);
       render();
     } else {
       // 후속 갱신까지가 "Push" 한 동작이다 — 라벨을 이어 주고, 스피너를 넘겨준 뒤 내린다
       // (afterGitOp과 같은 이유: 사이에 참조가 0이 되면 제목이 한 번 깜빡인다).
-      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: 'Pushing...', settle: true });
-      stopSpinner();
+      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: 'Pushing...', settle: true, scopes: pushOp.scopes });
+      stopSpinner(pushOp);
     }
   });
 }
@@ -288,11 +291,11 @@ async function runStageSelection(isStage) {
   const files = (isStage ? stageableTargets() : unstageableTargets()).map(t => t.file);
   if (files.length === 0) return;
   state.selectedFiles.clear();
-  startSpinner(isStage ? 'Staging...' : 'Unstaging...');
+  const op = startSpinner(isStage ? 'Staging...' : 'Unstaging...', [INDEX]);
   const err = isStage
     ? await gitStageMultiple(state.cwd, files)
     : await gitUnstageMultiple(state.cwd, files);
-  finishStageOp(isStage, files, err);
+  finishStageOp(isStage, files, err, op);
 }
 
 async function runStageAll(isStage) {
@@ -301,13 +304,15 @@ async function runStageAll(isStage) {
     .map(item => item.file);
   if (files.length === 0) return;
   state.selectedFiles.clear();
-  startSpinner(isStage ? 'Staging all...' : 'Unstaging all...');
+  const op = startSpinner(isStage ? 'Staging all...' : 'Unstaging all...', [INDEX]);
   const err = isStage ? await gitStageAll(state.cwd) : await gitUnstageAll(state.cwd);
-  finishStageOp(isStage, files, err);
+  finishStageOp(isStage, files, err, op);
 }
 
-function finishStageOp(isStage, files, err) {
-  stopSpinner();
+// op 은 startSpinner 가 돌려준 작업 표다 — 인덱스만 붙잡는 스테이징은 fetch 같은 다른
+// 작업과 겹쳐 돌 수 있으므로, 끝낼 때 자기 것을 지목해야 상대를 대신 끝내지 않는다.
+function finishStageOp(isStage, files, err, op) {
+  stopSpinner(op);
   if (err) {
     showErrorDialog(err);
     render();
@@ -330,16 +335,16 @@ async function applyHunkAction(hunkIdx) {
     return;
   }
   const isStagedView = item.type === 'staged';
-  startSpinner(isStagedView ? 'Unstaging hunk...' : 'Staging hunk...');
+  const hunkOp = startSpinner(isStagedView ? 'Unstaging hunk...' : 'Staging hunk...', [INDEX]);
   const err = await gitApplyPatchText(state.cwd, patch, { cached: true, reverse: isStagedView });
   if (err) {
-    stopSpinner();
+    stopSpinner(hunkOp);
     showErrorDialog((isStagedView ? 'Unstage hunk' : 'Stage hunk') + ' failed:\n' + err);
     render();
     return;
   }
   await refreshAsync({ statusOnly: true });
-  stopSpinner();
+  stopSpinner(hunkOp);
   ui.hoveredDiffHunkIdx = -1;
   updateDiff();
   render();
@@ -1040,8 +1045,8 @@ async function handleNameInput(key) {
       state.mode = 'normal';
       state.inputBuffer = '';
       state.inputTarget = '';
-      startSpinner('Branch...');
-      await runCreateBranch(name, startPoint, 'Branch');
+      const branchOp = startSpinner('Branch...');
+      await runCreateBranch(name, startPoint, 'Branch', branchOp);
       return;
     }
     let err;
@@ -1694,15 +1699,15 @@ async function handleMouseData(data) {
             } else if (zone.action === 'git-fetch') {
               handled = true;
               if (!guardAction('git-fetch')) break;
-              startSpinner('Fetching...');
+              const fetchOp = startSpinner('Fetching...', [REMOTE]);
               gitFetchAsync(state.cwd).then(async err => {
                 if (err) {
-                  stopSpinner();
+                  stopSpinner(fetchOp);
                   showErrorDialog(err);
                   render();
                 } else {
-                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...', settle: true });
-                  stopSpinner();
+                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...', settle: true, scopes: fetchOp.scopes });
+                  stopSpinner(fetchOp);
                 }
               });
               handled = true;
@@ -2201,9 +2206,9 @@ async function handleMouseData(data) {
               const item = buildFileList()[fileIdx];
               const isUnstage = item && item.type === 'staged';
               if (item && item.type !== 'ignored' && guardAction(isUnstage ? 'unstageSelected' : 'stageSelected')) {
-                startSpinner(isUnstage ? 'Unstaging...' : 'Staging...');
+                const dblOp = startSpinner(isUnstage ? 'Unstaging...' : 'Staging...', [INDEX]);
                 (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file))
-                  .then(err => finishStageOp(!isUnstage, [item.file], err));
+                  .then(err => finishStageOp(!isUnstage, [item.file], err, dblOp));
               }
               ui.lastClickFileIdx = -1;
               ui.lastClickTime = 0;

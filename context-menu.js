@@ -39,7 +39,10 @@ const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
 // 메뉴를 만들 때(decorateMenuItems)와 실행할 때(guardAction)가 같은 표를 보므로,
 // "메뉴에선 살아 있는데 눌러도 안 되는" 어긋남이 생기지 않는다.
-const { guardAction, decorateMenuItems } = require('./actions');
+const { guardAction, decorateMenuItems, SCOPE } = require('./actions');
+// 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
+// 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
+const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
 
 // 커밋 하나에 달린 태그 수만큼 서브메뉴가 늘어나므로 상한을 둔다.
 // 배경은 REF_INLINE_MAX 주석과 test/menu-payload.test.js 참고.
@@ -662,9 +665,9 @@ async function handleContextMenuAction(actionId) {
       showError('No branch to push');
       return;
     }
-    startSpinner('Pushing to ' + remote + '...');
+    const pushOp = startSpinner('Pushing to ' + remote + '...', [REMOTE]);
     gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-      await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true });
+      await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, pushOp);
     });
     return;
   }
@@ -685,8 +688,8 @@ async function handleContextMenuAction(actionId) {
         break;
       case 'remote_prune': {
         if (!targetRemote) break;
-        startSpinner('Pruning...');
-        gitRemotePruneAsync(state.cwd, targetRemote).then(async err => { await afterGitOp(err, 'Prune', { metadataOnly: true }); });
+        const pruneOp = startSpinner('Pruning...', [REMOTE, REFS]);
+        gitRemotePruneAsync(state.cwd, targetRemote).then(async err => { await afterGitOp(err, 'Prune', { metadataOnly: true }, pruneOp); });
         break;
       }
       case 'remote_push_tags': {
@@ -831,8 +834,8 @@ async function handleContextMenuAction(actionId) {
     const tagRemote = state.remotes[0] || 'origin';
     if (!tagName) return;
     if (actionId.startsWith('tag_push:')) {
-      startSpinner('Pushing tag...');
-      gitPushTagAsync(state.cwd, tagRemote, tagName).then(async err => { await afterGitOp(err, 'Push tag', { metadataOnly: true }); });
+      const tagPushOp = startSpinner('Pushing tag...', [REMOTE]);
+      gitPushTagAsync(state.cwd, tagRemote, tagName).then(async err => { await afterGitOp(err, 'Push tag', { metadataOnly: true }, tagPushOp); });
       return;
     }
     if (actionId.startsWith('tag_delete_remote:')) {
@@ -922,14 +925,14 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
           if (files.length > 0) {
-            startSpinner('Staging...');
+            const stageOp = startSpinner('Staging...', [INDEX]);
             const err = await gitStageMultiple(state.cwd, files);
             if (err) {
-              stopSpinner();
+              stopSpinner(stageOp);
               showError(err);
               render();
             } else {
-              stopSpinner();
+              stopSpinner(stageOp);
               applyStageToState(files);
               refreshInBackground({ statusOnly: true });
             }
@@ -940,14 +943,14 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
           if (files.length > 0) {
-            startSpinner('Unstaging...');
+            const unstageOp = startSpinner('Unstaging...', [INDEX]);
             const err = await gitUnstageMultiple(state.cwd, files);
             if (err) {
-              stopSpinner();
+              stopSpinner(unstageOp);
               showError(err);
               render();
             } else {
-              stopSpinner();
+              stopSpinner(unstageOp);
               applyUnstageToState(files);
               refreshInBackground({ statusOnly: true });
             }
@@ -995,51 +998,51 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_accept_ours': {
-        startSpinner('Accepting ours...');
+        const oursOp = startSpinner('Accepting ours...', [INDEX, WORKTREE]);
         (async () => {
           const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
           for (const f of files) {
             const err = await gitCheckoutOurs(state.cwd, f);
-            if (err) { stopSpinner(); showError(err); render(); return; }
+            if (err) { stopSpinner(oursOp); showError(err); render(); return; }
             const stageErr = await gitStageAsync(state.cwd, f);
-            if (stageErr) { stopSpinner(); showError(stageErr); render(); return; }
+            if (stageErr) { stopSpinner(oursOp); showError(stageErr); render(); return; }
           }
-          await afterGitOp(null);
+          await afterGitOp(null, 'Accept ours', {}, oursOp);
         })();
         break;
       }
       case 'file_accept_theirs': {
-        startSpinner('Accepting theirs...');
+        const theirsOp = startSpinner('Accepting theirs...', [INDEX, WORKTREE]);
         (async () => {
           const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
           for (const f of files) {
             const err = await gitCheckoutTheirs(state.cwd, f);
-            if (err) { stopSpinner(); showError(err); render(); return; }
+            if (err) { stopSpinner(theirsOp); showError(err); render(); return; }
             const stageErr = await gitStageAsync(state.cwd, f);
-            if (stageErr) { stopSpinner(); showError(stageErr); render(); return; }
+            if (stageErr) { stopSpinner(theirsOp); showError(stageErr); render(); return; }
           }
-          await afterGitOp(null);
+          await afterGitOp(null, 'Accept theirs', {}, theirsOp);
         })();
         break;
       }
       case 'file_stage_all': {
         const allFiles = [...state.unstaged.map(f => f.file), ...state.untracked.map(f => f.file)];
         if (allFiles.length === 0) break;
-        startSpinner('Staging all...');
+        const stageAllOp = startSpinner('Staging all...', [INDEX]);
         const err = await gitStageAll(state.cwd);
         if (err) {
-          stopSpinner();
+          stopSpinner(stageAllOp);
           showError(err);
           render();
         } else {
-          stopSpinner();
+          stopSpinner(stageAllOp);
           applyStageToState(allFiles);
           refreshInBackground({ statusOnly: true });
         }
         break;
       }
       case 'file_ignore_name': {
-        startSpinner('Ignoring...');
+        const ignoreNameOp = startSpinner('Ignoring...', [WORKTREE]);
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -1047,7 +1050,7 @@ async function handleContextMenuAction(actionId) {
           const oneErr = await gitIgnorePattern(state.cwd, pattern);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore');
+        await afterGitOp(err, 'Ignore', {}, ignoreNameOp);
         break;
       }
       case 'file_ignore_ext': {
@@ -1061,17 +1064,17 @@ async function handleContextMenuAction(actionId) {
           showError('No extension to ignore');
           break;
         }
-        startSpinner('Ignoring...');
+        const ignoreExtOp = startSpinner('Ignoring...', [WORKTREE]);
         let err = null;
         for (const ext of exts) {
           const oneErr = await gitIgnorePattern(state.cwd, '*' + ext);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore');
+        await afterGitOp(err, 'Ignore', {}, ignoreExtOp);
         break;
       }
       case 'file_ignore_path': {
-        startSpinner('Ignoring...');
+        const ignorePathOp = startSpinner('Ignoring...', [WORKTREE]);
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -1079,7 +1082,7 @@ async function handleContextMenuAction(actionId) {
           const oneErr = await gitIgnorePattern(state.cwd, '/' + relPath);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore');
+        await afterGitOp(err, 'Ignore', {}, ignorePathOp);
         break;
       }
       case 'file_stash_one': {
@@ -1147,8 +1150,8 @@ async function handleContextMenuAction(actionId) {
         gitCheckoutRefAsync(state.cwd, localName).then(async err => { await afterGitOp(err, 'Checkout'); });
         break;
       case 'remotebranch_checkout_tracking': {
-        startSpinner('Checking out...');
-        await runCreateBranch(localName, remoteBranchName, 'Checkout');
+        const trackCoOp = startSpinner('Checking out...');
+        await runCreateBranch(localName, remoteBranchName, 'Checkout', trackCoOp);
         break;
       }
       case 'remotebranch_new_branch':
@@ -1207,9 +1210,9 @@ async function handleContextMenuAction(actionId) {
 
     if (actionId.startsWith('branch_track:')) {
       const remoteBranch = actionId.substring('branch_track:'.length);
-      startSpinner('Setting upstream...');
+      const upstreamOp = startSpinner('Setting upstream...', [CONFIG]);
       const err = await gitSetUpstream(state.cwd, branchName, remoteBranch);
-      await afterGitOp(err, 'Set upstream');
+      await afterGitOp(err, 'Set upstream', {}, upstreamOp);
       return;
     }
 
@@ -1285,20 +1288,22 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = { remote, branch: remoteBranchPart };
         break;
       }
-      case 'branch_push':
-        startSpinner('Pushing...');
-        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }); });
+      case 'branch_push': {
+        const branchPushOp = startSpinner('Pushing...', [REMOTE]);
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, branchPushOp); });
         break;
-      case 'branch_push_pr':
-        startSpinner('Pushing...');
+      }
+      case 'branch_push_pr': {
+        const prPushOp = startSpinner('Pushing...', [REMOTE]);
         gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-          if (err) { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }); return; }
+          if (err) { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, prPushOp); return; }
           const remoteUrl = await gitGetRemoteUrl(state.cwd, remote);
           const prUrl = buildPullRequestUrl(remoteUrl, branchName);
           if (prUrl) await openExternal(prUrl);
-          await afterGitOp(null, 'Push', { metadataOnly: true, forceMeta: true });
+          await afterGitOp(null, 'Push', { metadataOnly: true, forceMeta: true }, prPushOp);
         });
         break;
+      }
       case 'branch_new_branch':
         hecaton.dialog.show({
           type: 'input',
@@ -1343,8 +1348,11 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = branchName;
         break;
       case 'branch_untrack': {
+        // 시작 표시 없이 afterGitOp 만 부르면, 끝낼 작업이 없어 겹쳐 돌던 다른 작업을
+        // 대신 끝내게 된다(예전에는 스피너 참조만 하나 깎여 티가 나지 않았다).
+        const untrackOp = startSpinner('Unsetting upstream...', [CONFIG]);
         const err = await gitUnsetUpstream(state.cwd, branchName);
-        await afterGitOp(err, 'Unset upstream');
+        await afterGitOp(err, 'Unset upstream', {}, untrackOp);
         break;
       }
       case 'branch_pin':
@@ -1536,8 +1544,10 @@ async function handleContextMenuAction(actionId) {
   // Branch checkout from submenu
   if (actionId.startsWith('checkout_branch:')) {
     const branchName = actionId.substring('checkout_branch:'.length);
+    // 진행 표시 없이 afterGitOp 만 부르면 끝낼 작업이 없어 다른 작업을 대신 끝낸다.
+    const coOp = startSpinner('Checking out...');
     const err = await gitCheckoutRef(state.cwd, branchName);
-    await afterGitOp(err, 'Checkout');
+    await afterGitOp(err, 'Checkout', {}, coOp);
     return;
   }
 
@@ -1819,9 +1829,9 @@ async function handleDialogResult(params) {
 
     if (action === 'unlock-index-confirm') {
       if (buttonId === 'unlock') {
-        startSpinner('Unlocking...');
+        const unlockOp = startSpinner('Unlocking...', [INDEX]);
         const err = await removeIndexLock();
-        stopSpinner();
+        stopSpinner(unlockOp);
         if (err) {
           showError(err);
           render();
@@ -1848,10 +1858,13 @@ async function handleDialogResult(params) {
         return;
       }
       // Checkout & Pull — 체크아웃부터 실패하면(로컬 수정 등) pull은 시도하지 않는다.
+      // 두 명령이 한 동작이므로 두 번째는 startSpinner 가 아니라 updateSpinner 다.
+      // 다시 start 하면 진행 중인 작업이 하나 더 등록되는데 끝내는 쪽은 afterGitOp 의
+      // stopSpinner 하나뿐이라, 끝나지 않는 작업이 남아 이후 쓰기가 전부 막힌다.
       startSpinner('Checking out...');
       const coErr = await gitCheckoutRefAsync(state.cwd, target);
       if (coErr) { await afterGitOp(coErr, 'Checkout'); return; }
-      startSpinner(rebase ? 'Pulling with rebase...' : 'Pulling...');
+      updateSpinner(rebase ? 'Pulling with rebase...' : 'Pulling...');
       const pullErr = rebase
         ? await gitPullRebaseAsync(state.cwd, remote, remoteBranch)
         : await gitPullFromRemoteAsync(state.cwd, remote, remoteBranch);
@@ -1862,7 +1875,7 @@ async function handleDialogResult(params) {
     // delete-branch is a message dialog with delete/force/cancel buttons
     if (action === 'delete-branch') {
       if (buttonId === 'delete') {
-        startSpinner('Deleting branch...');
+        const delOp = startSpinner('Deleting branch...', [REFS]);
         const err = await gitDeleteBranch(state.cwd, target, false);
         // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
         // 지정한 적 없는 브랜치가 핀·필터 상태로 되살아난다.
@@ -1870,7 +1883,7 @@ async function handleDialogResult(params) {
         if (!state.spinnerActive) state.error = null;
         await refreshAsync();
         if (state.rightView === 'log') refreshLog();
-        stopSpinner();
+        stopSpinner(delOp);
         if (err) {
           if (isBranchNotFullyMergedError(err)) {
             showForceDeleteBranchDialog(target, err);
@@ -1881,12 +1894,12 @@ async function handleDialogResult(params) {
           render();
         }
       } else if (buttonId === 'force') {
-        startSpinner('Deleting branch...');
+        const forceDelOp = startSpinner('Deleting branch...', [REFS]);
         const err = await gitDeleteBranch(state.cwd, target, true);
         // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
         // 지정한 적 없는 브랜치가 핀·필터 상태로 되살아난다.
         if (!err) { unpinBranch(target); forgetRef(localRefKey(target)); }
-        await afterGitOp(err, 'Delete branch');
+        await afterGitOp(err, 'Delete branch', {}, forceDelOp);
       }
       return;
     }
@@ -1903,9 +1916,9 @@ async function handleDialogResult(params) {
     }
     if (action === 'stash-drop-confirm') {
       if (buttonId === 'drop') {
-        startSpinner('Deleting stash...');
+        const stashDropOp = startSpinner('Deleting stash...', [STASH]);
         const err = await gitStashDrop(state.cwd, target);
-        await afterGitOp(err, 'Stash delete');
+        await afterGitOp(err, 'Stash delete', {}, stashDropOp);
       }
       return;
     }
@@ -2025,18 +2038,18 @@ async function handleDialogResult(params) {
     if (action === 'new-tag-message') {
       if (buttonId === 'ok' && params.value != null && target && target.name) {
         const tagMessage = params.value.trim();
-        startSpinner('Tag...');
+        const tagOp = startSpinner('Tag...', [REFS]);
         const err = tagMessage
           ? await gitCreateTagAnnotated(state.cwd, target.name, tagMessage, target.ref)
           : await gitCreateTag(state.cwd, target.name, target.ref);
-        await afterGitOp(err, 'Tag');
+        await afterGitOp(err, 'Tag', {}, tagOp);
       }
       return;
     }
     if (action === 'force-push-confirm') {
       if (buttonId === 'force_push' && target) {
-        startSpinner('Force pushing...');
-        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true, forceMeta: true }); });
+        const forcePushOp = startSpinner('Force pushing...', [REMOTE]);
+        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true, forceMeta: true }, forcePushOp); });
       }
       return;
     }
@@ -2044,37 +2057,37 @@ async function handleDialogResult(params) {
     // user picked which remote branch to update.
     if (action === 'push-name-mismatch') {
       if (target && (buttonId === 'push_local' || buttonId === 'push_upstream')) {
-        startSpinner('Pushing...');
+        const mismatchPushOp = startSpinner('Pushing...', [REMOTE]);
         const pushPromise = buttonId === 'push_local'
           ? gitPushToRemoteAsync(state.cwd, target.remote, target.local)
           : gitPushHeadToBranchAsync(state.cwd, target.remote, target.upstreamBranch);
-        pushPromise.then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }); });
+        pushPromise.then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, mismatchPushOp); });
       }
       return;
     }
     if (action === 'delete-remote-branch-confirm') {
       if (buttonId === 'delete' && target) {
-        startSpinner('Deleting remote branch...');
+        const delRemoteOp = startSpinner('Deleting remote branch...', [REMOTE]);
         gitPushDeleteBranchAsync(state.cwd, target.remote, target.branch).then(async err => {
           // 사라진 리모트 브랜치의 필터/숨김 지정은 남기지 않는다(로컬 삭제와 같은 이유).
           if (!err) forgetRef(remoteRefKey(target.remote + '/' + target.branch));
-          await afterGitOp(err, 'Delete remote branch', { metadataOnly: true });
+          await afterGitOp(err, 'Delete remote branch', { metadataOnly: true }, delRemoteOp);
         });
       }
       return;
     }
     if (action === 'push-tags-confirm') {
       if (buttonId === 'proceed' && target) {
-        startSpinner('Pushing tags...');
-        gitPushTagsAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Push tags', { metadataOnly: true }); });
+        const pushTagsOp = startSpinner('Pushing tags...', [REMOTE]);
+        gitPushTagsAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Push tags', { metadataOnly: true }, pushTagsOp); });
       }
       return;
     }
     if (action === 'remove-remote-confirm') {
       if (buttonId === 'remove' && target) {
-        startSpinner('Removing remote...');
+        const rmRemoteOp = startSpinner('Removing remote...', [CONFIG]);
         const err = await gitRemoteRemove(state.cwd, target);
-        await afterGitOp(err, 'Remove remote');
+        await afterGitOp(err, 'Remove remote', {}, rmRemoteOp);
       }
       return;
     }
@@ -2085,9 +2098,10 @@ async function handleDialogResult(params) {
           showError('Name cannot be empty');
           return;
         }
-        startSpinner('Renaming remote...');
+        // remote rename 은 config 뿐 아니라 remote-tracking ref 도 함께 옮긴다
+        const renameRemoteOp = startSpinner('Renaming remote...', [CONFIG, REMOTE]);
         const err = await gitRemoteRename(state.cwd, target, newName);
-        await afterGitOp(err, 'Rename remote');
+        await afterGitOp(err, 'Rename remote', {}, renameRemoteOp);
       }
       return;
     }
@@ -2098,24 +2112,24 @@ async function handleDialogResult(params) {
           showError('URL cannot be empty');
           return;
         }
-        startSpinner('Updating remote URL...');
+        const setUrlOp = startSpinner('Updating remote URL...', [CONFIG]);
         const err = await gitRemoteSetUrl(state.cwd, target, newUrl);
-        await afterGitOp(err, 'Set remote URL');
+        await afterGitOp(err, 'Set remote URL', {}, setUrlOp);
       }
       return;
     }
     if (action === 'delete-tag-confirm') {
       if (buttonId === 'delete' && target) {
-        startSpinner('Deleting tag...');
+        const delTagOp = startSpinner('Deleting tag...', [REFS]);
         const err = await gitDeleteTag(state.cwd, target);
-        await afterGitOp(err, 'Delete tag');
+        await afterGitOp(err, 'Delete tag', {}, delTagOp);
       }
       return;
     }
     if (action === 'delete-remote-tag-confirm') {
       if (buttonId === 'delete' && target) {
-        startSpinner('Deleting remote tag...');
-        gitPushDeleteTagAsync(state.cwd, target.remote, target.tag).then(async err => { await afterGitOp(err, 'Delete remote tag', { metadataOnly: true }); });
+        const delRemoteTagOp = startSpinner('Deleting remote tag...', [REMOTE]);
+        gitPushDeleteTagAsync(state.cwd, target.remote, target.tag).then(async err => { await afterGitOp(err, 'Delete remote tag', { metadataOnly: true }, delRemoteTagOp); });
       }
       return;
     }
@@ -2232,9 +2246,9 @@ async function handleDialogResult(params) {
         showError('Remote URL cannot be empty');
         return;
       }
-      startSpinner('Adding remote...');
+      const addRemoteOp = startSpinner('Adding remote...', [CONFIG]);
       const err = await gitRemoteAdd(state.cwd, target, remoteUrl);
-      await afterGitOp(err, 'Remote');
+      await afterGitOp(err, 'Remote', {}, addRemoteOp);
       return;
     }
 
@@ -2248,7 +2262,14 @@ async function handleDialogResult(params) {
         : action === 'rename-stash' ? 'Rename stash'
         : action === 'new-branch' ? 'Branch'
         : 'Tag';
-      startSpinner(opName + '...');
+      // 리네임은 ref(와 딸린 config 섹션)만 옮긴다 — 인덱스도 워킹트리도 그대로이므로
+      // 도는 동안 스테이징을 막을 이유가 없다. 브랜치 생성은 runCreateBranch 에서
+      // 체크아웃까지 이어질 수 있어 밝히지 않는다(= 전부 붙잡은 것으로 본다).
+      const opScopes = action === 'rename-branch' ? [REFS, CONFIG]
+        : action === 'rename-stash' ? [STASH]
+        : action === 'new-tag' ? [REFS]
+        : null;
+      const nameOp = startSpinner(opName + '...', opScopes);
       let err;
       if (action === 'rename-branch') {
         const renameRes = await gitRenameBranch(state.cwd, target, name);
@@ -2262,12 +2283,12 @@ async function handleDialogResult(params) {
       } else if (action === 'rename-stash') {
         err = await gitStashRename(state.cwd, target, name);
       } else if (action === 'new-branch') {
-        await runCreateBranch(name, target, opName);
+        await runCreateBranch(name, target, opName, nameOp);
         return;
       } else if (action === 'new-tag') {
         err = await gitCreateTag(state.cwd, name, target);
       }
-      await afterGitOp(err, opName);
+      await afterGitOp(err, opName, {}, nameOp);
     }
     return;
   }
@@ -2636,7 +2657,10 @@ async function runHistoryRewrite(opName, fn) {
   }
 }
 
-async function afterGitOp(err, opName, refreshOpts = {}) {
+// op 은 startSpinner 가 돌려준 작업 표다. 자원을 좁게 밝힌 작업은 다른 작업과 겹쳐
+// 돌 수 있으므로 반드시 넘겨야 한다 — 넘기지 않으면 stopSpinner 가 "가장 나중에
+// 시작된 작업"을 끝내므로, 겹친 상대를 대신 끝내 버린다.
+async function afterGitOp(err, opName, refreshOpts = {}, op = null) {
   if (!state.spinnerActive) state.error = null;
   // git 명령 자체는 대개 수십 ms 만에 끝나고, 결과를 화면에 반영하는 refresh가 그보다
   // 훨씬 오래 걸린다. 라벨을 넘기지 않으면 사용자가 보는 거의 모든 시간 동안
@@ -2649,11 +2673,14 @@ async function afterGitOp(err, opName, refreshOpts = {}) {
   if (!err) {
     followup.message = opName + '...';
     followup.settle = true;
+    // 뒷정리가 막을 범위는 방금 끝난 작업과 같다. op 을 알면 그대로 물려주고,
+    // 모르면 아직 살아 있는 작업의 것을 startSettleOp 가 알아서 가져간다.
+    if (op) followup.scopes = op.scopes;
   }
   // stopSpinner 보다 먼저 건다. 순서를 뒤집으면 스피너 참조가 잠깐 0이 되어
   // 두 표시 사이에서 제목이 한 번 맨 상태로 떨어졌다 돌아온다.
   refreshInBackground(refreshOpts, followup);
-  stopSpinner();
+  stopSpinner(op);
   if (err) showError(opName + ' failed:\n' + err);
 }
 
@@ -2733,14 +2760,15 @@ function showStashCreateBranchDialog(name, startPoint, opName, err) {
 
 // 브랜치 생성의 공통 실행 경로 — 로컬 변경에 막힌 경우에만 stash 재시도를 제안한다.
 // 그 외에는 평소대로 성공/실패 처리하므로, 기준점이 HEAD 와 같은 흔한 경우엔 확인창이 끼어들지 않는다.
-async function runCreateBranch(name, startPoint, opName) {
+// op 은 호출부가 이미 켜 둔 진행 표시다(이 함수는 시작하지 않고 끝내기만 한다).
+async function runCreateBranch(name, startPoint, opName, op = null) {
   const err = await gitCreateBranch(state.cwd, name, startPoint);
   if (isCheckoutOverwriteError(err)) {
-    stopSpinner();
+    stopSpinner(op);
     showStashCreateBranchDialog(name, startPoint, opName, err);
     return;
   }
-  await afterGitOp(err, opName);
+  await afterGitOp(err, opName, {}, op);
 }
 
 // 체크아웃하지 않은 브랜치에 Pull을 눌렀을 때 — 왜 그대로는 안 되는지 알리고,
