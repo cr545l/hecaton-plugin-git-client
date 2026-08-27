@@ -17,7 +17,7 @@ const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTar
 // 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
 const { INDEX, REMOTE } = SCOPE;
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime } = require('./refresh');
+const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -61,6 +61,8 @@ async function handleCommitterAction(action) {
       showErrorDialog(err);
       render();
     } else {
+      // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
+      invalidateCommitterCache();
       refreshAsync().then(() => render());
     }
     return true;
@@ -712,7 +714,9 @@ async function handleKey(key) {
     case 'r':
     case 'R': {
       refreshAsync().then(() => {
-        if (state.rightView === 'log') refreshLog();
+        // 사용자가 직접 누른 새로고침은 캐시를 건너뛴다 — 화면이 이상해 보여서 눌렀을 때
+        // 지문이 같다는 이유로 아무것도 다시 읽지 않으면 손쓸 방법이 없어진다.
+        if (state.rightView === 'log') refreshLog({ force: true });
         if (state.rightView === 'fresh') {
           refreshFresh();
           updateFreshDetail();

@@ -33,7 +33,7 @@ const {
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
   resolveWorkTreeRoot, splitUpstreamRef,
 } = require('./git');
-const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock } = require('./refresh');
+const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock, invalidateCommitterCache } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
@@ -2346,6 +2346,8 @@ async function handleDialogResult(params) {
       if (err) {
         showError('Set ' + field + ' failed:\n' + err);
       } else {
+        // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
+        invalidateCommitterCache();
         refreshAsync().then(() => render());
       }
     }

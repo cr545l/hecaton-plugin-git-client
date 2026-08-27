@@ -464,32 +464,32 @@ async function setupGitWatcher() {
     }
   }
 
+  // status 한 번이면 변경된 추적 파일과 untracked를 함께 준다. 예전에는 diff-files와
+  // ls-files를 따로 걸어 폴링 한 틱마다 프로세스를 두 개 썼다 — 3초마다 상시 도는
+  // 경로라, 프로세스 생성이 비싼 환경에서는 여기서 아끼는 하나가 가장 크게 남는다.
   async function buildWorktreeSnapshot() {
-    const [diffResult, untrackedResult] = await Promise.all([
-      hecaton.process.exec({
-        program: 'git',
-        args: ['--no-optional-locks', 'diff-files', '--name-only', '-z'],
-        cwd: state.cwd,
-        timeout_ms: 5000,
-      }),
-      hecaton.process.exec({
-        program: 'git',
-        args: ['--no-optional-locks', 'ls-files', '--others', '--directory', '--no-empty-directory', '-z', '--exclude-standard'],
-        cwd: state.cwd,
-        timeout_ms: 5000,
-      }),
-    ]);
-    if (!diffResult || !diffResult.ok) return null;
-    const diffRaw = diffResult.stdout || '';
-    const untrackedRaw = (untrackedResult && untrackedResult.ok) ? (untrackedResult.stdout || '') : '';
+    const result = await hecaton.process.exec({
+      program: 'git',
+      args: ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],
+      cwd: state.cwd,
+      timeout_ms: 5000,
+    });
+    if (!result || !result.ok) return null;
+    const raw = result.stdout || '';
     const files = new Set();
-    for (const file of splitNul(diffRaw)) files.add(file);
-    for (let file of splitNul(untrackedRaw)) {
+    const records = splitNul(raw);
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i];
+      if (!rec || rec.length < 4) continue;
+      const x = rec[0];
+      // -z porcelain v1에서 rename/copy는 "XY new\0old\0" — 뒤따르는 원본 경로를 건너뛴다.
+      if (x === 'R' || x === 'C') i++;
+      let file = rec.substring(3);
       if (file.endsWith('/')) file = file.slice(0, -1);
       if (file) files.add(file);
     }
     const stats = await Promise.all(Array.from(files).sort().map(statWorktreeEntry));
-    return diffRaw + '\x1e' + untrackedRaw + '\x1e' + stats.join('\x1e');
+    return raw + '\x1e' + stats.join('\x1e');
   }
 
   let lastRefsSig = '';
@@ -558,18 +558,22 @@ async function setupGitWatcher() {
     statusPolling = true;
     statusPollingSince = Date.now();
     try {
-      // 네트워크 작업 중에는 걸러낸다 — 이 폴링은 매 틱 git을 두 번 스폰하므로
+      // 네트워크 작업 중에는 걸러낸다 — 이 폴링도 매 틱 git을 스폰하므로
       // fetch/pull/push가 무는 락과 정면으로 부딪힌다.
       if (!await coordinate.isNetworkOpInFlight()) {
         // 같은 워크트리를 보는 인스턴스가 이미 돌려놓은 결과가 있으면 재사용한다.
-        // 여기서 아끼는 건 인스턴스당 git 프로세스 2개(diff-files + ls-files)다.
+        // 여기서 아끼는 건 인스턴스당 git 프로세스 하나(status)다.
+        //
+        // kind가 'worktree'가 아니라 'worktree-status'인 이유: 스냅샷 문자열의 구성이
+        // diff-files+ls-files 시절과 달라졌다. 이름을 그대로 두면 아직 옛 코드로 도는
+        // 인스턴스와 번갈아 publish 하면서 매 틱 "바뀌었다"고 오판한다.
         let snapshot = null;
-        const shared = await coordinate.readSharedSnapshot('worktree', SHARED_WORKTREE_MAX_AGE_MS);
+        const shared = await coordinate.readSharedSnapshot('worktree-status', SHARED_WORKTREE_MAX_AGE_MS);
         if (shared) {
           snapshot = shared.value;
         } else {
           snapshot = await buildWorktreeSnapshot();
-          if (snapshot !== null) coordinate.publishSharedSnapshot('worktree', snapshot).catch(() => null);
+          if (snapshot !== null) coordinate.publishSharedSnapshot('worktree-status', snapshot).catch(() => null);
         }
         if (snapshot !== null && snapshot !== lastStatusSnapshot) {
           lastStatusSnapshot = snapshot;

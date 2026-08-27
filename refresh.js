@@ -522,7 +522,37 @@ function configLookupCompleted(result) {
   return !!(result && (result.ok || result.exitCode === 1));
 }
 
+// `--show-scope` 출력("<scope>\t<key> <value>")을 종전의 2회 조회와 같은 모양으로 되돌린다.
+// git은 우선순위가 낮은 scope부터 내보내므로 같은 키가 여러 번 나오면 뒤에 온 값이 이긴다.
+// local 판정에 worktree scope는 넣지 않는다 — `config --local` 조회도 그것까지 세지는 않았다.
+function parseScopedUserConfig(raw) {
+  const effective = [];
+  const effectiveIdx = new Map();
+  const local = [];
+  for (const line of (raw || '').split('\n')) {
+    if (!line) continue;
+    const tab = line.indexOf('\t');
+    if (tab === -1) continue;
+    const scope = line.substring(0, tab);
+    const entry = line.substring(tab + 1);
+    const sp = entry.indexOf(' ');
+    const key = sp === -1 ? entry : entry.substring(0, sp);
+    if (effectiveIdx.has(key)) effective[effectiveIdx.get(key)] = entry;
+    else { effectiveIdx.set(key, effective.length); effective.push(entry); }
+    if (scope === 'local') local.push(entry);
+  }
+  return { effective: effective.join('\n'), local: local.join('\n') };
+}
+
 async function queryCommitterConfig(cwd) {
+  // effective 값과 "로컬에 지정되어 있는지"를 한 번의 조회로 얻는다. 예전에는 전체 조회와
+  // --local 조회를 따로 걸어 refresh마다 프로세스를 두 개 썼다 — 프로세스 생성이 비싼
+  // 환경에서는 이 하나가 그대로 체감 지연이 된다.
+  const scoped = await gitExecChecked(['--no-optional-locks', 'config', '--show-scope', '--get-regexp', '^user\\.'], cwd);
+  if (configLookupCompleted(scoped)) {
+    return { ok: true, ...parseScopedUserConfig(scoped.text) };
+  }
+  // --show-scope 미지원(git 2.26 미만)이거나 조회 자체가 실패한 경우 — 종전 방식으로 되돌린다.
   const [effective, local] = await Promise.all([
     gitExecChecked(['--no-optional-locks', 'config', '--get-regexp', '^user\\.'], cwd),
     gitExecChecked(['--no-optional-locks', 'config', '--local', '--get-regexp', '^user\\.'], cwd),
@@ -534,12 +564,39 @@ async function queryCommitterConfig(cwd) {
   };
 }
 
+// committer 조회는 fingerprint 캐시에 넣지 않는다 — user.* 는 전역 config 에서도 오고,
+// include/includeIf 로 딸려 오는 파일까지 mtime 으로 좇을 수는 없다. 대신 짧은 TTL 을 둔다.
+// fetch 직후처럼 refresh 가 연달아 도는 구간에서 같은 값을 다시 읽지 않게 하는 것이 목적이고,
+// 이 창을 넘기면 종전대로 다시 읽으므로 밖에서 바꾼 설정도 곧 따라온다.
+// 실제 커밋은 git 이 config 를 직접 읽으므로 이 캐시의 영향을 받지 않는다 — 낡을 수 있는 것은 표시뿐이다.
+const COMMITTER_CACHE_TTL_MS = 10000;
+let _committerCache = null;
+let _committerCacheCwd = '';
+let _committerCacheAt = 0;
+
 async function readCommitterConfig(cwd) {
+  const now = Date.now();
+  if (_committerCache && _committerCacheCwd === cwd && (now - _committerCacheAt) < COMMITTER_CACHE_TTL_MS) {
+    return _committerCache;
+  }
   let result = await queryCommitterConfig(cwd);
   // A failed host/Git call used to look like an unset config and was cached.
   // Retry once so a brief startup failure does not leave placeholders behind.
   if (!result.ok) result = await queryCommitterConfig(cwd);
+  // 실패한 조회는 캐시하지 않는다 — 성공할 때까지 매번 다시 시도해야 한다.
+  if (result.ok) {
+    _committerCache = result;
+    _committerCacheCwd = cwd;
+    _committerCacheAt = now;
+  }
   return result;
+}
+
+// 사용자가 플러그인에서 committer 를 직접 고쳤을 때처럼, 다음 refresh 가 반드시 다시 읽어야 하는 경우.
+function invalidateCommitterCache() {
+  _committerCache = null;
+  _committerCacheCwd = '';
+  _committerCacheAt = 0;
 }
 
 // 브랜치가 올라가 있는 리모트 이름 — 없으면 '' (아직 push 하지 않은 로컬 전용 브랜치).
@@ -620,15 +677,20 @@ async function computeRefsTreeSignature(gitDir) {
   return 'refs\n' + out.join('\n');
 }
 
-// linked worktree에서는 HEAD/logs/HEAD/FETCH_HEAD만 per-worktree git dir에 있고
+// linked worktree에서는 HEAD/logs/HEAD만 per-worktree git dir에 있고
 // config·packed-refs·refs·worktrees는 공용 git dir(--git-common-dir)에 있다.
 // 두 경로를 구분하지 않으면 워크트리에서 브랜치/원격/워크트리 변경을 영영 놓친다.
+//
+// FETCH_HEAD는 일부러 넣지 않는다. 이 지문이 지키는 것은 stash·for-each-ref·remote·
+// worktree·ahead-behind 다섯 가지인데, 그중 어느 것도 FETCH_HEAD를 읽지 않는다.
+// 반면 FETCH_HEAD는 가져온 것이 없는 fetch에도 매번 다시 쓰이므로, 넣어 두면
+// "원격에 변화 없음"이라는 가장 흔한 fetch가 매번 메타 조회 전량 재실행으로 이어진다.
+// fetch가 실제로 무언가를 가져왔다면 refs 트리나 packed-refs가 바뀌므로 그 쪽에서 잡힌다.
 function metaFingerprintTargets(gitDir, commonDir) {
   const sep = (process.platform === 'win32') ? '\\' : '/';
   const common = commonDir || gitDir;
   const targets = [
     gitDir + sep + 'HEAD',
-    gitDir + sep + 'FETCH_HEAD',
     gitDir + sep + 'logs' + sep + 'HEAD',
     common + sep + 'config',
     common + sep + 'packed-refs',
@@ -639,20 +701,40 @@ function metaFingerprintTargets(gitDir, commonDir) {
   return targets;
 }
 
+async function statMtimeOrMissing(path) {
+  try {
+    const r = await hecaton.fs.stat({ path });
+    return (r && r.exists) ? (r.mtime_ms || 0) : -1;
+  } catch { return -1; }
+}
+
 async function computeMetaFingerprint(cwd, gitDir, commonDir) {
   if (!gitDir) return '';
   const common = commonDir || gitDir;
   const targets = metaFingerprintTargets(gitDir, common);
   const [stats, refsSig] = await Promise.all([
-    Promise.all(targets.map(async p => {
-      try {
-        const r = await hecaton.fs.stat({ path: p });
-        return (r && r.exists) ? (r.mtime_ms || 0) : -1;
-      } catch { return -1; }
-    })),
+    Promise.all(targets.map(statMtimeOrMissing)),
     computeRefsTreeSignature(common).catch(() => ''),
   ]);
   return stats.join('|') + '\x1e' + refsSig;
+}
+
+// 로그 지문이 보는 대상. 메타 지문과 달리 FETCH_HEAD와 config는 넣지 않는다 —
+// `git log --all`이 읽지 않는 것들이라, 넣어 두면 가져온 것이 없는 fetch까지
+// (FETCH_HEAD는 매번 다시 쓰이므로) 로그 전량 재조회로 이어진다.
+// logs/HEAD는 남긴다: 리커버리 후보가 reflog에서 나온다.
+function logFingerprintTargets(gitDir, commonDir) {
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const common = commonDir || gitDir;
+  const targets = [
+    gitDir + sep + 'HEAD',
+    gitDir + sep + 'logs' + sep + 'HEAD',
+    common + sep + 'packed-refs',
+    common + sep + 'refs',
+    common + sep + 'worktrees',
+  ];
+  if (common !== gitDir) targets.push(gitDir + sep + 'refs');
+  return targets;
 }
 
 function invalidateMetaCache() {
@@ -915,7 +997,8 @@ async function refreshAsync(options = {}) {
 
   // ── 전체 refresh ──
   // 평상시 spawn 수:
-  // - status는 항상 호출 (워킹트리 변경 추적)
+  // - status는 항상 호출 (워킹트리 변경 추적). porcelain 한 번으로 staged/unstaged/
+  //   untracked/ignored를 모두 받는다 — split 방식은 rev-parse까지 앞세워 4번을 썼다.
   // - 메타(stash/for-each-ref/remote/worktrees/user 2종/ahead-behind) 7개는 fingerprint 캐시 적중 시 재호출 생략
   // - git-dir은 state.gitDir 캐시 우선 (preCheck/setupGitWatcher가 채움)
   // → 캐시 적중: 1 spawn (status), 미스: 8 spawn
@@ -957,9 +1040,13 @@ async function refreshAsync(options = {}) {
   // refs/remote/worktrees 조회가 실제로 성공했는지 — 실패를 "0건"으로 오인해 목록을 지우지 않기 위한 플래그.
   // 캐시에는 성공한 결과만 넣으므로 캐시 적중 경로는 항상 true다.
   let refsOk = true, remoteNamesOk = true, worktreesOk = true;
+  // status 조회 방식은 경량 refresh와 같은 규칙을 쓴다 — 기본은 단일 프로세스(porcelain).
+  // split은 rev-parse(직렬) → diff-index + diff-files + ls-files 로 프로세스를 4개 쓰는데,
+  // 프로세스 생성 자체가 비싼 환경에서는 그 차이가 곧 체감 지연이 된다.
+  const fullStatusReader = options.singleProcessStatus === false ? gitStatusSplit : gitStatusPorcelain;
   const statusPromise = metadataOnly
     ? Promise.resolve(null)
-    : gitStatusSplit(state.cwd, {
+    : fullStatusReader(state.cwd, {
         displayUntracked: untrackedFlag !== '-uno',
         includeIgnored,
         maxFilesDisplayed,
@@ -1245,6 +1332,45 @@ let _logRequestedLimit = LOG_FULL_LIMIT;
 let _logLimitCwd = '';
 let _logExpansionRunning = false;
 
+// 로그 조회 결과 캐시. refreshLog 한 번은 git 프로세스를 최대 5개까지 직렬로 쓴다
+// (fast → prefetch → full → reflog → recovered). 그런데 rename branch 처럼 커밋
+// 그래프를 건드리지 않는 작업 뒤에도 액션마다 전량을 다시 돌고 있었다.
+// 그래프의 입력이 그대로면 결과도 그대로이므로, 지문이 같으면 통째로 건너뛴다.
+//
+// 지문에 넣는 것은 "git 을 다시 불러야만 알 수 있는" 입력뿐이다. 리커버리 토글이나
+// 브랜치 Filter/Hide 는 _lastGraphCommits(원본 커밋 캐시)로 다시 그리면 되므로 넣지 않고,
+// 캐시 적중 경로에서 rebuildLogGraphRows() 를 돌려 현재 표시 설정을 반영한다.
+let _logCacheFingerprint = '';
+let _logCacheCwd = '';
+
+// 지문을 못 만들면 '' 를 돌려준다 — 호출부는 캐시를 쓰지 않고 종전대로 전량 실행한다.
+// (gitDir 미확정, read_dir 미지원 호스트, refs 스캔 실패 등)
+async function computeLogFingerprint(stashHashes) {
+  if (!state.gitDir) return '';
+  const common = state.gitCommonDir || state.gitDir;
+  const [stats, refsSig] = await Promise.all([
+    Promise.all(logFingerprintTargets(state.gitDir, common).map(statMtimeOrMissing)),
+    computeRefsTreeSignature(common).catch(() => ''),
+  ]);
+  // refs 트리를 읽지 못하면 브랜치/태그 이동을 놓친다. mtime만으로 넘겨짚지 않고 포기한다.
+  if (!refsSig) return '';
+  return stats.join('|') + '\x1e' + refsSig + '\x1e' + stashHashes.join(',') + '\x1e' + _logRequestedLimit;
+}
+
+// 로그 조회가 끝까지 정상적으로 완주했을 때만 지문을 기록한다. 중간에 밀려난(_logSeq 불일치)
+// 실행이나 실패한 실행의 지문을 남기면, 화면에 없는 결과를 캐시된 것으로 착각한다.
+function markLogCached(fingerprint, seq) {
+  if (!fingerprint || _logSeq !== seq) return;
+  _logCacheFingerprint = fingerprint;
+  _logCacheCwd = state.cwd;
+}
+
+// 커밋 그래프를 바꾼 작업 뒤에 호출해 다음 refreshLog 가 반드시 git 을 다시 돌게 한다.
+function invalidateLogCache() {
+  _logCacheFingerprint = '';
+  _logCacheCwd = '';
+}
+
 function parseLogRaw(raw, recovery, recoveryHashSet) {
   raw = (raw || '').replace(/\r/g, '').trim();
   if (!raw) return [];
@@ -1505,6 +1631,30 @@ function refreshLog(options = {}) {
   const seq = ++_logSeq;
   state.logLoading = true;
   (async () => {
+    // 그래프 입력이 지난번과 같으면 git 을 한 번도 부르지 않는다. 지문 계산은 fs 조회만
+    // 쓰므로(호스트 RPC 중 exec 만 비싸다) 아낀 프로세스 5개에 비하면 사실상 공짜다.
+    const logFingerprint = await computeLogFingerprint(stashHashes);
+    if (_logSeq !== seq) return;
+    const cacheHit = !options.force
+      && logFingerprint
+      && logFingerprint === _logCacheFingerprint
+      && _logCacheCwd === state.cwd
+      && _lastGraphCommits
+      && state.logItems.length > 0;
+    if (cacheHit) {
+      // 커밋은 그대로여도 리커버리 토글·필터 지정은 그 사이 바뀌었을 수 있다.
+      // 원본 커밋 캐시로 다시 그려 현재 표시 설정을 반영한다.
+      rebuildLogGraphRows();
+      state.logLoading = false;
+      if (state.rightView === 'log') {
+        updateLogDetail();
+        require('./render').render();
+      }
+      return;
+    }
+    // 여기서부터는 실제로 다시 읽는다. 완주하기 전에 밀려나면 낡은 지문이 남지 않도록 먼저 지운다.
+    invalidateLogCache();
+
     const baseFormat = '%x01%H%x00%P%x00%D%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%s';
     const buildArgs = (limit, recoveryHashes) => {
       const args = [
@@ -1547,6 +1697,7 @@ function refreshLog(options = {}) {
         state.logHasMore = false;
         state.logLoadedLimit = fastCommits.length;
         state.logLoading = false;
+        markLogCached(logFingerprint, seq);
         if (state.rightView === 'log') require('./render').render();
         return;
       }
@@ -1555,6 +1706,8 @@ function refreshLog(options = {}) {
       if (_logSeq !== seq) return;
       const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
       if (recoveredCommits.length === 0 && fastCommits.length > 0) {
+        // 리커버리 재조회가 빈손으로 왔다 — 화면은 1차 결과 그대로다. 실패했을 수 있는
+        // 결과를 캐시하면 지문이 바뀔 때까지 그 상태에 묶이므로 여기서는 기록하지 않는다.
         state.logLoading = false;
         if (state.rightView === 'log') require('./render').render();
         return;
@@ -1564,6 +1717,7 @@ function refreshLog(options = {}) {
       state.logHasMore = false;
       if (state.rightView === 'log') updateLogDetail();
       state.logLoading = false;
+      markLogCached(logFingerprint, seq);
       if (state.rightView === 'log') require('./render').render();
       return;
     }
@@ -1609,16 +1763,18 @@ function refreshLog(options = {}) {
     if (_logSeq !== seq) return;
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
-    if (recoveryHashSet.size === 0) return;
+    if (recoveryHashSet.size === 0) { markLogCached(logFingerprint, seq); return; }
 
     const recoveredRaw = await gitExec(buildArgs(fullLimit, recovery.hashes || []), state.cwd, 30000);
     if (_logSeq !== seq) return;
     const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
+    // 위와 같은 이유로, 빈손으로 온 재조회 결과는 캐시하지 않는다.
     if (recoveredCommits.length === 0 && expandedCommits.length > 0) return;
     applyLogGraphRows(buildLogGraphRows(recoveredCommits, stashFullHashes));
     state.logLoadedLimit = fullLimit;
     state.logHasMore = recoveredCommits.length >= fullLimit;
     if (state.rightView === 'log') updateLogDetail();
+    markLogCached(logFingerprint, seq);
     if (state.rightView === 'log') require('./render').render();
   })().catch(() => {
     if (_logSeq !== seq) return;
@@ -2022,6 +2178,9 @@ module.exports = {
   refreshInBackground,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
   removeIndexLock,
+  invalidateCommitterCache,
+  // 테스트용: TTL 만료를 흉내낸다. 캐시 내용은 그대로 두고 나이만 되돌린다.
+  __expireCommitterCache() { _committerCacheAt = 0; },
   computeRefsTreeSignature,
   currentBranchRemote,
   branchRemoteFor,
