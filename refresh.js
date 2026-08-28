@@ -272,8 +272,9 @@ function ensureConflictSelections(conflictView) {
   const nextSelections = {};
   for (let i = 0; i < conflictView.chunks.length; i++) {
     if (conflictView.chunks[i].type !== 'conflict') continue;
-    if (ui.mergeChunkSelections[i] === 'ours' || ui.mergeChunkSelections[i] === 'theirs') {
-      nextSelections[i] = ui.mergeChunkSelections[i];
+    const sel = ui.mergeChunkSelections[i];
+    if (sel === 'ours' || sel === 'theirs' || sel === 'both') {
+      nextSelections[i] = sel;
     }
   }
   ui.mergeChunkSelections = nextSelections;
@@ -1237,6 +1238,12 @@ async function refreshAsync(options = {}) {
     }
     if (!state.rebaseMessage && prevRebaseMessage) {
       state.rebaseMessage = prevRebaseMessage;
+    }
+    // MERGE_HEAD 는 해시만 남기므로 들어오는 브랜치 이름은 메시지에서 뽑는다 —
+    // 충돌 화면에서 Ours/Theirs 가 각각 어느 브랜치인지 적으려면 이름이 필요하다.
+    if (state.operationState.type === 'merge' && state.rebaseMessage) {
+      const m = state.rebaseMessage.match(/^Merge (?:remote-tracking )?branch '([^']+)'/);
+      if (m) state.operationState.incomingName = m[1];
     }
     // Append conflict file list if there are unmerged files
     const conflictFiles = state.unstaged.filter(f => f.status === 'U').map(f => f.file);

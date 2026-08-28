@@ -208,13 +208,22 @@ function moveConflictChunkCursor(delta) {
 
 function ensureConflictCursorVisible() {
   const range = ui.mergeChunkLineMap ? ui.mergeChunkLineMap[ui.mergeChunkCursor] : null;
-  const viewport = Math.max(1, ui.rightDiffH || 1);
+  // 머리말은 고정이라 스크롤되는 건 그 아래뿐이다 — 전체 높이로 계산하면 커서 청크가
+  // 머리말 뒤에 숨은 채로 "보인다"고 판단한다.
+  const viewport = Math.max(1, ui.conflictBodyH || ui.rightDiffH || 1);
   if (!range) return;
   if (range.start < state.diffScrollOffset) {
     state.diffScrollOffset = range.start;
   } else if (range.end >= state.diffScrollOffset + viewport) {
     state.diffScrollOffset = Math.max(0, range.end - viewport + 1);
   }
+}
+
+// 이미 고른 쪽을 다시 누르면 고르기 전으로 돌아간다 — 잘못 누른 선택을 물릴 방법이
+// 없으면 화면을 떠났다 오는 것 말고는 되돌릴 수가 없다.
+function setConflictSelection(chunkIndex, pick) {
+  if (ui.mergeChunkSelections[chunkIndex] === pick) delete ui.mergeChunkSelections[chunkIndex];
+  else ui.mergeChunkSelections[chunkIndex] = pick;
 }
 
 function buildResolvedConflictContent() {
@@ -227,10 +236,12 @@ function buildResolvedConflictContent() {
       continue;
     }
     const selection = ui.mergeChunkSelections[i];
-    if (selection !== 'ours' && selection !== 'theirs') {
+    if (selection !== 'ours' && selection !== 'theirs' && selection !== 'both') {
       return { ok: false, message: 'Select a side for every conflict chunk before applying' };
     }
-    outLines.push(...(selection === 'ours' ? chunk.ours : chunk.theirs));
+    // both 는 화면에 놓인 순서대로 — 왼쪽(ours) 다음 오른쪽(theirs)이다.
+    if (selection === 'both') outLines.push(...chunk.ours, ...chunk.theirs);
+    else outLines.push(...(selection === 'ours' ? chunk.ours : chunk.theirs));
   }
 
   let content = outLines.join('\n');
@@ -612,12 +623,14 @@ async function handleKey(key) {
       break;
     }
     case '1':
-    case '2': {
+    case '2':
+    case '3': {
       if (state.rightView !== 'diff' || !state.conflictView) break;
       const sel = selectedItem();
       if (!sel || sel.status !== 'U') break;
-      if (key === '1') ui.mergeChunkSelections[ui.mergeChunkCursor] = 'ours';
-      if (key === '2') ui.mergeChunkSelections[ui.mergeChunkCursor] = 'theirs';
+      if (key === '1') setConflictSelection(ui.mergeChunkCursor, 'ours');
+      if (key === '2') setConflictSelection(ui.mergeChunkCursor, 'theirs');
+      if (key === '3') setConflictSelection(ui.mergeChunkCursor, 'both');
       ensureConflictCursorVisible();
       render();
       break;
@@ -1450,7 +1463,7 @@ async function handleMouseData(data) {
             setMouseShape('ns-resize');
           } else if (newDisabledReason) {
             setMouseShape('not-allowed');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
+          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newMergeZoneHover >= 0 || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -2039,17 +2052,19 @@ async function handleMouseData(data) {
           const zoneColStart = rpStartCol + zone.colStart;
           const zoneColEnd = rpStartCol + zone.colEnd;
           if (cy === zoneRow && cx >= zoneColStart && cx <= zoneColEnd) {
-            if (zone.action === 'select-ours') {
+            // 버튼(btn-*)과 코드 영역(select-*)은 강조 대상만 다르고 고르는 결과는 같다.
+            const pick = zone.action === 'select-ours' || zone.action === 'btn-ours' ? 'ours'
+              : zone.action === 'select-theirs' || zone.action === 'btn-theirs' ? 'theirs'
+              : zone.action === 'btn-both' ? 'both'
+              : null;
+            if (pick) {
               ui.mergeChunkCursor = zone.chunkIndex;
-              ui.mergeChunkSelections[zone.chunkIndex] = 'ours';
+              setConflictSelection(zone.chunkIndex, pick);
               ensureConflictCursorVisible();
               render();
               mergeHandled = true;
-            } else if (zone.action === 'select-theirs') {
-              ui.mergeChunkCursor = zone.chunkIndex;
-              ui.mergeChunkSelections[zone.chunkIndex] = 'theirs';
-              ensureConflictCursorVisible();
-              render();
+            } else if (zone.action === 'prev-conflict' || zone.action === 'next-conflict') {
+              if (moveConflictChunkCursor(zone.action === 'prev-conflict' ? -1 : 1)) render();
               mergeHandled = true;
             } else if (zone.action === 'focus-chunk') {
               ui.mergeChunkCursor = zone.chunkIndex;
@@ -2494,4 +2509,4 @@ function isRemoteMenuTarget(entry) {
   return false;
 }
 
-module.exports = { handleKey, handleMouseData, actionToKey, cleanup, handleContextMenuRequest, maybeLoadMoreLog };
+module.exports = { handleKey, handleMouseData, actionToKey, cleanup, handleContextMenuRequest, maybeLoadMoreLog, buildResolvedConflictContent };

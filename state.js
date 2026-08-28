@@ -223,10 +223,11 @@ const ui = {
   // Merge conflict resolution UI
   mergeConflictFile: null,     // current conflict file being resolved
   mergeChunkCursor: 0,         // focused conflict chunk index
-  mergeChunkSelections: {},    // { [chunkIndex]: 'ours' | 'theirs' }
-  mergeChunkLineMap: {},       // { [chunkIndex]: { start, end } }
+  mergeChunkSelections: {},    // { [chunkIndex]: 'ours' | 'theirs' | 'both' }
+  mergeChunkLineMap: {},       // { [chunkIndex]: { start, end } } — 본문 기준(머리말 제외)
   mergeClickZones: [],         // click zones for merge UI
   mergeApplyZone: null,        // fixed apply button zone in footer area
+  conflictBodyH: 0,            // 충돌 뷰에서 실제로 스크롤되는 높이 (diff 높이 - 고정 머리말)
 };
 
 function init() {

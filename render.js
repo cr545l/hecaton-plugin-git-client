@@ -773,7 +773,7 @@ function renderBody() {
     const hasUnmerged = state.unstaged.some(f => f.status === 'U');
     if (hasUnmerged) {
       hintContent = colors.yellow + ' ' + label + progress + ansi.reset + '  '
-        + colors.dim + '[Tab]focus conflict  [1]/[2] choose side  [m] apply  [b] continue' + ansi.reset;
+        + colors.dim + '[Tab]focus  [1/2/3] ours/theirs/both  [v]iew  [m] apply  [b] continue' + ansi.reset;
     } else {
       hintContent = colors.yellow + ' ' + label + progress + ansi.reset + '  '
         + colors.dim + '[b] continue/abort' + (op.type !== 'merge' ? '/skip' : '') + ansi.reset;
@@ -915,7 +915,12 @@ function renderBody() {
     if (state.rightView === 'diff') {
       // Diff section
       if (rightW > 0) {
-        addScrollbar(state.diffScrollOffset, ui.diffMaxScroll, ui.rightDiffH, sbBodyTop, startCol + width - 1, 'diff');
+        // 충돌 뷰는 머리말을 고정해 두므로 스크롤바도 그 아래 구간에만 걸린다.
+        // 조건은 diff 패널이 충돌 뷰를 그린 조건과 같아야 한다 — 다른 파일의 충돌이
+        // state 에 남아 있을 때 conflictBodyH 를 끌어 쓰면 스크롤바가 어긋난다.
+        const inConflictView = !!(state.conflictView && state.conflictView.file === state.currentDiffFile);
+        const headH = inConflictView ? Math.max(0, ui.rightDiffH - ui.conflictBodyH) : 0;
+        addScrollbar(state.diffScrollOffset, ui.diffMaxScroll, ui.rightDiffH - headH, sbBodyTop + headH, startCol + width - 1, 'diff');
       }
     } else if (state.rightView === 'log') {
       // Log history list
@@ -1851,31 +1856,48 @@ function buildDiffCommitPanel(w, h) {
   // Host-owned scroll: the diff area (rows 0..diffH) is one region; renderRow
   // lazily renders the overscan bank rows for content that is only built for
   // the visible slice (unified mode).
-  function pushDiffRegion(contentLen, off, renderRow) {
-    if (!hostScroll.isActive() || diffH <= 0) return;
+  // relRow/height 를 넘기면 그만큼 아래에서 시작하는 좁은 영역만 스크롤한다 —
+  // 충돌 뷰가 머리말을 고정해 두는 데 쓴다.
+  function pushDiffRegion(contentLen, off, renderRow, relRow, height) {
+    const top = relRow || 0;
+    const h = height === undefined ? diffH : height;
+    if (!hostScroll.isActive() || h <= 0) return;
     const pick = (i) => (i >= 0 && i < contentLen) ? renderRow(i) : '';
     ui.hostScrollRegions.push({
-      id: 'diff', panel: 'right', relRow: 0, width: innerW, height: diffH,
+      id: 'diff', panel: 'right', relRow: top, width: innerW, height: h,
       contentRows: contentLen, off,
-      bank: hostScroll.buildBank('diff', pick, off, diffH),
+      bank: hostScroll.buildBank('diff', pick, off, h),
     });
   }
 
   if (diffH > 0) {
     if (isConflictView) {
       const conflictRender = buildConflictDiffLines(innerW);
-      ui.mergeClickZones = conflictRender.zones;
       ui.mergeChunkLineMap = conflictRender.chunkLineMap;
-      const maxScroll = Math.max(0, conflictRender.lines.length - diffH);
+      // 머리말은 스크롤에서 뗀다 — 남은 충돌 수, 이동 버튼, 어느 쪽이 어느 브랜치인지는
+      // 파일 어디를 보고 있든 필요한 정보다.
+      const headerH = Math.min(conflictRender.headerLines.length, diffH);
+      const bodyH = Math.max(0, diffH - headerH);
+      ui.conflictBodyH = bodyH;
+      const maxScroll = Math.max(0, conflictRender.lines.length - bodyH);
       ui.diffMaxScroll = maxScroll;
       ui.diffMaxScrollX = 0;
       state.diffScrollX = 0;
       if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
-      const visible = conflictRender.lines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+      // 클릭 좌표는 화면 기준이다 — hunk 버튼과 같은 규칙으로 스크롤을 걷어내고,
+      // 뷰포트 밖으로 밀려난 zone 은 버린다. 절대 줄 번호를 그대로 넘기면 스크롤한
+      // 만큼 어긋난 자리를 누르게 된다. 머리말 zone 은 고정이라 그대로 쓴다.
+      ui.mergeClickZones = conflictRender.headerZones
+        .filter(zone => zone.lineIdx < headerH)
+        .concat(conflictRender.zones
+          .map(zone => ({ ...zone, lineIdx: zone.lineIdx - state.diffScrollOffset + headerH }))
+          .filter(zone => zone.lineIdx >= headerH && zone.lineIdx < diffH));
+      for (let i = 0; i < headerH; i++) lines.push(conflictRender.headerLines[i]);
+      const visible = conflictRender.lines.slice(state.diffScrollOffset, state.diffScrollOffset + bodyH);
       for (const line of visible) lines.push(line);
       ui.scrollPct.diff = maxScroll > 0 ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
-      for (let i = visible.length; i < diffH; i++) lines.push('');
-      pushDiffRegion(conflictRender.lines.length, state.diffScrollOffset, (i) => conflictRender.lines[i]);
+      for (let i = headerH + visible.length; i < diffH; i++) lines.push('');
+      pushDiffRegion(conflictRender.lines.length, state.diffScrollOffset, (i) => conflictRender.lines[i], headerH, bodyH);
     } else if (state.diffLines.length === 0) {
       ui.mergeClickZones = [];
       ui.mergeChunkLineMap = {};
@@ -2912,6 +2934,53 @@ function colorizeDecoration(plainDeco, currentBranch, isHead) {
   return colorizeDecoTokens(buildDecoTokens(plainDeco), currentBranch, isHead);
 }
 
+// ── 충돌 해결 뷰 ──
+//
+// 상단 Diff 토글(side/unified)을 충돌 파일에도 그대로 적용한다. side 는 파일 전체를
+// 좌우로 나란히 놓아 두 갈래가 어디서 갈라졌는지 보이게 하고, unified 는 git 이 파일에
+// 써 둔 충돌 마커 모양 그대로 위아래로 쌓는다. 어느 모드든 충돌 블록 머리에 선택
+// 버튼을 붙인다 — 고를 수 있다는 사실이 화면에 없으면 기능이 없는 것과 같다.
+const CONFLICT_SIDE_MIN_WIDTH = 64;   // 이보다 좁으면 토글과 무관하게 unified 로 떨어뜨린다
+const CONFLICT_COMPACT_WIDTH = 88;    // 버튼 라벨을 줄이는 기준
+
+function conflictUsesSideBySide(innerW) {
+  return state.diffView === 'side' && innerW >= CONFLICT_SIDE_MIN_WIDTH;
+}
+
+// ours/theirs 각각의 파일 라인 번호. context 는 양쪽에 함께 있으니 둘 다 증가하고
+// 충돌 구간은 각자만 증가한다 — 그래서 좌우 번호가 어긋나는 게 정상이다.
+function annotateConflictLineNumbers(chunks) {
+  let ourLine = 1;
+  let theirLine = 1;
+  const meta = [];
+  for (const chunk of chunks) {
+    if (chunk.type === 'context') {
+      meta.push({ nums: chunk.lines.map(() => ({ our: ourLine++, their: theirLine++ })) });
+      continue;
+    }
+    meta.push({
+      ourNums: chunk.ours.map(() => ourLine++),
+      theirNums: chunk.theirs.map(() => theirLine++),
+    });
+  }
+  return { meta, maxLine: Math.max(1, ourLine - 1, theirLine - 1) };
+}
+
+// 코드 셀 하나 = 라인 번호 gutter + 코드. 배경을 깔 때는 하이라이터가 넣은 reset 이
+// 배경까지 지우므로 매번 배경을 다시 이어 붙인다.
+function conflictCodeCell(code, lineNum, numW, contentW, totalW, file, bg, faded) {
+  const num = lineNum != null ? String(lineNum).padStart(numW) : ' '.repeat(numW);
+  let body = '';
+  if (code != null) {
+    // 표시 전용 탭 확장 — chunk 원본은 해결 결과를 파일에 쓸 때 그대로 쓴다.
+    const expanded = expandTabs(code);
+    body = truncate(faded ? colors.dim + expanded : highlightCode(expanded, file), Math.max(0, contentW));
+  }
+  const text = colors.dim + num + ansi.reset + ' ' + body;
+  if (!bg) return padRight(text, totalW) + ansi.reset;
+  return bg + padRight(text.replace(/\x1b\[0m/g, ansi.reset + bg), totalW) + ansi.reset;
+}
+
 function buildConflictDiffLines(innerW) {
   const lines = [];
   const zones = [];
@@ -2922,88 +2991,203 @@ function buildConflictDiffLines(innerW) {
   const op = state.operationState || {};
   const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
   const oursLabel = isRebase ? 'HEAD' : 'Ours';
-  const theirsLabel = isRebase ? (op.headName || 'Incoming') : 'Theirs';
+  const theirsLabel = isRebase ? 'Incoming' : 'Theirs';
+  // 어느 쪽이 어느 브랜치인지는 고정 머리말에만 적는다 — 버튼 라벨에 브랜치명을 넣으면
+  // 이름이 긴 브랜치에서 버튼이 화면을 넘긴다. rebase 는 onto 위에 얹는 중이라
+  // 왼쪽이 리베이스 대상, 오른쪽이 얹히는 브랜치다.
+  const oursName = isRebase ? (op.ontoHash ? 'onto ' + op.ontoHash : '') : (state.branch || '');
+  const theirsName = isRebase ? (op.headName || '') : (op.incomingName || '');
+  const file = conflictView.file;
+  const chunks = conflictView.chunks;
+
+  const conflictIndices = [];
+  for (let i = 0; i < chunks.length; i++) {
+    if (chunks[i].type === 'conflict') conflictIndices.push(i);
+  }
+  const total = conflictIndices.length;
+  const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
+
+  const { meta, maxLine } = annotateConflictLineNumbers(chunks);
+  const numW = String(maxLine).length;
+  const sideBySide = conflictUsesSideBySide(innerW);
+  const compact = innerW < CONFLICT_COMPACT_WIDTH;
+  // hover 는 직전 프레임의 zone 목록을 가리키므로 인덱스가 아니라 내용으로 맞춘다.
+  const hoveredZone = (ui.hoveredMergeZoneIndex >= 0 && ui.mergeClickZones)
+    ? ui.mergeClickZones[ui.hoveredMergeZoneIndex]
+    : null;
+  // hover 는 (동작, 청크)로만 맞춘다 — zone 의 줄 번호는 화면 기준이라 스크롤하면
+  // 여기서 만드는 절대 줄 번호와 어긋난다. 청크 단위로 강조해도 클릭 결과와 같으니
+  // 오히려 "이 줄들이 선택된다"가 그대로 보인다.
+  const isHovered = (action, chunkIndex) => !!hoveredZone
+    && hoveredZone.action === action
+    && hoveredZone.chunkIndex === chunkIndex;
+
+  const gap = ' ' + colors.border + '│' + ansi.reset + ' ';
+  const availW = innerW - 3;
+  const leftW = sideBySide ? Math.floor(availW / 2) : innerW;
+  const rightW = sideBySide ? availW - leftW : 0;
+  const leftCodeW = Math.max(1, leftW - numW - 1);
+  const rightCodeW = Math.max(1, rightW - numW - 1);
+  const unifiedCodeW = Math.max(1, innerW - numW - 1);
+
   const white = ansi.fg(255, 255, 255);
   const brightBlue = ansi.fg(120, 180, 255);
-  const accentBg = ansi.bg(156, 96, 0);
-  const conflictIndices = conflictView.chunks
-    .map((chunk, idx) => chunk.type === 'conflict' ? idx : -1)
-    .filter(idx => idx >= 0);
-  const selectedCount = conflictIndices.filter(idx => ui.mergeChunkSelections[idx]).length;
-  const leftW = Math.max(10, Math.floor((innerW - 3) / 2));
-  const gap = ' ' + colors.border + '\u2502' + ansi.reset + ' ';
-  const rightW = Math.max(10, innerW - leftW - 3);
+  const pickedBg = colors.diffAddBg;   // 남기기로 한 쪽
+  const openBg = colors.hoverBg;       // 아직 고르지 않은 충돌
 
-  lines.push(colors.yellow + ansi.bold + ' Merge conflict' + ansi.reset
-    + colors.dim + '  Select each chunk from left or right' + ansi.reset);
-  lines.push(' ' + colors.cyan + conflictView.file + ansi.reset);
-  lines.push(colors.dim + ` ${selectedCount}/${conflictIndices.length} conflicts selected` + ansi.reset);
-  lines.push('');
+  const hline = (w) => colors.border + '─'.repeat(Math.max(0, w)) + ansi.reset;
 
-  const headerLine = brightBlue + ansi.bold + padRight(' ' + oursLabel, leftW)
-    + ansi.reset + gap
-    + brightBlue + ansi.bold + padRight(' ' + theirsLabel, rightW) + ansi.reset;
-  lines.push(headerLine);
-  lines.push(colors.border + '\u2500'.repeat(leftW) + ansi.reset + gap + colors.border + '\u2500'.repeat(rightW) + ansi.reset);
+  // ── 머리말: 진행 상황과 충돌 사이 이동 ──
+  //
+  // 본문과 나눠서 돌려준다 — 함께 스크롤되면 파일을 조금만 내려도 "몇 개가 남았는지"와
+  // 이동 버튼, 어느 쪽이 Ours 인지가 화면 밖으로 밀려난다. 렌더 쪽이 고정으로 그린다.
+  const headerLines = [];
+  const headerZones = [];
+  {
+    const nav = [
+      { action: 'prev-conflict', text: '[‹]' },
+      { action: 'next-conflict', text: '[›]' },
+    ];
+    const progress = `${selectedCount}/${total} resolved `;
+    const navW = nav.reduce((sum, b) => sum + visLen(b.text) + 1, 0);
+    const headW = Math.max(1, innerW - visLen(progress) - navW);
+    const head = ' ' + colors.yellow + ansi.bold + 'Merge conflict' + ansi.reset
+      + '  ' + colors.cyan + truncate(file, Math.max(4, headW - 18)) + ansi.reset;
+    let line = padRight(head, headW)
+      + (total > 0 && selectedCount === total ? colors.green : colors.dim) + progress + ansi.reset;
+    for (const b of nav) {
+      const start = visLen(line);
+      const style = isHovered(b.action, -1)
+        ? colors.value + ansi.bold + CSI + '4m'
+        : colors.value;
+      line += style + b.text + ansi.reset + ' ';
+      headerZones.push({ lineIdx: headerLines.length, colStart: start, colEnd: start + visLen(b.text) - 1, action: b.action, chunkIndex: -1 });
+    }
+    headerLines.push(line);
+  }
+
+  // "Ours / Theirs" 만으로는 어느 브랜치인지 알 수 없다 — 이름을 함께 붙인다.
+  const titleCell = (label, name, maxW) => {
+    const text = brightBlue + ansi.bold + ' ' + label + ansi.reset
+      + (name ? colors.dim + ' · ' + ansi.reset + colors.cyan + name + ansi.reset : '');
+    return maxW > 0 ? truncate(text, maxW) : text;
+  };
+
+  if (sideBySide) {
+    headerLines.push(padRight(titleCell(oursLabel, oursName, leftW), leftW) + gap
+      + padRight(titleCell(theirsLabel, theirsName, rightW), rightW));
+    headerLines.push(hline(leftW) + gap + hline(rightW));
+  } else {
+    // unified 는 좌우 컬럼이 없으니 한 줄에 나란히 적어 둔다.
+    const half = Math.max(1, Math.floor(innerW / 2) - 1);
+    headerLines.push(padRight(titleCell(oursLabel, oursName, half), half + 2)
+      + titleCell(theirsLabel, theirsName, innerW - half - 2));
+    headerLines.push(hline(innerW));
+  }
 
   let ordinal = 0;
-  for (let chunkIndex = 0; chunkIndex < conflictView.chunks.length; chunkIndex++) {
-    const chunk = conflictView.chunks[chunkIndex];
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+    const chunk = chunks[chunkIndex];
+    const nums = meta[chunkIndex];
+
     if (chunk.type === 'context') {
-      for (const line of chunk.lines) {
-        lines.push(colors.dim + '  ' + truncate(expandTabs(line), innerW - 2) + ansi.reset);
+      for (let i = 0; i < chunk.lines.length; i++) {
+        const n = nums.nums[i];
+        lines.push(sideBySide
+          ? conflictCodeCell(chunk.lines[i], n.our, numW, leftCodeW, leftW, file, '', false)
+            + gap
+            + conflictCodeCell(chunk.lines[i], n.their, numW, rightCodeW, rightW, file, '', false)
+          : conflictCodeCell(chunk.lines[i], n.our, numW, unifiedCodeW, innerW, file, '', false));
       }
       continue;
     }
 
     ordinal++;
     const selection = ui.mergeChunkSelections[chunkIndex] || null;
-    const isCursor = ui.mergeChunkCursor === chunkIndex;
-    const hoveredZone = ui.hoveredMergeZoneIndex >= 0 ? ui.mergeClickZones[ui.hoveredMergeZoneIndex] : null;
-    const headerBg = accentBg;
-    const statusText = selection === 'ours' ? `${oursLabel} selected`
-      : selection === 'theirs' ? `${theirsLabel} selected`
-      : 'unresolved';
-    const statusTextLine = ` Conflict ${ordinal}/${conflictIndices.length}  [${statusText}]`;
-    lines.push((headerBg || '') + white + ansi.bold + padRight(statusTextLine, innerW) + ansi.reset);
+    const chunkStart = lines.length;
 
-    const chunkStart = lines.length - 1;
-    const bodyTop = lines.length;
-    const rowCount = Math.max(chunk.ours.length, chunk.theirs.length, 1);
-    for (let row = 0; row < rowCount; row++) {
-      // 표시 전용 탭 확장 — chunk 원본은 해결 결과를 파일에 쓸 때 그대로 쓴다.
-      const leftRaw = chunk.ours[row] !== undefined ? expandTabs(chunk.ours[row]) : '';
-      const rightRaw = chunk.theirs[row] !== undefined ? expandTabs(chunk.theirs[row]) : '';
-      const leftPrefix = selection === 'ours' ? white + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
-      const rightPrefix = selection === 'theirs' ? white + ansi.bold + '> ' + ansi.reset : colors.dim + '  ' + ansi.reset;
-      const leftHovered = hoveredZone && hoveredZone.chunkIndex === chunkIndex && hoveredZone.action === 'select-ours' && hoveredZone.lineIdx === bodyTop + row;
-      const rightHovered = hoveredZone && hoveredZone.chunkIndex === chunkIndex && hoveredZone.action === 'select-theirs' && hoveredZone.lineIdx === bodyTop + row;
-      const leftBg = selection === 'ours' ? colors.hoverBg : leftHovered ? colors.hoverBg : '';
-      const rightBg = selection === 'theirs' ? colors.hoverBg : rightHovered ? colors.hoverBg : '';
-      const leftCode = truncate(highlightCode(leftRaw, conflictView.file), Math.max(0, leftW - 2));
-      const rightCode = truncate(highlightCode(rightRaw, conflictView.file), Math.max(0, rightW - 2));
-      const leftText = leftPrefix + leftCode;
-      const rightText = rightPrefix + rightCode;
-      const leftStyled = leftBg
-        ? leftBg + padRight(leftText.replace(/\x1b\[0m/g, ansi.reset + leftBg), leftW) + ansi.reset
-        : padRight(leftText, leftW) + ansi.reset;
-      const rightStyled = rightBg
-        ? rightBg + padRight(rightText.replace(/\x1b\[0m/g, ansi.reset + rightBg), rightW) + ansi.reset
-        : padRight(rightText, rightW) + ansi.reset;
-      lines.push(leftStyled + gap + rightStyled);
+    // ── 선택 버튼 머리 ──
+    {
+      const isCursor = ui.mergeChunkCursor === chunkIndex;
+      const head = ` ${isCursor ? '▸' : ' '} Conflict ${ordinal}/${total}  `;
+      const buttons = [
+        // 숫자를 라벨에 박아 둔다 — 마우스로 눌러 본 사람이 다음엔 키로 누를 수 있게.
+        // 코드 영역 클릭과 동작은 같지만 action 은 따로 둔다(hover 강조 대상이 다르다).
+        { sel: 'ours', action: 'btn-ours', text: compact ? '[1 ' + oursLabel + ']' : '[ 1 Use ' + oursLabel + ' ]' },
+        { sel: 'theirs', action: 'btn-theirs', text: compact ? '[2 ' + theirsLabel + ']' : '[ 2 Use ' + theirsLabel + ' ]' },
+        { sel: 'both', action: 'btn-both', text: compact ? '[3 Both]' : '[ 3 Keep both ]' },
+      ];
+      const lineIdx = lines.length;
+      let line = (isCursor ? white + ansi.bold : colors.dim) + head + ansi.reset;
+      for (const b of buttons) {
+        const start = visLen(line);
+        const style = selection === b.sel
+          ? pickedBg + white + ansi.bold
+          : isHovered(b.action, chunkIndex) ? colors.value + ansi.bold + CSI + '4m' : colors.dim;
+        line += style + b.text + ansi.reset + ' ';
+        zones.push({ lineIdx, colStart: start, colEnd: start + visLen(b.text) - 1, action: b.action, chunkIndex });
+      }
+      const status = selection === 'ours' ? oursLabel + ' kept'
+        : selection === 'theirs' ? theirsLabel + ' kept'
+        : selection === 'both' ? 'both kept'
+        : 'unresolved';
+      const pad = innerW - visLen(line) - visLen(status) - 1;
+      if (pad > 0) {
+        line += ' '.repeat(pad) + (selection ? colors.green : colors.yellow) + status + ansi.reset + ' ';
+      }
+      // 머리는 청크 포커스용 클릭 영역이기도 하다 — 버튼 zone 을 먼저 넣었으니 겹치지 않게 라벨 폭만.
+      zones.push({ lineIdx, colStart: 0, colEnd: Math.max(0, visLen(head) - 1), action: 'focus-chunk', chunkIndex });
+      lines.push(line);
     }
 
-    const lineEnd = lines.length - 1;
-    for (let lineIdx = bodyTop; lineIdx <= lineEnd; lineIdx++) {
-      zones.push({ lineIdx, colStart: 0, colEnd: leftW, action: 'select-ours', chunkIndex });
-      zones.push({ lineIdx, colStart: leftW + 3, colEnd: innerW, action: 'select-theirs', chunkIndex });
+    const keepOurs = selection === 'ours' || selection === 'both';
+    const keepTheirs = selection === 'theirs' || selection === 'both';
+    // 고른 쪽은 살아남는 코드라 강조하고, 버린 쪽은 흐리게 둔다 — 결과가 눈에 그려져야 한다.
+    const oursBg = keepOurs ? pickedBg : selection ? '' : openBg;
+    const theirsBg = keepTheirs ? pickedBg : selection ? '' : openBg;
+    const oursFaded = !!selection && !keepOurs;
+    const theirsFaded = !!selection && !keepTheirs;
+
+    if (sideBySide) {
+      const rowCount = Math.max(chunk.ours.length, chunk.theirs.length, 1);
+      for (let row = 0; row < rowCount; row++) {
+        const lineIdx = lines.length;
+        const hasOur = row < chunk.ours.length;
+        const hasTheir = row < chunk.theirs.length;
+        const lBg = !keepOurs && isHovered('select-ours', chunkIndex) ? colors.hoverBg : oursBg;
+        const rBg = !keepTheirs && isHovered('select-theirs', chunkIndex) ? colors.hoverBg : theirsBg;
+        lines.push(
+          conflictCodeCell(hasOur ? chunk.ours[row] : null, hasOur ? nums.ourNums[row] : null, numW, leftCodeW, leftW, file, lBg, oursFaded)
+          + gap
+          + conflictCodeCell(hasTheir ? chunk.theirs[row] : null, hasTheir ? nums.theirNums[row] : null, numW, rightCodeW, rightW, file, rBg, theirsFaded)
+        );
+        zones.push({ lineIdx, colStart: 0, colEnd: leftW - 1, action: 'select-ours', chunkIndex });
+        zones.push({ lineIdx, colStart: leftW + 3, colEnd: innerW, action: 'select-theirs', chunkIndex });
+      }
+    } else {
+      const marker = (text) => lines.push(colors.dim + truncate(text, innerW) + ansi.reset);
+      marker(' <<<<<<< ' + oursLabel);
+      for (let row = 0; row < chunk.ours.length; row++) {
+        const lineIdx = lines.length;
+        const bg = !keepOurs && isHovered('select-ours', chunkIndex) ? colors.hoverBg : oursBg;
+        lines.push(conflictCodeCell(chunk.ours[row], nums.ourNums[row], numW, unifiedCodeW, innerW, file, bg, oursFaded));
+        zones.push({ lineIdx, colStart: 0, colEnd: innerW, action: 'select-ours', chunkIndex });
+      }
+      marker(' =======');
+      for (let row = 0; row < chunk.theirs.length; row++) {
+        const lineIdx = lines.length;
+        const bg = !keepTheirs && isHovered('select-theirs', chunkIndex) ? colors.hoverBg : theirsBg;
+        lines.push(conflictCodeCell(chunk.theirs[row], nums.theirNums[row], numW, unifiedCodeW, innerW, file, bg, theirsFaded));
+        zones.push({ lineIdx, colStart: 0, colEnd: innerW, action: 'select-theirs', chunkIndex });
+      }
+      marker(' >>>>>>> ' + theirsLabel);
     }
-    zones.push({ lineIdx: bodyTop - 1, colStart: 0, colEnd: innerW, action: 'focus-chunk', chunkIndex });
-    lines.push(colors.border + '\u2500'.repeat(innerW) + ansi.reset);
+
+    lines.push(sideBySide ? hline(leftW) + gap + hline(rightW) : hline(innerW));
     chunkLineMap[chunkIndex] = { start: chunkStart, end: lines.length - 1 };
   }
 
-  return { lines, zones, chunkLineMap };
+  return { headerLines, headerZones, lines, zones, chunkLineMap };
 }
 
 const SIDE_BY_SIDE_MIN_WIDTH = 56;
