@@ -1235,8 +1235,94 @@ async function gitBranchExists(cwd, name) {
   return !!(r && r.ok && r.exit_code === 0);
 }
 
+// ── 삭제가 막힌 파일 복구 ──────────────────────────────────────────────
+// git은 파일을 새로 쓰기 전에 반드시 기존 파일을 unlink 한다. Windows에서 다른
+// 프로세스가 그 파일을 FILE_SHARE_DELETE 없이 열어 두면 읽기·쓰기는 되는데 삭제만
+// 거부되고, discard가 그 파일 하나에서 통째로 멈춘다. 호스트가 연 핸들이 자식
+// 프로세스로 상속돼 남은 경우처럼 사용자가 닫을 창조차 없는 상황도 있다.
+//
+// 삭제가 막혀도 덮어쓰기는 허용되므로, 파일을 지우지 않고 내용만 제자리에 채우면
+// 결과는 체크아웃과 같다. 그 내용은 checkout-index --temp로 뽑는다 — 체크아웃이
+// 실제로 쓸 바이트를 임시 파일에 그대로 만들어 주므로 EOL 변환과 smudge 필터가
+// 이미 반영돼 있고, 바이너리나 UTF-8이 아닌 파일도 RPC 문자열을 거치지 않아
+// 손상되지 않는다.
+//
+// checkout/restore/reset: error: unable to unlink old '<path>': Invalid argument
+// clean:                  warning: failed to remove <path>: Invalid argument
+const UNLINK_BLOCKED_RE = /unable to unlink (?:old )?'([^']*)'/i;
+const REMOVE_BLOCKED_RE = /failed to remove [^\n]*: (?:Invalid argument|Permission denied|Device or resource busy|Directory not empty)/i;
+const LOCKED_FILE_HINT =
+  'Another process is holding the file open, so Git cannot delete it before replacing it. '
+  + 'Close whatever has it open and try again — a handle inherited by a background process '
+  + 'can keep the lock even after the window that opened the file is gone.';
+
+function isUnlinkBlockedError(message) { return !!message && UNLINK_BLOCKED_RE.test(message); }
+function isFileLockedError(message) {
+  return !!message && (UNLINK_BLOCKED_RE.test(message) || REMOVE_BLOCKED_RE.test(message));
+}
+
+function withLockedFileHint(message) {
+  return isFileLockedError(message) ? message + '\n\n' + LOCKED_FILE_HINT : message;
+}
+
+// 한 번의 실패 메시지에 여러 경로가 실릴 수 있다(reset --hard). 중복 없이 모은다.
+function unlinkBlockedPaths(message) {
+  const paths = [];
+  if (!message) return paths;
+  const re = new RegExp(UNLINK_BLOCKED_RE.source, 'gi');
+  let m;
+  while ((m = re.exec(message)) !== null) {
+    if (m[1] && paths.indexOf(m[1]) === -1) paths.push(m[1]);
+  }
+  return paths;
+}
+
+// 파일을 지우지 않고 내용만 제자리에 되돌린다. source가 'head'면 인덱스를 먼저
+// HEAD로 되돌린 뒤 그 내용을 쓴다 — 인덱스 갱신은 워크트리 파일을 건드리지 않으므로
+// 잠긴 파일에서도 항상 성공한다. 성공하면 null, 실패하면 사유 문자열.
+async function restoreFileInPlace(cwd, file, source) {
+  if (source === 'head') {
+    const indexErr = await gitRunOrError(['restore', '--staged', '--source=HEAD', '--', file], cwd, 10000, 'Index reset failed');
+    if (indexErr) return indexErr;
+  }
+
+  const listed = await gitResult(['checkout-index', '--temp', '--', file], cwd, 15000);
+  if (!listed || !listed.ok || listed.exit_code !== 0) return 'the indexed content could not be extracted';
+  // 출력은 "<임시파일 이름>\t<경로>" 한 줄. 임시 파일은 실행 디렉터리(=워크트리 루트)에 생긴다.
+  const line = (listed.stdout || '').replace(/\r\n/g, '\n').split('\n').filter(Boolean)[0] || '';
+  const tab = line.indexOf('\t');
+  if (tab <= 0) return 'the indexed content could not be extracted';
+
+  const tempAbs = nodePath.join(cwd, line.substring(0, tab));
+  let reason = null;
+  try {
+    // 복사는 대상 파일을 truncate 해서 덮어쓴다 — unlink가 없으니 잠겨 있어도 통과한다.
+    const copied = await hecaton.fs.copy({ from_path: tempAbs, to_path: nodePath.join(cwd, file), overwrite: true });
+    if (!copied || copied.ok === false) reason = (copied && copied.error) || 'the in-place overwrite was rejected';
+  } catch (e) {
+    reason = (e && e.message) || 'the in-place overwrite failed';
+  }
+  try { await hecaton.fs.delete({ path: tempAbs }); } catch { /* 임시 파일이 남아도 동작에는 지장이 없다 */ }
+  if (reason) return reason;
+
+  // 정말 되돌아갔는지는 git에게 확인받는다. 여기서 걸리면 파일만 건드리고 끝난 것이다.
+  const verify = await gitResult(['diff', '--quiet', '--', file], cwd, 10000);
+  if (!verify || !verify.ok || verify.exit_code !== 0) return 'the file still differs after the in-place restore';
+  return null;
+}
+
+// restore/checkout이 unlink에서 막혔을 때만 제자리 복원으로 갈아탄다. 그 외의
+// 실패(pathspec 오류 등)는 원래 메시지를 그대로 돌려준다.
+async function discardWithInPlaceFallback(cwd, file, source, originalError) {
+  if (!isUnlinkBlockedError(originalError)) return withLockedFileHint(originalError);
+  const reason = await restoreFileInPlace(cwd, file, source);
+  if (!reason) return null;
+  return originalError + '\n\n' + LOCKED_FILE_HINT
+    + '\n\nRestoring the content in place also failed: ' + reason + '.';
+}
+
 // 미추적 파일/디렉터리 일괄 삭제 (.gitignore 대상 제외)
-async function gitCleanUntrackedAsync(cwd) { return await gitAsyncWrap(['clean', '-fd'], cwd, 30000); }
+async function gitCleanUntrackedAsync(cwd) { return withLockedFileHint(await gitAsyncWrap(['clean', '-fd'], cwd, 30000)); }
 
 // Restore every tracked path to HEAD, then remove untracked files/directories.
 // Ignored paths are intentionally preserved. An unborn repository has no HEAD,
@@ -1244,16 +1330,27 @@ async function gitCleanUntrackedAsync(cwd) { return await gitAsyncWrap(['clean',
 async function gitDiscardAllChangesAsync(cwd) {
   const head = await gitResult(['rev-parse', '--verify', 'HEAD'], cwd, 5000);
   const hasHead = !!(head && head.ok && head.exit_code === 0);
-  const trackedErr = hasHead
+  let trackedErr = hasHead
     ? await gitAsyncWrap(['reset', '--hard', '--recurse-submodules', 'HEAD'], cwd, 30000)
     : await gitAsyncWrap(['read-tree', '--empty'], cwd, 30000);
-  if (trackedErr) return 'Failed to discard tracked changes: ' + trackedErr;
+  // 잠긴 파일 하나 때문에 전체가 멈추지 않게 한다. 막힌 경로만 HEAD 내용으로 제자리
+  // 복원해 두면, 다시 실행한 reset은 그 파일이 이미 같으므로 건드리지 않고 나머지를
+  // 마저 처리한다.
+  if (trackedErr && hasHead && isUnlinkBlockedError(trackedErr)) {
+    const blocked = unlinkBlockedPaths(trackedErr);
+    let recovered = blocked.length > 0;
+    for (const blockedPath of blocked) {
+      if (await restoreFileInPlace(cwd, blockedPath, 'head')) { recovered = false; break; }
+    }
+    if (recovered) trackedErr = await gitAsyncWrap(['reset', '--hard', '--recurse-submodules', 'HEAD'], cwd, 30000);
+  }
+  if (trackedErr) return 'Failed to discard tracked changes: ' + withLockedFileHint(trackedErr);
 
   // A second force is required for untracked directories that are Git repos.
   // Before the first commit there is no committed ignore configuration to
   // restore, so ignored paths must also be removed to guarantee a clean tree.
   const cleanErr = await gitAsyncWrap(hasHead ? ['clean', '-ffd'] : ['clean', '-ffdx'], cwd, 30000);
-  if (cleanErr) return 'Tracked changes were discarded, but untracked cleanup failed: ' + cleanErr;
+  if (cleanErr) return 'Tracked changes were discarded, but untracked cleanup failed: ' + withLockedFileHint(cleanErr);
   if (hasHead) {
     const submoduleCleanErr = await gitAsyncWrap(['submodule', 'foreach', '--recursive', 'git clean -ffd'], cwd, 30000);
     if (submoduleCleanErr) return 'Top-level changes were discarded, but submodule cleanup failed: ' + submoduleCleanErr;
@@ -1362,9 +1459,16 @@ async function gitRemoteAdd(cwd, name, url) { return await gitRunOrError(['remot
 
 async function gitDiscardFile(cwd, item) {
   if (!item || !item.file) return 'No file selected';
-  if (item.type === 'untracked') return await gitRunOrError(['clean', '-f', '--', item.file], cwd, 10000, 'Discard failed');
-  if (item.type === 'staged') return await gitRunOrError(['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], cwd, 10000, 'Discard failed');
-  return await gitRunOrError(['restore', '--', item.file], cwd, 10000, 'Discard failed');
+  // clean은 파일을 지우는 것 자체가 목적이라 제자리 덮어쓰기로 대신할 수 없다 — 사유만 덧붙인다.
+  if (item.type === 'untracked') {
+    return withLockedFileHint(await gitRunOrError(['clean', '-f', '--', item.file], cwd, 10000, 'Discard failed'));
+  }
+  if (item.type === 'staged') {
+    const err = await gitRunOrError(['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], cwd, 10000, 'Discard failed');
+    return err ? await discardWithInPlaceFallback(cwd, item.file, 'head', err) : null;
+  }
+  const err = await gitRunOrError(['restore', '--', item.file], cwd, 10000, 'Discard failed');
+  return err ? await discardWithInPlaceFallback(cwd, item.file, 'index', err) : null;
 }
 
 // 버전관리에서 제외 (TortoiseGit의 Delete / Delete keep local)
