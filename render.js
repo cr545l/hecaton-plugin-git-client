@@ -2330,6 +2330,7 @@ function buildLogPanel(w, h) {
         graph: item.chars ? {
           chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH,
           charStyles: item.charStyles, charStylesH: item.charStylesH,
+          nodeUp: item.nodeUp, nodeDown: item.nodeDown,
           isCursor: isCursor && logFocused, isCursorInactive: isCursor && !logFocused,
         } : null,
       };
@@ -2341,6 +2342,7 @@ function buildLogPanel(w, h) {
         graph: item.chars ? {
           chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH,
           charStyles: item.charStyles, charStylesH: item.charStylesH,
+          nodeUp: item.nodeUp, nodeDown: item.nodeDown,
         } : null,
       };
     }
@@ -2413,14 +2415,7 @@ function buildLogPanel(w, h) {
           ...logBankRows.slice(logDepth.before).map(r => r.graph),
         ]
       : graphRows;
-    // Boundary rows are the ones just outside what the graph image covers.
-    const prevIdx = useHostScroll ? off - logDepth.before - 1 : off - 1;
-    const nextIdx = off + listH + (useHostScroll ? logDepth.after : 0);
-    const prevItem = prevIdx >= 0 ? state.logItems[prevIdx] : null;
-    const nextItem = nextIdx < state.logItems.length ? state.logItems[nextIdx] : null;
-    const prevBoundary = prevItem && prevItem.chars ? { chars: prevItem.chars } : null;
-    const nextBoundary = nextItem && nextItem.chars ? { chars: nextItem.chars } : null;
-    const pixBuf = renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH, prevBoundary, nextBoundary);
+    const pixBuf = renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH);
     if (pixBuf) {
       const pixelW = maxNaturalWidth * ui.cellW;
       const pixelH = sixelGraphRows.length * ui.cellH;

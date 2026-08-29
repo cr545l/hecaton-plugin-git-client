@@ -97,21 +97,12 @@ function connectsLeft(ch) { // 왼쪽 가장자리까지 획이 닿는 글자
   return ch === '─' || ch === '┄' || ch === '┼' || ch === '╌' ||
          ch === '┤' || ch === '╮' || ch === '╯' || ch === '●' || ch === '◌';
 }
-// 위/아래 이웃 행이 이 셀 쪽으로 세로 획을 뻗는가? "빈 칸이 아니다"로 판정하면
-// 수평 병합선(─ ╭ ╮ ╯ ╰)만 지나간 칸도 이어진 것으로 봐서, 빈 레인을 재사용한
-// 커밋 노드에 붙을 데 없는 꼬다리가 생긴다.
-function connectsDown(ch) { // 아래 가장자리까지 획이 닿는 글자
-  return ch === '│' || ch === '┆' || ch === '┼' || ch === '╌' ||
-         ch === '├' || ch === '┤' || ch === '╭' || ch === '╮' ||
-         ch === '●' || ch === '◌';
-}
-function connectsUp(ch) { // 위 가장자리까지 획이 닿는 글자
-  return ch === '│' || ch === '┆' || ch === '┼' || ch === '╌' ||
-         ch === '├' || ch === '┤' || ch === '╯' || ch === '╰' ||
-         ch === '●' || ch === '◌';
-}
-
-function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, charStyles, charStylesH, numCols, prevChars, nextChars, cellW, cellH, lineW, dotR, thinW, dashLen) {
+// 커밋 노드가 위/아래로 세로 획을 뻗을지는 이웃 행의 글자로 추측하지 않는다. 글자만
+// 보면 빈 레인을 재사용한 노드가 바로 위 다른 브랜치의 노드와 이어져 버린다(끊어진
+// orphan 브랜치가 main 과 한 줄기로 보이던 문제). 그래프가 계산해 둔 nodeUp/nodeDown —
+// 각각 "레인을 물려받았다(자식이 있다)", "부모가 있다" — 을 그대로 따른다.
+function renderGraphRowInto(buf, pw, ph, yOff, row, numCols, cellW, cellH, lineW, dotR, thinW, dashLen) {
+  const { chars, charColors, charColorsH, charStyles, charStylesH } = row;
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
@@ -152,8 +143,8 @@ function renderGraphRowInto(buf, pw, ph, yOff, chars, charColors, charColorsH, c
         break;
       case '\u25cf':
       case '\u25cc': {
-        const hasAbove = prevChars && i < prevChars.length && connectsDown(prevChars[i]);
-        const hasBelow = nextChars && i < nextChars.length && connectsUp(nextChars[i]);
+        const hasAbove = !!row.nodeUp;
+        const hasBelow = !!row.nodeDown;
         if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lw, dash);
         if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lw, dash);
         // 링도 획 굵기를 따른다. 거의 꽉 찬 원으로 그리면 선만 가벼워지고 노드는
@@ -212,7 +203,7 @@ const BG_CURSOR = 7;
 const BG_HOVER = 8;
 const BG_CURSOR_INACTIVE = 10;
 
-function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundary, nextBoundary) {
+function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH) {
   const pw = numCols * cellW;
   const ph = graphRows.length * cellH;
   if (pw <= 0 || ph <= 0) return null;
@@ -238,13 +229,7 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH, prevBoundar
   for (let r = 0; r < graphRows.length; r++) {
     const row = graphRows[r];
     if (!row) continue;
-    const prev = r > 0
-      ? (graphRows[r - 1] ? graphRows[r - 1].chars : null)
-      : (prevBoundary ? prevBoundary.chars : null);
-    const next = r < graphRows.length - 1
-      ? (graphRows[r + 1] ? graphRows[r + 1].chars : null)
-      : (nextBoundary ? nextBoundary.chars : null);
-    renderGraphRowInto(buf, pw, ph, r * cellH, row.chars, row.charColors, row.charColorsH, row.charStyles, row.charStylesH, numCols, prev, next, cellW, cellH, lineW, dotR, thinW, dashLen);
+    renderGraphRowInto(buf, pw, ph, r * cellH, row, numCols, cellW, cellH, lineW, dotR, thinW, dashLen);
   }
   return buf;
 }

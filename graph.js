@@ -46,8 +46,11 @@ function addHorizontalConnector(row, lane, color, style, towardRight) {
     row.charColorsH[lane] = color;
     row.charStylesH[lane] = style;
   } else {
-    row.charColors[lane] = color;
-    row.charStyles[lane] = style;
+    // 노드(●/◌)나 이미 교차(┼)가 된 칸 — 그 칸의 제 색·스타일은 두고 수평 스텁만
+    // 따로 기록한다. 노드 색을 머지 상대 레인 색으로 덮으면 커밋 점 하나만 딴 가지
+    // 색으로 튄다.
+    row.charColorsH[lane] = color;
+    row.charStylesH[lane] = style;
   }
 }
 
@@ -144,12 +147,38 @@ function findLane(lanes, hash, style, recoveryBase) {
   return -1;
 }
 
-function takeLane(lanes, laneStyles, hash, style, recoveryBase) {
+// 레인 인덱스를 그대로 색으로 쓰면, 닫힌 레인을 뒤 커밋이 재사용할 때 색까지 물려받는다.
+// 그러면 아무 관계도 없는 두 가지가 같은 열에 같은 색으로 이어 찍혀 한 줄기로 읽힌다
+// (orphan 브랜치의 root 커밋이 바로 아래 main 팁과 한 브랜치처럼 보이던 문제). 레인을
+// 새로 열 때마다, 지금 살아있는 레인들이 쓰지 않는 색을 순서대로 골라 준다.
+const LANE_COLORS = 6; // sixel 팔레트의 그래프용 색 개수
+
+function pickLaneColor(lanes, laneColors, colorCursor) {
+  const used = new Set();
+  for (let lane = 0; lane < lanes.length; lane++) {
+    if (lanes[lane] !== null) used.add(laneColors[lane]);
+  }
+  for (let step = 0; step < LANE_COLORS; step++) {
+    const color = (colorCursor.next + step) % LANE_COLORS;
+    if (!used.has(color)) {
+      colorCursor.next = (color + 1) % LANE_COLORS;
+      return color;
+    }
+  }
+  // 레인이 색 수보다 많으면 겹칠 수밖에 없다 — 그때는 그냥 다음 순번을 쓴다.
+  const color = colorCursor.next % LANE_COLORS;
+  colorCursor.next = (color + 1) % LANE_COLORS;
+  return color;
+}
+
+function takeLane(lanes, laneStyles, laneColors, colorCursor, hash, style, recoveryBase) {
   const { from, to } = laneRange(lanes, style, recoveryBase);
   for (let lane = from; lane < to; lane++) {
     if (lanes[lane] === null) {
+      const color = pickLaneColor(lanes, laneColors, colorCursor);
       lanes[lane] = hash;
       laneStyles[lane] = style;
+      laneColors[lane] = color;
       return lane;
     }
   }
@@ -157,9 +186,12 @@ function takeLane(lanes, laneStyles, hash, style, recoveryBase) {
   while (lanes.length < from) {
     lanes.push(null);
     laneStyles.push(STYLE_NORMAL);
+    laneColors.push(0);
   }
+  const color = pickLaneColor(lanes, laneColors, colorCursor);
   lanes.push(hash);
   laneStyles.push(style);
+  laneColors.push(color);
   return lanes.length - 1;
 }
 
@@ -170,6 +202,9 @@ function calcGraphRows(commits, stashHashes, stashMap) {
   // 리커버리 여부를 판정하면, 유실 커밋의 부모는 대개 도달 가능한 커밋이라 리커버리 가지의
   // 꼬리 구간이 정상 레인색으로 되살아난다. 그래서 레인별로 간선 스타일을 따로 들고 간다.
   let laneStyles = [];
+  // 레인별 색. 인덱스와 분리해 두어야 레인을 재사용해도 색이 따라오지 않는다.
+  let laneColors = [];
+  const colorCursor = { next: 0 };
   let maxLanes = 0;
   const recoveryBase = countNormalLanes(commits);
 
@@ -181,7 +216,10 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     // 가리키고 있어도 그 커밋은 정상 구역에 자리를 잡고, 리커버리 레인은 아래의 코너
     // 처리에서 ╯ 로 합류시킨다.
     let baseLane = findLane(lanes, hash, nodeStyle, recoveryBase);
-    if (baseLane === -1) baseLane = takeLane(lanes, laneStyles, hash, nodeStyle, recoveryBase);
+    // 레인을 물려받았다는 건 위쪽에 이 커밋을 부모로 삼은 자식이 있었다는 뜻이다.
+    // 새로 연 레인이면 이 커밋이 가지의 팁이므로 노드 위로 이어질 획이 없다.
+    const nodeUp = baseLane !== -1;
+    if (baseLane === -1) baseLane = takeLane(lanes, laneStyles, laneColors, colorCursor, hash, nodeStyle, recoveryBase);
 
     const row = {
       type: 'commit',
@@ -204,14 +242,18 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       committerDate: commit.committerDate,
       isRecovery: !!commit.isRecovery,
       recoveryRef: commit.recoveryRef || null,
+      // 노드에서 위/아래로 세로 획을 뻗을지. 이웃 행의 글자만 보고 추측하면 빈 레인을
+      // 재사용한 노드가 앞 브랜치와 이어져 버린다 — 그래프 구조로 직접 정한다.
+      nodeUp,
+      nodeDown: parents.length > 0,
     };
 
-    setCell(row, baseLane, commit.isRecovery ? '\u25cc' : '\u25cf', baseLane, nodeStyle);
+    setCell(row, baseLane, commit.isRecovery ? '\u25cc' : '\u25cf', laneColors[baseLane], nodeStyle);
 
     for (let lane = 0; lane < lanes.length; lane++) {
       if (lane === baseLane) continue;
       if (lanes[lane] === null) continue;
-      setCell(row, lane, '\u2502', lane, laneStyles[lane]);
+      setCell(row, lane, '\u2502', laneColors[lane], laneStyles[lane]);
     }
 
     const merges = [];
@@ -227,7 +269,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
         if (existing !== -1 && existing !== baseLane) {
           merges.push({ lane: existing, isNew: false, hash: parentHash });
         } else if (existing === -1) {
-          const newLane = takeLane(lanes, laneStyles, parentHash, nodeStyle, recoveryBase);
+          const newLane = takeLane(lanes, laneStyles, laneColors, colorCursor, parentHash, nodeStyle, recoveryBase);
           merges.push({ lane: newLane, isNew: true, hash: parentHash });
         }
       }
@@ -235,28 +277,30 @@ function calcGraphRows(commits, stashHashes, stashMap) {
 
     for (const merge of merges) {
       const style = nodeStyle;
-      addHorizontalConnector(row, baseLane, baseLane, style, merge.lane > baseLane);
-      fillHorizontal(row, baseLane, merge.lane, merge.lane, style);
+      const color = laneColors[merge.lane];
+      addHorizontalConnector(row, baseLane, color, style, merge.lane > baseLane);
+      fillHorizontal(row, baseLane, merge.lane, color, style);
       if (merge.isNew) {
-        setCell(row, merge.lane, merge.lane > baseLane ? '\u256e' : '\u256d', merge.lane, style);
+        setCell(row, merge.lane, merge.lane > baseLane ? '\u256e' : '\u256d', color, style);
       } else {
-        addHorizontalConnector(row, merge.lane, merge.lane, style, baseLane > merge.lane);
+        addHorizontalConnector(row, merge.lane, color, style, baseLane > merge.lane);
       }
     }
 
     for (let lane = 0; lane < lanes.length; lane++) {
       if (lane === baseLane) continue;
       if (lanes[lane] !== hash) continue;
-      // \uc774 \uc140\uc744 \uc774\ubbf8 \uc9c0\ub098\uac00\ub358 \uc218\ud3c9 \ubcd1\ud569\uc120\uc758 \uc0c9(\uc788\uc73c\uba74)\uc744 \ubcf4\uc874\ud55c\ub2e4. setCell\uc774 \ucf54\ub108\ub85c
-      // \ub36e\uc73c\uba74\uc11c charColorsH\ub97c \ucd08\uae30\ud654\ud558\ub294\ub370, \uadf8 \uac12\uc744 \ub418\uc0b4\ub824\uc57c \ub80c\ub354\uac00 \uad00\ud1b5 \uc218\ud3c9\uc120\uc744
-      // \uc6d0\ub798 \uc0c9\uc73c\ub85c \uc774\uc5b4 \uadf8\ub9b4 \uc218 \uc788\ub2e4(\ucf54\ub108\uac00 \uc218\ud3c9\uc120 \uc911\uac04\uc744 \ub04a\uc9c0 \uc54a\ub3c4\ub85d).
+      // 이 셀을 이미 지나가던 수평 병합선의 색(있으면)을 보존한다. setCell이 코너로
+      // 덮으면서 charColorsH를 초기화하는데, 그 값을 되살려야 렌더가 관통 수평선을
+      // 원래 색으로 이어 그릴 수 있다(코너가 수평선 중간을 끊지 않도록).
       const priorH = row.charColorsH[lane];
       const priorSH = row.charStylesH[lane];
       const closeStyle = laneStyles[lane];
-      setCell(row, lane, lane > baseLane ? '\u256f' : '\u2570', lane, closeStyle);
+      const closeColor = laneColors[lane];
+      setCell(row, lane, lane > baseLane ? '\u256f' : '\u2570', closeColor, closeStyle);
       if (priorH >= 0) row.charColorsH[lane] = priorH;
       if (priorSH >= 0) row.charStylesH[lane] = priorSH;
-      fillHorizontal(row, baseLane, lane, lane, closeStyle);
+      fillHorizontal(row, baseLane, lane, closeColor, closeStyle);
       lanes[lane] = null;
       laneStyles[lane] = STYLE_NORMAL;
     }
@@ -281,6 +325,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
       lanes.pop();
       laneStyles.pop();
+      laneColors.pop();
     }
     maxLanes = Math.max(maxLanes, lanes.length, row.chars.length);
   }
