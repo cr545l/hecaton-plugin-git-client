@@ -140,6 +140,8 @@ const ui = {
   middlePanelCollapsed: false,
   rightPanelCollapsed: false,
   titleClickZones: [],
+  repoSetupClickZones: [],       // 비저장소 첫 화면의 Init/Open/Clone 버튼
+  hoveredRepoSetupAction: null,
   leftTabZones: [],
   leftTabInfo: null,
   leftPanelClickMap: [],

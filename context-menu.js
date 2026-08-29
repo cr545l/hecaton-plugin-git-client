@@ -39,10 +39,28 @@ const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
 // 메뉴를 만들 때(decorateMenuItems)와 실행할 때(guardAction)가 같은 표를 보므로,
 // "메뉴에선 살아 있는데 눌러도 안 되는" 어긋남이 생기지 않는다.
-const { guardAction, decorateMenuItems, SCOPE } = require('./actions');
+const { guardAction, guardDeferredAction, decorateMenuItems, operationLabel, SCOPE } = require('./actions');
 // 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
 const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
+
+// ── 자주 쓰는 자원 묶음 ──
+// 같은 성격의 작업이 같은 값을 보게 묶어 둔다. 한 곳만 고쳐도 전부 따라오고,
+// 어떤 작업이 무엇을 붙잡는지 이름으로 읽힌다.
+//
+// CHECKOUT_SCOPES: 워킹트리를 갈아엎고 HEAD/ref 를 옮기는 것들 — 체크아웃, 머지,
+//   리베이스, 리셋, cherry-pick, revert, 히스토리 재작성. 인덱스도 함께 다시 쓰인다.
+// WORKTREE_SCOPES: 워킹트리의 파일만 되돌리거나 지운다 — discard, clean, rm.
+//   `git checkout -- <path>` 계열은 인덱스를 읽어 잠그므로 INDEX 도 함께 잡는다.
+// STASH_SCOPES: 워킹트리와 스태시 사이를 오간다 — stash push/pop/apply.
+// PULL_SCOPES: 위에 더해 리모트까지 — pull 은 fetch 와 merge/rebase 를 한 번에 한다.
+const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
+const WORKTREE_SCOPES = [INDEX, WORKTREE];
+const STASH_SCOPES = [INDEX, WORKTREE, STASH];
+const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
+// stash 로 워킹트리를 비우고 → 옮기고 → 되돌리는 다단계 작업. 세 단계가 차례로
+// 네 자원을 건드리므로 처음부터 넷 다 붙잡은 채로 간다.
+const STASH_REWRITE_SCOPES = [INDEX, WORKTREE, REFS, STASH];
 
 // 커밋 하나에 달린 태그 수만큼 서브메뉴가 늘어나므로 상한을 둔다.
 // 배경은 REF_INLINE_MAX 주석과 test/menu-payload.test.js 참고.
@@ -575,9 +593,9 @@ async function handleContextMenuAction(actionId) {
       showError('Clipboard does not contain a patch.\nCopy a patch (git diff / format-patch output) first.');
       return;
     }
-    startSpinner('Applying patch...');
+    const patchOp = startSpinner('Applying patch...', WORKTREE_SCOPES);
     const err = await gitApplyPatchFromText(state.cwd, patchText);
-    await afterGitOp(err, 'Apply patch');
+    await afterGitOp(err, 'Apply patch', {}, patchOp);
     return;
   }
 
@@ -632,14 +650,14 @@ async function handleContextMenuAction(actionId) {
   }
 
   if (actionId === 'tab_init') {
-    startSpinner('Initializing repository...');
+    const initOp = startSpinner('Initializing repository...');
     const err = await gitInit(state.cwd);
     if (err) {
-      stopSpinner();
+      stopSpinner(initOp);
       showError('Init failed:\n' + err);
       return;
     }
-    stopSpinner();
+    stopSpinner(initOp);
     await openRepositoryAt(state.cwd);
     return;
   }
@@ -805,9 +823,9 @@ async function handleContextMenuAction(actionId) {
         state.pendingDialogTarget = wtPath;
         break;
       case 'worktree_prune': {
-        startSpinner('Pruning worktrees...');
+        const wtPruneOp = startSpinner('Pruning worktrees...', [REFS]);
         const err = await gitWorktreePruneAsync(state.cwd);
-        await afterGitOp(err, 'Worktree prune', { metadataOnly: true });
+        await afterGitOp(err, 'Worktree prune', { metadataOnly: true }, wtPruneOp);
         break;
       }
       case 'worktree_show_in_explorer':
@@ -1086,7 +1104,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_stash_one': {
-        startSpinner('Stashing...');
+        const stashOneOp = startSpinner('Stashing...', STASH_SCOPES);
         const files = fileItems.filter(item => item && item.file).map(item => item.file);
         let err;
         if (files.length === 1) {
@@ -1096,7 +1114,7 @@ async function handleContextMenuAction(actionId) {
         } else {
           err = 'No files selected';
         }
-        await afterGitOp(err, 'Stash file');
+        await afterGitOp(err, 'Stash file', {}, stashOneOp);
         break;
       }
       case 'file_save_patch': {
@@ -1145,12 +1163,13 @@ async function handleContextMenuAction(actionId) {
     const localName = slashIdx >= 0 ? remoteBranchName.substring(slashIdx + 1) : remoteBranchName;
 
     switch (actionId) {
-      case 'remotebranch_checkout_local':
-        startSpinner('Checking out...');
-        gitCheckoutRefAsync(state.cwd, localName).then(async err => { await afterGitOp(err, 'Checkout'); });
+      case 'remotebranch_checkout_local': {
+        const rbCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
+        gitCheckoutRefAsync(state.cwd, localName).then(async err => { await afterGitOp(err, 'Checkout', {}, rbCoOp); });
         break;
+      }
       case 'remotebranch_checkout_tracking': {
-        const trackCoOp = startSpinner('Checking out...');
+        const trackCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
         await runCreateBranch(localName, remoteBranchName, 'Checkout', trackCoOp);
         break;
       }
@@ -1226,34 +1245,37 @@ async function handleContextMenuAction(actionId) {
     }
 
     switch (actionId) {
-      case 'branch_checkout':
-        startSpinner('Checking out...');
-        gitCheckoutRefAsync(state.cwd, branchName).then(async err => { await afterGitOp(err, 'Checkout'); });
+      case 'branch_checkout': {
+        const brCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
+        gitCheckoutRefAsync(state.cwd, branchName).then(async err => { await afterGitOp(err, 'Checkout', {}, brCoOp); });
         break;
+      }
       case 'branch_ff': {
-        startSpinner('Fast-forwarding...');
+        // 현재 브랜치면 워킹트리까지 옮기고, 아니면 refspec fetch 로 ref 만 옮긴다 —
+        // 어느 쪽이든 리모트를 거치므로 REMOTE 도 함께 붙잡는다.
+        const ffOp = startSpinner('Fast-forwarding...', PULL_SCOPES);
         // 현재 브랜치는 merge --ff-only로 작업 트리까지 함께 옮긴다. 다른 브랜치는
         // 체크아웃돼 있지 않으므로 refspec fetch로 ref만 옮긴다 — merge를 쓰면 엉뚱하게
         // HEAD가 갱신된다.
         const ffPromise = branch && branch.isCurrent
           ? gitMergeFastForwardAsync(state.cwd, upstream)
           : gitFetchIntoBranchAsync(state.cwd, remote, splitUpstreamRef(upstream, state.remotes).branch, branchName);
-        ffPromise.then(async err => { await afterGitOp(err, 'Fast-forward'); });
+        ffPromise.then(async err => { await afterGitOp(err, 'Fast-forward', {}, ffOp); });
         break;
       }
       case 'branch_pull':
         // 체크아웃하지 않은 브랜치면 pull이 HEAD로 들어가 버린다 — 대신할 명령을 고르게 한다.
         if (!branch || !branch.isCurrent) { showPullOtherBranchDialog(branchName, upstream, false); break; }
-        startSpinner('Pulling...');
-        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Pull'); });
+        const brPullOp = startSpinner('Pulling...', PULL_SCOPES);
+        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Pull', {}, brPullOp); });
         break;
       case 'branch_pull_rebase':
         if (!branch || !branch.isCurrent) { showPullOtherBranchDialog(branchName, upstream, true); break; }
-        startSpinner('Pulling with rebase...');
+        const brPullRebaseOp = startSpinner('Pulling with rebase...', PULL_SCOPES);
         gitPullRebaseAsync(state.cwd, remote, branchName).then(async err => {
           if (err && isRebaseConflictError(err)) {
             await refreshAsync();
-            stopSpinner();
+            stopSpinner(brPullRebaseOp);
             if (state.rightView === 'log') refreshLog();
             if (state.rightView !== 'diff') {
               state.rightView = 'diff';
@@ -1262,7 +1284,7 @@ async function handleContextMenuAction(actionId) {
             render();
             return;
           }
-          await afterGitOp(err, 'Pull (rebase)');
+          await afterGitOp(err, 'Pull (rebase)', {}, brPullRebaseOp);
         });
         break;
       case 'branch_force_push':
@@ -1380,17 +1402,17 @@ async function handleContextMenuAction(actionId) {
         copyToClipboard(branchName);
         break;
       case 'branch_rebase_onto': {
-        startSpinner('Checking rebase...');
+        const brRebaseOp = startSpinner('Checking rebase...', CHECKOUT_SCOPES);
         // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
         if (await gitIsRebaseNoop(state.cwd, branchName)) {
-          stopSpinner();
+          stopSpinner(brRebaseOp);
           showRebaseNoopDialog(branchName);
           break;
         }
         // Pre-check for conflicts
         const conflictCheck = await gitCheckRebaseConflicts(state.cwd, branchName);
         if (conflictCheck.willConflict) {
-          stopSpinner();
+          stopSpinner(brRebaseOp);
           const fileList = conflictCheck.files.length > 0
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
@@ -1407,10 +1429,10 @@ async function handleContextMenuAction(actionId) {
           render();
           break;
         }
-        updateSpinner('Rebasing...');
+        updateSpinner('Rebasing...', brRebaseOp);
         gitRebaseAsync(state.cwd, branchName).then(async err => {
           await refreshAsync();
-          stopSpinner();
+          stopSpinner(brRebaseOp);
           if (state.rightView === 'log') refreshLog();
           if (err && isRebaseConflictError(err)) {
             if (state.rightView !== 'diff') {
@@ -1426,12 +1448,13 @@ async function handleContextMenuAction(actionId) {
         });
         break;
       }
-      case 'branch_merge_into':
-        startSpinner('Merging...');
+      case 'branch_merge_into': {
+        const brMergeOp = startSpinner('Merging...', CHECKOUT_SCOPES);
         gitMergeAsync(state.cwd, branchName).then(async err => {
-          await afterGitOp(err, 'Merge');
+          await afterGitOp(err, 'Merge', {}, brMergeOp);
         });
         break;
+      }
     }
     return;
   }
@@ -1545,7 +1568,7 @@ async function handleContextMenuAction(actionId) {
   if (actionId.startsWith('checkout_branch:')) {
     const branchName = actionId.substring('checkout_branch:'.length);
     // 진행 표시 없이 afterGitOp 만 부르면 끝낼 작업이 없어 다른 작업을 대신 끝낸다.
-    const coOp = startSpinner('Checking out...');
+    const coOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
     const err = await gitCheckoutRef(state.cwd, branchName);
     await afterGitOp(err, 'Checkout', {}, coOp);
     return;
@@ -1575,20 +1598,20 @@ async function handleContextMenuAction(actionId) {
       state.pendingDialogTarget = hash;
       break;
     case 'merge': {
-      startSpinner('Merging...');
-      gitMergeAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Merge'); });
+      const mergeOp = startSpinner('Merging...', CHECKOUT_SCOPES);
+      gitMergeAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Merge', {}, mergeOp); });
       break;
     }
     case 'rebase': {
-      startSpinner('Checking rebase...');
+      const rebaseOp = startSpinner('Checking rebase...', CHECKOUT_SCOPES);
       // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
       if (await gitIsRebaseNoop(state.cwd, hash)) {
-        stopSpinner();
+        stopSpinner(rebaseOp);
         showRebaseNoopDialog(hash);
         break;
       }
       if (state.staged.length > 0 || state.unstaged.length > 0) {
-        stopSpinner();
+        stopSpinner(rebaseOp);
         state.pendingRebaseRef = hash;
         hecaton.dialog.show({
           type: 'message',
@@ -1603,7 +1626,7 @@ async function handleContextMenuAction(actionId) {
         // Pre-check for conflicts
         const conflictCheck = await gitCheckRebaseConflicts(state.cwd, hash);
         if (conflictCheck.willConflict) {
-          stopSpinner();
+          stopSpinner(rebaseOp);
           const fileList = conflictCheck.files.length > 0
             ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
             : '';
@@ -1620,10 +1643,10 @@ async function handleContextMenuAction(actionId) {
           render();
           break;
         }
-        updateSpinner('Rebasing...');
+        updateSpinner('Rebasing...', rebaseOp);
         gitRebaseAsync(state.cwd, hash).then(async err => {
           await refreshAsync();
-          stopSpinner();
+          stopSpinner(rebaseOp);
           if (state.rightView === 'log') refreshLog();
           if (err && isStaleRebaseError(err)) {
             state.pendingRebaseRef = hash;
@@ -1700,8 +1723,8 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'revert': {
-      startSpinner('Reverting...');
-      gitRevertAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Revert'); });
+      const revertOp = startSpinner('Reverting...', CHECKOUT_SCOPES);
+      gitRevertAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Revert', {}, revertOp); });
       break;
     }
     case 'amend_commit': {
@@ -1817,6 +1840,64 @@ async function handleContextMenuAction(actionId) {
   }
 }
 
+// ── 확인창이 실제로 실행할 동작 ──
+// 다이얼로그를 열 때 통과한 판정을 확인 버튼 시점에 한 번 더 보기 위한 대응표다.
+// 여는 쪽(handleContextMenuAction 의 guardAction)과 같은 id 를 가리켜야 두 검사가
+// 같은 규칙을 본다. 여기 없는 pending 은 재검사 없이 지나간다 — 새 확인창을 만들면
+// 함께 등록해야 그 사이 시작된 작업과 겹치지 않는다.
+const DIALOG_ACTION_IDS = {
+  'unlock-index-confirm': 'unlockIndex',
+  'delete-branch': 'branch_delete',
+  'delete-remote-branch-confirm': 'branch_delete_remote',
+  'delete-tag-confirm': 'tag_delete:',
+  'delete-remote-tag-confirm': 'tag_delete_remote:',
+  'discard-confirm': 'file_discard',
+  'discard-all-confirm': 'tab_discard_all',
+  'clean-confirm': 'tab_clean',
+  'remove-from-repo-confirm': 'file_remove_keep',
+  'checkout-commit-confirm': 'checkout',
+  'cherry-pick-confirm': 'cherry_pick',
+  'reset-confirm': 'reset',
+  'reword-commit': 'reword_commit',
+  'edit-commit': 'edit_commit',
+  'drop-commit': 'drop_commit',
+  'squash-commit': 'squash_commit',
+  'fixup-commit': 'fixup_commit',
+  'force-push-confirm': 'branch_force_push',
+  'push-name-mismatch': 'git-push',
+  'push-tags-confirm': 'remote_push_tags',
+  'stash-apply-confirm': 'stash_apply',
+  'stash-drop-confirm': 'stash_drop',
+  'rename-stash': 'stash_rename',
+  'rename-branch': 'branch_rename',
+  'rename-remote': 'remote_rename',
+  'set-remote-url': 'remote_set_url',
+  'remove-remote-confirm': 'remote_remove',
+  'new-remote-name': 'remote_add',
+  'new-remote-url': 'remote_add',
+  'new-branch': 'new_branch',
+  'new-tag': 'new_tag',
+  'new-tag-message': 'new_tag',
+  'new-worktree-branch': 'worktree_new',
+  'new-worktree-path': 'worktree_new',
+  'remove-worktree-confirm': 'worktree_remove',
+  'clone-url': 'tab_clone',
+  // 체크아웃하지 않은 브랜치의 Pull — 고른 대체 명령(ff / checkout & pull)을 실행한다
+  'pull-other-branch': 'branch_pull',
+  'pull-other-branch-rebase': 'branch_pull_rebase',
+};
+
+// 재검사에 걸려 실행하지 않을 때, 확인창이 들고 있던 대상까지 함께 버린다.
+// 남겨 두면 다음 확인창이 엉뚱한 대상을 물려받는다.
+function clearPendingTargets() {
+  state.pendingDiscardFiles = null;
+  state.pendingRemoveFiles = null;
+  state.pendingRemoveKeepLocal = false;
+  state.pendingRebaseRef = null;
+  state.pendingStash = false;
+  state.pendingStashCreateBranch = null;
+}
+
 async function handleDialogResult(params) {
   const buttonId = params && params.button_id;
 
@@ -1826,6 +1907,16 @@ async function handleDialogResult(params) {
     const target = state.pendingDialogTarget || '';
     state.pendingDialogAction = null;
     state.pendingDialogTarget = null;
+
+    // 확인창이 떠 있는 동안 상황이 바뀔 수 있다 — 다른 작업이 시작되거나, 인덱스가
+    // 잠기거나, rebase 가 걸린다. 열 때의 판정만 믿으면 그 사이에 시작된 작업과
+    // 겹친 채로 실행된다. 취소는 아무것도 실행하지 않으므로 그대로 통과시킨다.
+    const deferredId = DIALOG_ACTION_IDS[action];
+    if (deferredId && buttonId && buttonId !== 'cancel' && !guardDeferredAction(deferredId)) {
+      clearPendingTargets();
+      render();
+      return;
+    }
 
     if (action === 'unlock-index-confirm') {
       if (buttonId === 'unlock') {
@@ -1852,29 +1943,32 @@ async function handleDialogResult(params) {
       const remoteBranch = parts.branch || target;
 
       if (buttonId === 'ff') {
-        startSpinner('Fast-forwarding...');
+        const otherFfOp = startSpinner('Fast-forwarding...', PULL_SCOPES);
         const err = await gitFetchIntoBranchAsync(state.cwd, remote, remoteBranch, target);
-        await afterGitOp(err, 'Fast-forward');
+        await afterGitOp(err, 'Fast-forward', {}, otherFfOp);
         return;
       }
       // Checkout & Pull — 체크아웃부터 실패하면(로컬 수정 등) pull은 시도하지 않는다.
       // 두 명령이 한 동작이므로 두 번째는 startSpinner 가 아니라 updateSpinner 다.
       // 다시 start 하면 진행 중인 작업이 하나 더 등록되는데 끝내는 쪽은 afterGitOp 의
       // stopSpinner 하나뿐이라, 끝나지 않는 작업이 남아 이후 쓰기가 전부 막힌다.
-      startSpinner('Checking out...');
+      const coPullOp = startSpinner('Checking out...', PULL_SCOPES);
       const coErr = await gitCheckoutRefAsync(state.cwd, target);
-      if (coErr) { await afterGitOp(coErr, 'Checkout'); return; }
-      updateSpinner(rebase ? 'Pulling with rebase...' : 'Pulling...');
+      if (coErr) { await afterGitOp(coErr, 'Checkout', {}, coPullOp); return; }
+      updateSpinner(rebase ? 'Pulling with rebase...' : 'Pulling...', coPullOp);
       const pullErr = rebase
         ? await gitPullRebaseAsync(state.cwd, remote, remoteBranch)
         : await gitPullFromRemoteAsync(state.cwd, remote, remoteBranch);
-      await afterGitOp(pullErr, rebase ? 'Pull (rebase)' : 'Pull');
+      await afterGitOp(pullErr, rebase ? 'Pull (rebase)' : 'Pull', {}, coPullOp);
       return;
     }
 
     // delete-branch is a message dialog with delete/force/cancel buttons
     if (action === 'delete-branch') {
       if (buttonId === 'delete') {
+        // 이 갈래만 afterGitOp 을 쓰지 않는다 — 실패가 곧 "force 로 다시 물어볼 일"이라
+        // 오류 창을 바로 띄우면 안 되기 때문이다. 대신 갱신을 직접 기다린 뒤 작업을
+        // 내리므로 뒷정리 구간이 아예 없다(force 갈래는 평소대로 afterGitOp).
         const delOp = startSpinner('Deleting branch...', [REFS]);
         const err = await gitDeleteBranch(state.cwd, target, false);
         // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
@@ -1909,8 +2003,10 @@ async function handleDialogResult(params) {
         : buttonId === 'reset_hard' ? 'hard'
         : null;
       if (resetMode) {
-        startSpinner('Resetting (' + resetMode + ')...');
-        gitResetModeAsync(state.cwd, target, resetMode).then(async err => { await afterGitOp(err, 'Reset'); });
+        // soft/mixed 는 워킹트리를 건드리지 않지만 hard 는 갈아엎는다 — 셋을 갈라
+        // 적으면 같은 버튼이 모드에 따라 다르게 막혀 읽기 어렵다. 가장 넓은 쪽으로 맞춘다.
+        const resetModeOp = startSpinner('Resetting (' + resetMode + ')...', CHECKOUT_SCOPES);
+        gitResetModeAsync(state.cwd, target, resetMode).then(async err => { await afterGitOp(err, 'Reset', {}, resetModeOp); });
       }
       return;
     }
@@ -1925,20 +2021,20 @@ async function handleDialogResult(params) {
     if (action === 'stash-apply-confirm') {
       if (buttonId === 'apply') {
         const deleteAfter = params.checkboxes && params.checkboxes.delete_after;
-        startSpinner('Applying stash...');
+        const applyStashOp = startSpinner('Applying stash...', STASH_SCOPES);
         const err = await gitStashApply(state.cwd, target);
         if (!err && deleteAfter) {
           const dropErr = await gitStashDrop(state.cwd, target);
-          await afterGitOp(dropErr, 'Stash apply & delete');
+          await afterGitOp(dropErr, 'Stash apply & delete', {}, applyStashOp);
         } else {
-          await afterGitOp(err, 'Stash apply');
+          await afterGitOp(err, 'Stash apply', {}, applyStashOp);
         }
       }
       return;
     }
     if (action === 'discard-confirm') {
       if (buttonId === 'discard') {
-        startSpinner('Discarding...');
+        const discardOp = startSpinner('Discarding...', WORKTREE_SCOPES);
         const files = state.pendingDiscardFiles || [];
         state.pendingDiscardFiles = null;
         let err = null;
@@ -1947,7 +2043,7 @@ async function handleDialogResult(params) {
           const oneErr = await gitDiscardFile(state.cwd, item);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Discard');
+        await afterGitOp(err, 'Discard', {}, discardOp);
       } else {
         state.pendingDiscardFiles = null;
       }
@@ -1959,21 +2055,21 @@ async function handleDialogResult(params) {
       state.pendingRemoveFiles = null;
       state.pendingRemoveKeepLocal = false;
       if (buttonId === 'remove') {
-        startSpinner(keepLocal ? 'Removing...' : 'Deleting...');
+        const removeOp = startSpinner(keepLocal ? 'Removing...' : 'Deleting...', WORKTREE_SCOPES);
         let err = null;
         for (const file of files) {
           if (!file) continue;
           const oneErr = await gitRemoveFromRepo(state.cwd, file, keepLocal);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, keepLocal ? 'Remove from version control' : 'Delete');
+        await afterGitOp(err, keepLocal ? 'Remove from version control' : 'Delete', {}, removeOp);
       }
       return;
     }
     if (action === 'checkout-commit-confirm') {
       if (buttonId === 'checkout') {
-        startSpinner('Checking out...');
-        gitCheckoutRefAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Checkout'); });
+        const commitCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
+        gitCheckoutRefAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Checkout', {}, commitCoOp); });
       }
       return;
     }
@@ -2160,34 +2256,34 @@ async function handleDialogResult(params) {
           showError('Branch cannot be empty');
           return;
         }
-        startSpinner('Creating worktree...');
+        const wtAddOp = startSpinner('Creating worktree...', [REFS, CONFIG]);
         const exists = await gitBranchExists(state.cwd, branchName);
         const err = await gitWorktreeAdd(state.cwd, target, branchName, !exists);
-        await afterGitOp(err, 'Worktree add', { metadataOnly: true });
+        await afterGitOp(err, 'Worktree add', { metadataOnly: true }, wtAddOp);
       }
       return;
     }
     if (action === 'remove-worktree-confirm') {
       if ((buttonId === 'remove' || buttonId === 'force') && target) {
-        startSpinner('Removing worktree...');
+        const wtRmOp = startSpinner('Removing worktree...', [REFS, CONFIG]);
         const err = await gitWorktreeRemove(state.cwd, target, buttonId === 'force');
-        await afterGitOp(err, 'Worktree remove', { metadataOnly: true });
+        await afterGitOp(err, 'Worktree remove', { metadataOnly: true }, wtRmOp);
       }
       return;
     }
     if (action === 'clean-confirm') {
       if (buttonId === 'clean') {
-        startSpinner('Cleaning...');
+        const cleanOp = startSpinner('Cleaning...', WORKTREE_SCOPES);
         const err = await gitCleanUntrackedAsync(state.cwd);
-        await afterGitOp(err, 'Clean', { statusOnly: true });
+        await afterGitOp(err, 'Clean', { statusOnly: true }, cleanOp);
       }
       return;
     }
     if (action === 'discard-all-confirm') {
       if (buttonId === 'discard_all') {
-        startSpinner('Discarding all changes...');
+        const discardAllOp = startSpinner('Discarding all changes...', WORKTREE_SCOPES);
         const err = await gitDiscardAllChangesAsync(state.cwd);
-        await afterGitOp(err, 'Discard all changes', { statusOnly: true });
+        await afterGitOp(err, 'Discard all changes', { statusOnly: true }, discardAllOp);
       }
       return;
     }
@@ -2206,9 +2302,9 @@ async function handleDialogResult(params) {
           return;
         }
         const repoName = cloneUrl.replace(/\/+$/, '').split('/').pop().replace(/\.git$/, '') || 'repo';
-        startSpinner('Cloning ' + repoName + '...');
+        const cloneOp = startSpinner('Cloning ' + repoName + '...');
         const err = await gitCloneAsync(result.path, cloneUrl, repoName);
-        stopSpinner();
+        stopSpinner(cloneOp);
         if (err) {
           if (ui.setupGitWatcher) ui.setupGitWatcher();
           showError('Clone failed:\n' + err);
@@ -2299,6 +2395,19 @@ async function handleDialogResult(params) {
     const op = state.operationState;
     const opType = op ? op.type : 'rebase-merge';
     const isRebase = opType === 'rebase-merge' || opType === 'rebase-apply';
+    if (buttonId !== 'continue' && buttonId !== 'abort' && buttonId !== 'skip') return;
+    // 확인창이 떠 있는 사이에 작업이 끝났거나(다른 창에서 abort) 다른 쓰기가 시작됐을
+    // 수 있다. op-abort 계열은 진행 중인 작업이 있어야만 성립하므로 그것까지 함께 본다.
+    if (!guardDeferredAction(buttonId === 'skip' ? 'op-skip' : 'op-abort')) { render(); return; }
+    // 같은 continue/abort/skip 을 'b' 메뉴나 타이틀 버튼으로 하면 진행 표시가 켜지고
+    // 그동안 다른 쓰기가 막힌다. 이 다이얼로그 경로만 그러지 않으면 같은 명령인데
+    // 들어온 문이 다르다는 이유로 보호가 사라진다 — 인덱스·워킹트리·ref 를 통째로
+    // 옮기는 명령이므로 그 사이 스테이징이나 커밋이 끼어들면 안 된다.
+    const opLabel = operationLabel(opType);
+    const menuOpLabel = buttonId === 'continue' ? opLabel + ' continue...'
+      : buttonId === 'abort' ? 'Aborting ' + opLabel.toLowerCase() + '...'
+      : opLabel + ' skip...';
+    const menuOp = startSpinner(menuOpLabel, CHECKOUT_SCOPES);
     let err;
     if (buttonId === 'continue') {
       if (isRebase) err = await gitRebaseContinue(state.cwd);
@@ -2314,11 +2423,10 @@ async function handleDialogResult(params) {
       if (isRebase) err = await gitRebaseSkip(state.cwd);
       else if (opType === 'cherry-pick') err = await gitCherryPickSkip(state.cwd);
       else if (opType === 'revert') err = await gitRevertSkip(state.cwd);
-    } else {
-      return;
     }
     refreshAsync().then(() => {
       if (state.rightView === 'log') refreshLog();
+      stopSpinner(menuOp);
       if (err && isRebaseConflictError(err)) {
         // Conflict on continue/skip — show info dialog and switch to diff view
         if (state.rightView !== 'diff') {
@@ -2339,16 +2447,21 @@ async function handleDialogResult(params) {
   if (state.pendingCommitterEdit && buttonId === 'ok' && params.value != null) {
     const field = state.pendingCommitterEdit;
     state.pendingCommitterEdit = null;
+    if (!guardDeferredAction(field === 'name' ? 'committer-name' : 'committer-email')) { render(); return; }
     const configKey = field === 'name' ? 'user.name' : 'user.email';
     const val = params.value.trim();
     if (val) {
+      // .git/config.lock 을 잡는다 — 같은 CONFIG 를 쓰는 작업과 겹치면 실패한다.
+      const setOp = startSpinner('Setting committer...', [CONFIG]);
       const err = await gitSetConfig(state.cwd, configKey, val);
       if (err) {
+        stopSpinner(setOp);
         showError('Set ' + field + ' failed:\n' + err);
       } else {
         // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
         invalidateCommitterCache();
-        refreshAsync().then(() => render());
+        refreshInBackground({}, { message: 'Setting committer...', settle: true, scopes: setOp.scopes });
+        stopSpinner(setOp);
       }
     }
     return;
@@ -2359,14 +2472,15 @@ async function handleDialogResult(params) {
   }
   if (state.pendingStash && buttonId === 'stash_confirm') {
     state.pendingStash = false;
-    startSpinner('Stashing...');
+    if (!guardDeferredAction('git-stash')) { render(); return; }
+    const stashOp = startSpinner('Stashing...', STASH_SCOPES);
     gitStashSaveAsync(state.cwd).then(async stashErr => {
       if (stashErr) {
-        stopSpinner();
+        stopSpinner(stashOp);
         showError('Stash failed:\n' + stashErr);
       } else {
         await refreshAsync();
-        stopSpinner();
+        stopSpinner(stashOp);
         render();
       }
     });
@@ -2384,31 +2498,34 @@ async function handleDialogResult(params) {
       render();
       return;
     }
+    if (!guardDeferredAction('new_branch')) { render(); return; }
     const label = req.opName + '...';
     (async () => {
-      startSpinner(label + ' (1/3) Stashing');
+      // stash → 브랜치 생성(체크아웃) → stash 복원. 세 단계가 인덱스·워킹트리·ref·
+      // 스태시를 차례로 옮기므로 처음부터 넷 다 붙잡은 채로 간다.
+      const seqOp = startSpinner(label + ' (1/3) Stashing', STASH_REWRITE_SCOPES);
       const stashErr = await gitStashSaveAsync(state.cwd);
       if (stashErr) {
-        stopSpinner();
+        stopSpinner(seqOp);
         showError('Stash failed:\n' + stashErr);
         return;
       }
-      updateSpinner(label + ' (2/3) Creating branch');
+      updateSpinner(label + ' (2/3) Creating branch', seqOp);
       const createErr = await gitCreateBranch(state.cwd, req.name, req.startPoint);
       if (createErr) {
         // 브랜치가 만들어지지 않았으니 원래 자리에서 그대로 되돌려 놓는다.
-        updateSpinner(label + ' (3/3) Restoring stash');
+        updateSpinner(label + ' (3/3) Restoring stash', seqOp);
         await gitStashPopAsync(state.cwd);
         await refreshAsync();
-        stopSpinner();
+        stopSpinner(seqOp);
         if (state.rightView === 'log') refreshLog();
         showError(req.opName + ' failed:\n' + createErr);
         return;
       }
-      updateSpinner(label + ' (3/3) Restoring stash');
+      updateSpinner(label + ' (3/3) Restoring stash', seqOp);
       const popErr = await gitStashPopAsync(state.cwd);
       await refreshAsync();
-      stopSpinner();
+      stopSpinner(seqOp);
       if (state.rightView === 'log') refreshLog();
       if (popErr) {
         // 브랜치는 만들어졌고 변경분은 stash 에 남아 있다 — 유실이 아니라는 점을 알린다.
@@ -2424,17 +2541,19 @@ async function handleDialogResult(params) {
   if (state.pendingRebaseRef && buttonId === 'rebase_reset_hard') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
-    startSpinner('Resetting...');
-    gitResetAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Reset'); });
+    if (!guardDeferredAction('reset')) { render(); return; }
+    const resetOp = startSpinner('Resetting...', CHECKOUT_SCOPES);
+    gitResetAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Reset', {}, resetOp); });
     return;
   }
   if (state.pendingRebaseRef && buttonId === 'rebase_proceed') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
-    startSpinner('Rebasing...');
+    if (!guardDeferredAction('rebase')) { render(); return; }
+    const rebaseOp = startSpinner('Rebasing...', CHECKOUT_SCOPES);
     gitRebaseAsync(state.cwd, ref).then(async err => {
       await refreshAsync();
-      stopSpinner();
+      stopSpinner(rebaseOp);
       if (state.rightView === 'log') refreshLog();
       if (err && isStaleRebaseError(err)) {
         state.pendingRebaseRef = ref;
@@ -2464,13 +2583,16 @@ async function handleDialogResult(params) {
   if (state.pendingRebaseRef && buttonId === 'abort_retry_rebase') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
+    // 중단된 rebase 를 스스로 걷어내고 다시 시도하는 길이다 — 그 rebase 를 이유로
+    // 막으면 빠져나올 방법이 없어진다. 자원 겹침만 본다.
+    if (!guardDeferredAction('rebase', { allowDuringOperation: true })) { render(); return; }
     (async () => {
-      startSpinner('Aborting stale rebase...');
+      const retryOp = startSpinner('Aborting stale rebase...', CHECKOUT_SCOPES);
       await gitRebaseAbort(state.cwd);
-      updateSpinner('Retrying rebase...');
+      updateSpinner('Retrying rebase...', retryOp);
       const retryErr = await gitRebaseAsync(state.cwd, ref);
       await refreshAsync();
-      stopSpinner();
+      stopSpinner(retryOp);
       if (state.rightView === 'log') refreshLog();
       if (retryErr && isRebaseConflictError(retryErr)) {
         if (state.rightView !== 'diff') {
@@ -2489,24 +2611,27 @@ async function handleDialogResult(params) {
   if (state.pendingRebaseRef && buttonId === 'stash_rebase') {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
+    // 중단된 rebase 를 스스로 걷어내는 단계를 품고 있다 — allowDuringOperation.
+    if (!guardDeferredAction('rebase', { allowDuringOperation: true })) { render(); return; }
     (async () => {
-      startSpinner('Stash & Rebase... (1/3) Stashing');
+      // stash → rebase → stash 복원. 인덱스·워킹트리·ref·스태시를 차례로 옮긴다.
+      const srOp = startSpinner('Stash & Rebase... (1/3) Stashing', STASH_REWRITE_SCOPES);
       const stashErr = await gitStashSaveAsync(state.cwd);
       if (stashErr) {
-        stopSpinner();
+        stopSpinner(srOp);
         showError('Stash failed:\n' + stashErr);
         return;
       }
-      updateSpinner('Stash & Rebase... (2/3) Rebasing');
+      updateSpinner('Stash & Rebase... (2/3) Rebasing', srOp);
       let rebaseErr = await gitRebaseAsync(state.cwd, ref);
       if (rebaseErr && isStaleRebaseError(rebaseErr)) {
-        updateSpinner('Stash & Rebase... (2/3) Aborting stale rebase & retrying');
+        updateSpinner('Stash & Rebase... (2/3) Aborting stale rebase & retrying', srOp);
         await gitRebaseAbort(state.cwd);
         rebaseErr = await gitRebaseAsync(state.cwd, ref);
       }
       if (rebaseErr && isRebaseConflictError(rebaseErr)) {
         await refreshAsync();
-        stopSpinner();
+        stopSpinner(srOp);
         if (state.rightView === 'log') refreshLog();
         if (state.rightView !== 'diff') {
           state.rightView = 'diff';
@@ -2516,18 +2641,18 @@ async function handleDialogResult(params) {
         return;
       }
       if (rebaseErr) {
-        updateSpinner('Stash & Rebase... (3/3) Restoring stash');
+        updateSpinner('Stash & Rebase... (3/3) Restoring stash', srOp);
         await gitStashPopAsync(state.cwd);
         await refreshAsync();
-        stopSpinner();
+        stopSpinner(srOp);
         if (state.rightView === 'log') refreshLog();
         showError('Rebase failed:\n' + rebaseErr);
         return;
       }
-      updateSpinner('Stash & Rebase... (3/3) Restoring stash');
+      updateSpinner('Stash & Rebase... (3/3) Restoring stash', srOp);
       const popErr = await gitStashPopAsync(state.cwd);
       await refreshAsync();
-      stopSpinner();
+      stopSpinner(srOp);
       if (state.rightView === 'log') refreshLog();
       if (popErr) {
         showError('Rebase succeeded, but stash pop failed:\n' + popErr);
@@ -2542,17 +2667,18 @@ async function handleDialogResult(params) {
 
 async function runCherryPickFromDialog(ref, commitImmediately) {
   if (commitImmediately) {
-    startSpinner('Cherry-picking...');
-    gitCherryPickAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Cherry-pick'); });
+    const cpOp = startSpinner('Cherry-picking...', CHECKOUT_SCOPES);
+    gitCherryPickAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Cherry-pick', {}, cpOp); });
     return;
   }
 
-  startSpinner('Cherry-picking without commit...');
+  // --no-commit 은 HEAD 를 옮기지 않는다 — 인덱스와 워킹트리에만 얹는다.
+  const cpNoCommitOp = startSpinner('Cherry-picking without commit...', WORKTREE_SCOPES);
   try {
     const message = await gitCommitMessage(state.cwd, ref);
     const err = await gitCherryPickNoCommitAsync(state.cwd, ref);
     await refreshAsync();
-    stopSpinner();
+    stopSpinner(cpNoCommitOp);
 
     if (err && isRebaseConflictError(err)) {
       if (state.rightView !== 'diff') state.rightView = 'diff';
@@ -2575,7 +2701,7 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
     updateDiff();
     render();
   } catch (e) {
-    stopSpinner();
+    stopSpinner(cpNoCommitOp);
     showError('Cherry-pick failed:\n' + ((e && e.message) || e || 'Operation failed'));
   }
 }
@@ -2636,7 +2762,9 @@ async function openRepositoryAt(path) {
 // 히스토리 재작성(reword/squash/fixup/drop/edit) 공통 실행기.
 // 충돌이 나면 diff 뷰로 전환해 기존 rebase continue/abort UI([b] 메뉴)로 이어간다.
 async function runHistoryRewrite(opName, fn) {
-  startSpinner(opName + '...');
+  // reword/squash/fixup/drop/edit 은 전부 rebase 로 도는 재작성이다 —
+  // 인덱스·워킹트리·ref 를 함께 옮긴다.
+  const rewriteOp = startSpinner(opName + '...', CHECKOUT_SCOPES);
   let err = null;
   try {
     err = await fn();
@@ -2644,7 +2772,7 @@ async function runHistoryRewrite(opName, fn) {
     err = (e && e.message) || 'Operation failed';
   }
   await refreshAsync();
-  stopSpinner();
+  stopSpinner(rewriteOp);
   if (state.rightView === 'log') refreshLog();
   if (err && isRebaseConflictError(err)) {
     if (state.rightView !== 'diff') {

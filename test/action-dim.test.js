@@ -226,3 +226,26 @@ test('활성 버튼은 hover 하면 강조된다', () => {
   assert.ok(style.includes(ansi.bold), 'hover 하면 굵게 강조되어야 한다: ' + JSON.stringify(style));
   ui.hoveredTitleZoneIndex = -1; ui.hoveredAction = null;
 });
+
+test('비저장소 첫 화면에 Git 설정 동작이 파일 유무와 무관하게 노출된다', () => {
+  resetState();
+  state.isGitRepo = false;
+  state.cwd = 'C:/empty-folder';
+  state.staged = [];
+  state.unstaged = [];
+  state.untracked = [];
+  state.error = 'Not a git repository | cwd: C:/empty-folder';
+
+  const out = captureRender();
+  assert.ok(out.includes('This folder is not a Git repository'));
+  assert.ok(out.includes('[I] Initialize Repository Here'));
+  assert.ok(out.includes('[O] Open Existing Repository...'));
+  assert.ok(out.includes('[C] Clone Repository...'));
+  for (const action of ['tab_init', 'tab_change_repo', 'tab_clone']) {
+    assert.ok(ui.titleClickZones.some(zone => zone.action === action), action + ' 상단 버튼이 없다');
+    assert.ok(ui.repoSetupClickZones.some(zone => zone.action === action), action + ' 본문 버튼이 없다');
+  }
+
+  state.isGitRepo = true;
+  state.error = null;
+});

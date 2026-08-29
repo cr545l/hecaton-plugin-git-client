@@ -16,10 +16,15 @@ const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinn
 const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTargets, SCOPE } = require('./actions');
 // 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
-const { INDEX, REMOTE } = SCOPE;
+const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
+// 자주 쓰는 묶음 — 뜻은 context-menu.js 의 같은 이름 주석 참고.
+const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
+const WORKTREE_SCOPES = [INDEX, WORKTREE];
+const COMMIT_SCOPES = [INDEX, REFS];
+const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
 const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, revealBranch } = require('./render');
-const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, runCreateBranch } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
 let currentMouseShape = 'default';
@@ -56,14 +61,20 @@ async function handleCommitterAction(action) {
   if (!guardAction(action)) return true;
   if (action === 'reset-committer-name' || action === 'reset-committer-email') {
     const key = action === 'reset-committer-name' ? 'user.name' : 'user.email';
+    // git config 는 .git/config.lock 을 잡는다 — 같은 CONFIG 를 쓰는 다른 작업
+    // (브랜치 추적 설정, 리모트 편집)과 겹치면 "could not lock config file"로 실패한다.
+    // 판정표에는 [CONFIG]로 적어 두고 실행이 신고하지 않으면 그 판정이 헛돈다.
+    const resetOp = startSpinner('Resetting committer...', [CONFIG]);
     const err = await gitUnsetConfigLocal(state.cwd, key);
     if (err) {
+      stopSpinner(resetOp);
       showErrorDialog(err);
       render();
     } else {
       // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
       invalidateCommitterCache();
-      refreshAsync().then(() => render());
+      refreshInBackground({}, { message: 'Resetting committer...', settle: true, scopes: resetOp.scopes });
+      stopSpinner(resetOp);
     }
     return true;
   }
@@ -373,10 +384,10 @@ async function applyConflictSelections() {
     return;
   }
 
-  startSpinner('Applying resolution...');
+  const resolveOp = startSpinner('Applying resolution...', WORKTREE_SCOPES);
   const writeErr = await gitWriteConflictResolution(state.cwd, sel.file, resolved.content);
   if (writeErr) {
-    stopSpinner();
+    stopSpinner(resolveOp);
     showErrorDialog(writeErr);
     render();
     return;
@@ -384,14 +395,14 @@ async function applyConflictSelections() {
 
   const stageErr = await gitStageAsync(state.cwd, sel.file);
   if (stageErr) {
-    stopSpinner();
+    stopSpinner(resolveOp);
     showErrorDialog(stageErr);
     render();
     return;
   }
 
   await refreshAsync();
-  stopSpinner();
+  stopSpinner(resolveOp);
   updateDiff();
   render();
 }
@@ -442,6 +453,18 @@ async function handleKey(key) {
   if (state.mode === 'commit') {
     handleCommitInput(key);
     return;
+  }
+
+  // 저장소 밖에서 연 첫 화면의 설정 단축키. 일반 저장소에서는 기존 키 의미를 유지한다.
+  if (!state.loading && !state.isGitRepo) {
+    const setupAction = key === 'i' || key === 'I' ? 'tab_init'
+      : key === 'o' || key === 'O' ? 'tab_change_repo'
+      : key === 'c' || key === 'C' ? 'tab_clone'
+      : null;
+    if (setupAction) {
+      await handleContextMenuAction(setupAction);
+      return;
+    }
   }
 
   // Ctrl+Shift+P / Cmd+Shift+P: push
@@ -667,10 +690,10 @@ async function handleKey(key) {
           });
         } else {
           // Pre-check for conflicts before rebasing
-          startSpinner('Checking rebase...');
+          const logRebaseOp = startSpinner('Checking rebase...', CHECKOUT_SCOPES);
           const conflictCheck = await gitCheckRebaseConflicts(state.cwd, logItem.ref);
           if (conflictCheck.willConflict) {
-            stopSpinner();
+            stopSpinner(logRebaseOp);
             const fileList = conflictCheck.files.length > 0
               ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
               : '';
@@ -687,10 +710,10 @@ async function handleKey(key) {
             render();
             break;
           }
-          updateSpinner('Rebasing...');
+          updateSpinner('Rebasing...', logRebaseOp);
           gitRebaseAsync(state.cwd, logItem.ref).then(async err => {
             await refreshAsync();
-            stopSpinner();
+            stopSpinner(logRebaseOp);
             if (state.rightView === 'log') refreshLog();
             if (err && isStaleRebaseError(err)) {
               state.pendingRebaseRef = logItem.ref;
@@ -818,12 +841,12 @@ function handleCommitInput(key) {
     state.mode = 'normal';
     if (isRebaseOp) {
       // Fork-style: write message to rebase message file, then rebase --continue
-      startSpinner('Rebase continue...');
+      const contOp = startSpinner('Rebase continue...', CHECKOUT_SCOPES);
       (async () => {
         try {
           const writeErr = await gitWriteRebaseMessage(state.cwd, state.commitMsg, state.operationState.type);
           if (writeErr) {
-            stopSpinner();
+            stopSpinner(contOp);
             showErrorDialog('Failed to write rebase message:\n' + writeErr);
             render();
             return;
@@ -835,7 +858,7 @@ function handleCommitInput(key) {
           }
           await refreshAsync();
           if (state.rightView === 'log') refreshLog();
-          stopSpinner();
+          stopSpinner(contOp);
           if (err && isRebaseConflictError(err)) {
             switchToDiffViewForConflict();
             render();
@@ -845,19 +868,19 @@ function handleCommitInput(key) {
             render();
           }
         } catch (e) {
-          stopSpinner();
+          stopSpinner(contOp);
           showErrorDialog(e.message || 'Rebase continue failed');
           render();
         }
       })();
     } else {
-      startSpinner(isAmendCommit ? 'Amending...' : 'Committing...');
+      const commitOp = startSpinner(isAmendCommit ? 'Amending...' : 'Committing...', COMMIT_SCOPES);
       const commitPromise = isAmendCommit
         ? gitCommitAmendAsync(state.cwd, state.commitMsg)
         : gitCommitAsync(state.cwd, state.commitMsg);
       commitPromise.then(async err => {
         if (err) {
-          stopSpinner();
+          stopSpinner(commitOp);
           showErrorDialog(err);
           render();
           return;
@@ -870,9 +893,9 @@ function handleCommitInput(key) {
         refreshInBackground({}, {
           refreshLog: true, refreshFresh: true,
           message: isAmendCommit ? 'Amending...' : 'Committing...',
-          settle: true,
+          settle: true, scopes: commitOp.scopes,
         });
-        stopSpinner();
+        stopSpinner(commitOp);
       });
     }
     return;
@@ -985,11 +1008,11 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'c') {
     state.mode = 'normal';
-    startSpinner('Rebase continue...');
+    const menuContOp = startSpinner('Rebase continue...', CHECKOUT_SCOPES);
     gitRebaseContinueAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
-      stopSpinner();
+      stopSpinner(menuContOp);
       if (err) showErrorDialog(err);
       render();
     });
@@ -997,11 +1020,11 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'a') {
     state.mode = 'normal';
-    startSpinner('Aborting rebase...');
+    const menuAbortOp = startSpinner('Aborting rebase...', CHECKOUT_SCOPES);
     gitRebaseAbortAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
-      stopSpinner();
+      stopSpinner(menuAbortOp);
       if (err) showErrorDialog(err);
       render();
     });
@@ -1009,11 +1032,11 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 's') {
     state.mode = 'normal';
-    startSpinner('Rebase skip...');
+    const menuSkipOp = startSpinner('Rebase skip...', CHECKOUT_SCOPES);
     gitRebaseSkipAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
-      stopSpinner();
+      stopSpinner(menuSkipOp);
       if (err) showErrorDialog(err);
       render();
     });
@@ -1062,7 +1085,7 @@ async function handleNameInput(key) {
       state.mode = 'normal';
       state.inputBuffer = '';
       state.inputTarget = '';
-      const branchOp = startSpinner('Branch...');
+      const branchOp = startSpinner('Branch...', CHECKOUT_SCOPES);
       await runCreateBranch(name, startPoint, 'Branch', branchOp);
       return;
     }
@@ -1198,6 +1221,13 @@ async function handleMouseData(data) {
       for (const zone of ui.committerClickZones) {
         if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
           newCommitterHover = zone.action;
+          break;
+        }
+      }
+      let newRepoSetupHover = null;
+      for (const zone of ui.repoSetupClickZones) {
+        if (cy === zone.row && cx >= zone.colStart && cx <= zone.colEnd) {
+          newRepoSetupHover = zone.action;
           break;
         }
       }
@@ -1412,7 +1442,9 @@ async function handleMouseData(data) {
       // 금지 모양으로 바꾼다 — 흐린 색만으로는 "지금은 안 된다"는 알아도 "왜"는 모른다.
       // 사유 문자열이 아니라 id 를 들고 있어야, 상황이 바뀌면 렌더가 알아서 다시 판정한다.
       let newHoveredAction = null;
-      if (newTitleHover >= 0 && ui.titleClickZones[newTitleHover]) {
+      if (newRepoSetupHover) {
+        newHoveredAction = newRepoSetupHover;
+      } else if (newTitleHover >= 0 && ui.titleClickZones[newTitleHover]) {
         newHoveredAction = ui.titleClickZones[newTitleHover].action;
       } else if (newFileHeaderHover >= 0 && ui.fileHeaderZones[newFileHeaderHover]) {
         newHoveredAction = ui.fileHeaderZones[newFileHeaderHover].action;
@@ -1430,9 +1462,10 @@ async function handleMouseData(data) {
       const newDisabledReason = newHoveredAction ? disabledReason(newHoveredAction) : null;
 
       if (newHoveredAction !== ui.hoveredAction
-        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
+        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newRepoSetupHover !== ui.hoveredRepoSetupAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredCommitterAction = newCommitterHover;
+        ui.hoveredRepoSetupAction = newRepoSetupHover;
         ui.hoveredTitleZoneIndex = newTitleHover;
         ui.hoveredDivider = newDivHover;
         ui.hoveredFileHeaderIdx = newFileHeaderHover;
@@ -1463,7 +1496,7 @@ async function handleMouseData(data) {
             setMouseShape('ns-resize');
           } else if (newDisabledReason) {
             setMouseShape('not-allowed');
-          } else if (newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newMergeZoneHover >= 0 || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
+          } else if (newRepoSetupHover || newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newMergeZoneHover >= 0 || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -1731,15 +1764,15 @@ async function handleMouseData(data) {
             } else if (zone.action === 'git-pull') {
               handled = true;
               if (!guardAction('git-pull')) break;
-              startSpinner('Pulling...');
+              const pullOp = startSpinner('Pulling...', PULL_SCOPES);
               gitPullAsync(state.cwd).then(async err => {
                 if (err) {
-                  stopSpinner();
+                  stopSpinner(pullOp);
                   showErrorDialog(err);
                   render();
                 } else {
-                  refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...', settle: true });
-                  stopSpinner();
+                  refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...', settle: true, scopes: pullOp.scopes });
+                  stopSpinner(pullOp);
                 }
               });
               handled = true;
@@ -1769,11 +1802,11 @@ async function handleMouseData(data) {
                 : opType === 'cherry-pick' ? () => gitCherryPickAbort(state.cwd)
                 : opType === 'revert' ? () => gitRevertAbort(state.cwd)
                 : () => gitRebaseAbortAsync(state.cwd);
-              startSpinner('Aborting ' + opLabel + '...');
+              const abortOp = startSpinner('Aborting ' + opLabel + '...', CHECKOUT_SCOPES);
               Promise.resolve(abortFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
-                stopSpinner();
+                stopSpinner(abortOp);
                 if (err) showErrorDialog(err);
                 render();
               });
@@ -1785,11 +1818,11 @@ async function handleMouseData(data) {
               const skipFn = opType === 'cherry-pick' ? () => gitCherryPickSkip(state.cwd)
                 : opType === 'revert' ? () => gitRevertSkip(state.cwd)
                 : () => gitRebaseSkipAsync(state.cwd);
-              startSpinner('Skipping...');
+              const skipOp = startSpinner('Skipping...', CHECKOUT_SCOPES);
               Promise.resolve(skipFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
-                stopSpinner();
+                stopSpinner(skipOp);
                 if (err && isRebaseConflictError(err)) {
                   switchToDiffViewForConflict();
                 }
@@ -1797,12 +1830,26 @@ async function handleMouseData(data) {
                 render();
               });
               handled = true;
+            } else if (zone.action === 'tab_init' || zone.action === 'tab_change_repo' || zone.action === 'tab_clone') {
+              handled = true;
+              await handleContextMenuAction(zone.action);
             }
             break;
           }
         }
         if (handled) continue;
       }
+
+      // 비저장소 첫 화면의 본문 설정 버튼
+      let setupHandled = false;
+      for (const zone of ui.repoSetupClickZones) {
+        if (cy !== zone.row || cx < zone.colStart || cx > zone.colEnd) continue;
+        setupHandled = true;
+        if (zone.enabled === false) guardAction(zone.action);
+        else await handleContextMenuAction(zone.action);
+        break;
+      }
+      if (setupHandled) continue;
 
       // Divider drag start: first vertical divider
       if (!ui.leftPanelCollapsed) {

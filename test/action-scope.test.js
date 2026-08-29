@@ -93,9 +93,8 @@ test('브랜치 리네임 중에도 스테이징은 열려 있다', () => {
   for (const id of ['stageAll', 'stageSelected', 'unstageAll', 'file_stage', 'hunk-apply']) {
     assert.equal(isEnabled(id), true, id + ' 는 리네임과 겹치지 않는다');
   }
-  // 리모트만 쓰는 것도 그대로다.
+  // 리모트만 쓰는 것은 그대로다. push 는 올릴 대상을 로컬 ref 에서 읽으므로 빠진다.
   assert.equal(isEnabled('git-fetch'), true);
-  assert.equal(isEnabled('git-push'), true);
 
   stopSpinner();
 });
@@ -107,6 +106,11 @@ test('브랜치 리네임 중에는 ref 를 건드리는 동작이 막힌다', (
   for (const id of ['branch_checkout', 'branch_delete', 'new_tag', 'merge', 'reset',
     'commit-submit', 'branch_track', 'committer-name']) {
     assert.equal(disabledReason(id), actions.REASON.BUSY, id + ' 는 ref/config 를 함께 쓴다');
+  }
+  // push 도 마찬가지다 — 무엇을 올릴지 로컬 ref 를 읽어 정하므로, 이름이 옮겨지는
+  // 중에 나가면 옛 이름으로 refspec 을 만든다.
+  for (const id of ['git-push', 'branch_push', 'branch_force_push', 'push_to_remote:origin']) {
+    assert.equal(disabledReason(id), actions.REASON.BUSY, id + ' 는 로컬 ref 를 읽는다');
   }
 
   stopSpinner();
@@ -123,8 +127,39 @@ test('fetch/push 중에는 자원을 밝힌 로컬 작업이 열려 있다', () 
   // 리모트를 쓰는 것끼리는 여전히 막힌다.
   assert.equal(disabledReason('git-push'), actions.REASON.BUSY);
   assert.equal(disabledReason('git-pull'), actions.REASON.BUSY);
-  // 커밋·체크아웃은 아직 작업 쪽이 자원을 밝히지 않아 동작 쪽도 전부로 잡아 둔다.
-  assert.equal(disabledReason('commit-submit'), actions.REASON.BUSY);
+
+  // fetch 는 remote-tracking ref 와 FETCH_HEAD 만 건드린다 — .git/index 를 잡지 않으므로
+  // 인덱스·워킹트리·로컬 ref 를 옮기는 작업과는 겹칠 이유가 없다. 여기서 열려 있는 것이
+  // 이 구조의 목적이다: 커밋을 누르고 곧바로 fetch 를 눌러도 서로를 기다리지 않는다.
+  for (const id of ['commit-submit', 'branch_checkout', 'merge', 'reset', 'revert',
+    'tab_discard_all', 'git-stash', 'stash_apply']) {
+    assert.equal(isEnabled(id), true, id + ' 는 fetch 와 겹치지 않는다');
+  }
+  // 진행 중인 작업에서 빠져나오는 길도 마찬가지다 — 나갈 작업이 있어야 판정에 닿는다.
+  state.operationState = { type: 'merge' };
+  assert.equal(isEnabled('op-abort'), true, 'abort 는 리모트를 쓰지 않는다');
+  state.operationState = null;
+
+  stopSpinner();
+});
+
+// 반대 방향 — 커밋이 도는 동안 무엇이 열리고 무엇이 막히는지.
+// push 가 막히는 것은 자원이 겹쳐서가 아니라 순서 때문이다: 이 구조는 작업 큐가 아니라
+// 즉시 실행이라, 커밋이 끝나기 전에 push 가 나가면 방금 만든 커밋이 빠진 채 올라간다.
+// push 가 로컬 ref 를 읽는다고 적어 두면 그 순서가 자원 겹침으로 표현된다.
+test('커밋 중에는 fetch 가 열리고 push 는 막힌다', () => {
+  idle();
+  startSpinner('Committing...', [INDEX, WORKTREE, REFS]);
+
+  assert.equal(isEnabled('git-fetch'), true, 'fetch 는 리모트만 쓴다');
+  assert.equal(disabledReason('git-push'), actions.REASON.BUSY, 'push 는 올릴 ref 를 읽는다');
+  assert.equal(disabledReason('branch_push'), actions.REASON.BUSY);
+  assert.equal(disabledReason('stageAll'), actions.REASON.BUSY, '인덱스를 함께 쓴다');
+  assert.equal(disabledReason('file_discard'), actions.REASON.BUSY, '워킹트리를 함께 쓴다');
+  // 리모트·설정·스태시 목록만 쓰는 것은 그대로 열려 있다.
+  for (const id of ['remote_add', 'committer-name', 'stash_drop', 'branch_track']) {
+    assert.equal(isEnabled(id), true, id + ' 는 커밋과 겹치지 않는다');
+  }
 
   stopSpinner();
 });
@@ -153,19 +188,20 @@ test('스태시 이름 변경은 스태시 목록만 붙잡는다', () => {
   assert.equal(isEnabled('git-fetch'), true);
   assert.equal(isEnabled('branch_rename'), true);
   assert.equal(disabledReason('stash_drop'), actions.REASON.BUSY);
-  // 스태시 저장/적용은 워킹트리도 오가므로 아직 전부로 잡아 둔다.
+  // 스태시 저장/적용은 워킹트리와 스태시를 함께 쓴다 — 목록만 건드리는 리네임과도 겹친다.
   assert.equal(disabledReason('git-stash'), actions.REASON.BUSY);
+  assert.equal(disabledReason('stash_apply'), actions.REASON.BUSY);
 
   stopSpinner();
 });
 
 // ── 2. 자원을 밝히지 않은 작업은 예전 그대로 ──
 
-// 아직 스코프를 지정하지 않은 호출부(체크아웃·머지·리베이스 등)는 무엇을 붙잡는지
-// 알 수 없다. 판단이 불확실할 때는 막는 쪽이 안전하다 — 예전과 같은 전면 차단이다.
+// 스코프를 넘기지 않은 호출부(저장소를 통째로 바꾸는 init/clone/change repo)는 무엇을
+// 붙잡는지 알 수 없다. 판단이 불확실할 때는 막는 쪽이 안전하다 — 예전과 같은 전면 차단이다.
 test('자원을 밝히지 않은 작업은 쓰기를 전부 막는다', () => {
   idle();
-  startSpinner('Checking out...');
+  startSpinner('Cloning...');
 
   for (const id of ['stageAll', 'unstageAll', 'commit-submit', 'git-fetch',
     'git-push', 'branch_rename', 'stash_drop']) {
@@ -263,15 +299,22 @@ test('표에 없는 동작은 아무리 좁은 작업이 돌아도 막힌다', (
   // 가장 좁은 작업 하나만 걸어 둔다.
   startSpinner('Rename stash...', [STASH]);
 
-  for (const id of ['branch_checkout', 'merge', 'rebase', 'reset', 'commit-submit',
-    'tab_discard_all', 'git-pull', 'worktree_new']) {
+  // 저장소 자체를 갈아 끼우는 길은 자원을 나눠 적을 수 없다 — 무엇이 남고 무엇이
+  // 사라지는지가 저장소 단위로 바뀐다. 표에 넣지 않아 전부와 겹치는 쪽으로 남긴다.
+  for (const id of ['tab_init', 'tab_clone', 'tab_change_repo', 'worktree_open']) {
     assert.equal(disabledReason(id), actions.REASON.BUSY,
       id + ' 는 자원을 밝히지 않았으므로 전부와 겹쳐야 한다');
   }
-  // 진행 중인 작업에서 빠져나오는 길도 마찬가지다 — 단, 나갈 작업이 있어야 판정에 닿는다.
-  state.operationState = { type: 'merge' };
-  assert.equal(disabledReason('op-abort'), actions.REASON.BUSY);
-  state.operationState = null;
+
+  // 스태시를 함께 쓰는 것만 막힌다 — stash 로 비우고 다시 시도하는 길이 딸린 것들.
+  for (const id of ['rebase', 'new_branch', 'git-stash', 'stash_apply']) {
+    assert.equal(disabledReason(id), actions.REASON.BUSY, id + ' 는 스태시를 쓴다');
+  }
+  // 스태시를 쓰지 않는 쪽은 열려 있다.
+  for (const id of ['branch_checkout', 'merge', 'reset', 'commit-submit',
+    'tab_discard_all', 'git-pull', 'worktree_new']) {
+    assert.equal(isEnabled(id), true, id + ' 는 스태시와 겹치지 않는다');
+  }
 
   stopSpinner();
 });
@@ -303,4 +346,45 @@ test('리네임 중 메뉴의 enabled 도 자원 기준으로 갈린다', () => 
   assert.equal(items[2].enabled, undefined, '복사는 언제나 열려 있다');
 
   stopSpinner();
+});
+
+// ── 7. 겹쳐 도는 작업의 짝 맞추기 ──
+// 자원을 좁게 밝힌 덕에 두 작업이 나란히 돌 수 있게 됐다. 그러면 끝내는 쪽도
+// 자기 것만 정확히 끝내야 한다 — 예전 호출부는 인자 없이 stopSpinner() 를 불러
+// "가장 나중에 시작된 작업"을 끝냈고, 그 추측이 남의 작업을 끝냈다.
+
+test('겹쳐 도는 작업은 자기 것만 끝낸다', () => {
+  idle();
+  const commitOp = startSpinner('Committing...', [INDEX, WORKTREE, REFS]);
+  const fetchOp = startSpinner('Fetching...', [REMOTE]);
+
+  // 커밋이 먼저 끝난다 — 나중에 시작된 fetch 가 아니라 자기 것을 끝내야 한다.
+  stopSpinner(commitOp);
+  assert.equal(state.activeOps.length, 1);
+  assert.equal(state.activeOps[0], fetchOp);
+  assert.equal(state.spinnerActive, true, 'fetch 는 아직 돈다');
+  assert.equal(isEnabled('stageAll'), true, '커밋이 끝났으니 인덱스는 열린다');
+  assert.equal(disabledReason('git-fetch'), actions.REASON.BUSY, 'fetch 는 아직 돈다');
+
+  stopSpinner(fetchOp);
+  assert.equal(state.activeOps.length, 0);
+  assert.equal(state.spinnerActive, false);
+  assert.equal(isSpinning(), false, '스피너 참조도 함께 풀린다');
+});
+
+test('이미 끝난 작업을 다시 끝내도 남은 작업의 스피너를 깎지 않는다', () => {
+  idle();
+  const commitOp = startSpinner('Committing...', [INDEX, WORKTREE, REFS]);
+  const fetchOp = startSpinner('Fetching...', [REMOTE]);
+
+  stopSpinner(commitOp);
+  // 짝이 어긋난 호출(오류 경로와 성공 경로가 둘 다 끝내려 드는 경우).
+  stopSpinner(commitOp);
+
+  assert.equal(state.activeOps.length, 1, 'fetch 는 그대로 남는다');
+  assert.equal(state.spinnerActive, true);
+  assert.equal(isSpinning(), true, '남은 작업의 스피너 참조가 살아 있어야 한다');
+
+  stopSpinner(fetchOp);
+  assert.equal(isSpinning(), false);
 });

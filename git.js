@@ -4,6 +4,17 @@
 const nodePath = require('path');
 const coordinate = require('./coordinate');
 
+// Hecaton's process.exec `ok` flag means that the host successfully started and
+// waited for the process. Git command success is reported separately through
+// exit_code (legacy hosts may omit it).
+function gitProcessSucceeded(result) {
+  if (!result || !result.ok) return false;
+  const exitCode = result.exit_code !== undefined
+    ? result.exit_code
+    : (result.code !== undefined ? result.code : null);
+  return exitCode === null || exitCode === 0;
+}
+
 async function gitExec(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (result && result.ok) {
@@ -18,7 +29,7 @@ async function gitExec(args, cwd, timeout) {
 // 예: for-each-ref가 실패했을 때 브랜치 목록을 빈 배열로 덮어쓰면 브랜치가 통째로 사라진다.
 async function gitExecChecked(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
-  const ok = !!(result && result.ok);
+  const ok = gitProcessSucceeded(result);
   const exitCode = result && result.exit_code !== undefined
     ? result.exit_code
     : (result && result.code !== undefined ? result.code : null);
@@ -145,6 +156,61 @@ function unquoteGitPath(p) {
   return p;
 }
 
+// `.git` 이름만 있는 디렉터리는 저장소가 아니다. 이 플러그인의 공유 캐시처럼 다른
+// 프로그램이 `.git/<name>`을 만들어 둔 경우도 있으므로 HEAD까지 있어야 실제 Git
+// 디렉터리로 인정한다. linked worktree/submodule의 `.git` 파일도 가리키는 디렉터리의
+// HEAD를 같은 방식으로 확인한다.
+async function gitDirFromDiskMarker(workTreeDir) {
+  const dotGit = nodePath.join(workTreeDir, '.git');
+  let marker;
+  try {
+    marker = await hecaton.fs.stat({ path: dotGit });
+  } catch {
+    return '';
+  }
+  if (!marker || !marker.exists) return '';
+
+  let gitDir = '';
+  if (marker.is_dir) {
+    gitDir = dotGit;
+  } else {
+    try {
+      const res = await hecaton.fs.read_file({ path: dotGit });
+      const content = typeof res === 'string' ? res : (res && res.content) ? res.content : '';
+      const match = content.match(/^gitdir:\s*(.+)\s*$/i);
+      if (!match) return '';
+      gitDir = nodePath.resolve(workTreeDir, match[1].trim());
+    } catch {
+      return '';
+    }
+  }
+
+  try {
+    const head = await hecaton.fs.stat({ path: nodePath.join(gitDir, 'HEAD') });
+    return head && head.exists && !head.is_dir ? gitDir : '';
+  } catch {
+    return '';
+  }
+}
+
+async function findGitDirFromDisk(cwd) {
+  if (!cwd) return '';
+  let probe;
+  try {
+    probe = nodePath.resolve(cwd);
+  } catch {
+    return '';
+  }
+  while (probe) {
+    const gitDir = await gitDirFromDiskMarker(probe);
+    if (gitDir) return gitDir;
+    const parent = nodePath.dirname(probe);
+    if (!parent || parent === probe) break;
+    probe = parent;
+  }
+  return '';
+}
+
 // git이 뱉는 파일 경로(status/diff-files/ls-files)는 항상 저장소 루트 기준인데,
 // pathspec은 실행 cwd 기준으로 해석된다. 하위 디렉터리에서 열면 두 기준이 어긋나
 // 목록에 보이는 경로를 그대로 넘기는 stage/discard/diff가 전부 빗나간다
@@ -164,10 +230,7 @@ async function resolveWorkTreeRoot(cwd) {
   }
   let probe = dir;
   while (probe) {
-    try {
-      const st = await hecaton.fs.stat({ path: nodePath.join(probe, '.git') });
-      if (st && st.exists) return probe;
-    } catch { /* keep walking */ }
+    if (await gitDirFromDiskMarker(probe)) return probe;
     const parent = nodePath.dirname(probe);
     if (!parent || parent === probe) break;
     probe = parent;
@@ -183,7 +246,7 @@ async function resolveWorkTreeRoot(cwd) {
 
 async function gitIsRepo(cwd) {
   const result = await hecaton.process.exec({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout_ms: 5000 });
-  if (result && result.ok) return true;
+  if (gitProcessSucceeded(result)) return true;
   // Provide diagnostic detail for troubleshooting
   const detail = {};
   // Dump raw result for diagnosis
@@ -325,7 +388,7 @@ async function gitStatusPorcelain(cwd, opts = {}) {
   if (showUntracked && includeIgnored) args.push('--ignored');
 
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: statusTimeout });
-  if (!result || !result.ok) {
+  if (!gitProcessSucceeded(result)) {
     if (opts.nullOnError) return null;
     return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
   }
@@ -1732,8 +1795,9 @@ module.exports = {
   git,
   gitExec,
   gitExecChecked,
+  gitProcessSucceeded,
   unquoteGitPath,
-  resolveWorkTreeRoot,
+  resolveWorkTreeRoot, findGitDirFromDisk,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,

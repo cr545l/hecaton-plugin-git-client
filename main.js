@@ -25,7 +25,7 @@ const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUser
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
-const { resolveWorkTreeRoot } = require('./git');
+const { resolveWorkTreeRoot, findGitDirFromDisk } = require('./git');
 const hostScroll = require('./scroll');
 const persist = require('./persist');
 const coordinate = require('./coordinate');
@@ -199,33 +199,16 @@ async function primeInitialBranchFromDisk() {
   const gitDir = await findGitDirFromDisk(state.cwd);
   if (!gitDir) return false;
   const branch = await readBranchFromGitDir(gitDir);
+  // HEAD가 없거나 읽히지 않는 `.git` 이름의 디렉터리는 저장소가 아니다. 디스크 프라임은
+  // Git 스폰 전 첫 화면을 빠르게 그리기 위한 최적화일 뿐이므로 확실하지 않으면 정식
+  // rev-parse 판정으로 넘긴다.
+  if (!branch) return false;
   state.gitDir = gitDir;
   state.isGitRepo = true;
   state.branch = branch || 'HEAD';
   state.error = null;
   require('./title').applyWindowTitle();
   return true;
-}
-
-async function findGitDirFromDisk(cwd) {
-  let dir = path.resolve(cwd);
-  while (dir) {
-    const dotGit = path.join(dir, '.git');
-    try {
-      const st = await hecaton.fs.stat({ path: dotGit });
-      if (st && st.exists) {
-        if (st.is_dir) return dotGit;
-        const res = await hecaton.fs.read_file({ path: dotGit });
-        const content = typeof res === 'string' ? res : (res && res.content) ? res.content : '';
-        const m = content.match(/^gitdir:\s*(.+)\s*$/i);
-        if (m) return path.resolve(dir, m[1].trim());
-      }
-    } catch { /* keep walking */ }
-    const parent = path.dirname(dir);
-    if (!parent || parent === dir) break;
-    dir = parent;
-  }
-  return '';
 }
 
 async function readBranchFromGitDir(gitDir) {

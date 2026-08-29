@@ -71,12 +71,14 @@ function beginOp(label, scopes, phase) {
 
 // 목록에서 빼고 파생 플래그를 다시 계산한다. running 이던 작업이 빠졌다면 진행
 // 메시지도 함께 정리한다 — 단, 남은 running 작업이 있으면 그 이름으로 이어진다.
+// 실제로 뺐는지를 돌려준다 — 스피너 참조를 함께 내릴지 판단하는 데 쓰인다.
 function endOp(op) {
   const idx = _ops.indexOf(op);
-  if (idx < 0) return;
+  if (idx < 0) return false;
   const wasRunning = _ops[idx].phase === 'running';
   _ops.splice(idx, 1);
   syncOpState(wasRunning);
+  return true;
 }
 
 function syncOpState(clearMessage) {
@@ -126,8 +128,8 @@ function endSettleOp(op) {
 // 여러 Git 명령으로 이어지는 작업은 단계가 바뀐 직후 곧바로 다음 명령을 시작한다.
 // 메시지만 바꾸고 80ms 타이머에 맡기면 타이틀은 그동안 직전 단계를 가리키므로,
 // 상태 변경과 타이틀 반영을 한 동작으로 묶는다. 화면 전체는 다시 그릴 필요가 없다.
-// (다단계 작업이 자원을 좁게 밝히게 되면 op 을 넘겨야 한다 — 그러지 않으면 그사이
-//  겹쳐 시작된 다른 작업의 이름을 대신 바꾼다. 지금은 전부 전면 점유라 겹칠 수 없다.)
+// op 은 반드시 넘긴다 — 넘기지 않으면 "가장 나중에 시작된 작업"의 이름을 바꾸므로,
+// 그사이 겹쳐 시작된 다른 작업의 이름을 대신 갈아 끼운다.
 function updateSpinner(msg, op) {
   const target = op || lastRunningOp();
   if (!target) return;
@@ -143,17 +145,21 @@ function lastRunningOp() {
   return null;
 }
 
-// op 을 넘기지 않으면 가장 나중에 시작된 작업을 끝낸다 — 한 번에 하나씩 돌리는
-// 기존 호출부는 그대로 맞아떨어진다.
+// op 을 넘기지 않으면 가장 나중에 시작된 작업을 끝낸다. 작업이 겹쳐 돌 수 있는
+// 지금은 그 추측이 남의 작업을 끝낼 수 있으므로, 호출부는 startSpinner 가 돌려준
+// op 을 그대로 넘긴다(넘기지 않는 경로는 저장소를 통째로 바꾸는 몇 곳뿐이다).
 function stopSpinner(op) {
   const target = op || lastRunningOp();
   if (!target) {
-    // 짝이 맞지 않는 호출(이미 끝난 작업을 다시 끝내는 경우) — 표시만 정리한다.
+    // 끝낼 작업이 하나도 없다 — 표시만 정리한다.
     syncOpState(true);
     releaseSpinner();
     return;
   }
-  endOp(target);
+  // 이미 끝난 작업을 다시 끝내려는 호출이면 참조를 건드리지 않는다.
+  // 예전에는 여기서도 releaseSpinner 를 불러, 겹쳐 도는 다른 작업의 참조를 대신
+  // 하나 깎았다 — 그 작업이 아직 도는데 스피너와 타이틀만 먼저 멎는다.
+  if (!endOp(target)) return;
   releaseSpinner();
 }
 

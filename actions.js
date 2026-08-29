@@ -6,10 +6,12 @@
 // 논리적으로 성립하지 않는 조합은 그대로 통과해 git 이 뱉는 fatal 로만 드러났다.
 //
 // 여기서는 모든 동작을 한 표에 모아 "지금 가능한가 / 아니면 왜 안 되는가"를 한 곳에서
-// 판정한다. 그 결과를 세 곳이 같이 쓴다:
+// 판정한다. 그 결과를 네 곳이 같이 쓴다:
 //   1. render      — 버튼을 흐리게 그리고 hover 강조를 끈다 (actions.isEnabled)
 //   2. menu 빌더    — 항목에 enabled:false 를 실어 호스트가 딤 처리하게 한다 (decorateMenuItems)
 //   3. dispatch    — 실행 직전에 다시 막고 사유를 알린다 (guardAction)
+//   4. 확인창의 실행 버튼 — 창이 떠 있는 사이 상황이 바뀌었는지 다시 본다
+//                          (guardDeferredAction, 판정 범위는 startBlockedReason 참고)
 // 화면 표시와 실제 차단이 같은 규칙을 보므로 "보이는데 안 된다"가 생길 수 없다.
 //
 // "다른 작업이 도는 중"의 판정은 자원 단위다. 예전에는 불리언 하나였고, 그래서
@@ -67,6 +69,18 @@ const SCOPE = {
 const ALL_SCOPES = Object.freeze(Object.values(SCOPE));
 const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
 
+// 자주 되풀이되는 묶음. 실행부(startSpinner 의 scopes)도 같은 이름으로 갈라 두었으므로
+// 둘을 나란히 읽으면 동작과 작업이 같은 자원을 보고 있는지 바로 확인된다.
+//   WORKTREE_IO  워킹트리 파일을 고치되 HEAD 는 그대로 (discard·clean·rm·패치 적용)
+//   STASH_IO     워킹트리와 스태시 사이를 오간다 (stash push/pop/apply)
+//   REWRITE      워킹트리를 갈아엎고 HEAD/ref 를 옮긴다 (체크아웃·머지·리셋·커밋·재작성)
+//   PULL         REWRITE 에 리모트까지 (pull·fast-forward)
+const WORKTREE_IO = [INDEX, WORKTREE];
+const STASH_IO = [INDEX, WORKTREE, STASH];
+const REWRITE = [INDEX, WORKTREE, REFS];
+const REWRITE_WITH_STASH = [INDEX, WORKTREE, REFS, STASH];
+const PULL = [INDEX, WORKTREE, REFS, REMOTE];
+
 // ── 동작이 필요로 하는 자원 ──
 // 여기 없는 id 는 전부 필요한 것으로 본다(ALL_SCOPES). 빠뜨리면 예전처럼 조금 과하게
 // 막힐 뿐이지만, 실제보다 좁게 적으면 겹치는 작업이 함께 돌아 index.lock 을 다툰다.
@@ -78,15 +92,28 @@ const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
 // ★ 여기에 좁게 적어도 되는 것은 "그 동작이 시작하는 작업도 같은 자원으로 등록될 때"
 //    뿐이다(startSpinner 의 scopes). 동작만 좁고 작업이 전부를 붙잡으면, 좁은 판정을
 //    통과해 시작된 전면 점유 작업이 이미 돌던 작업과 겹치고 — 그러면 끝낼 때 서로를
-//    잘못 끝낸다. 그래서 체크아웃·머지·리베이스·커밋처럼 작업 쪽이 아직 자원을 밝히지
-//    않은 동작은 일부러 여기 넣지 않았다.
+//    잘못 끝낸다.
+//
+//    한동안 커밋·체크아웃·머지·리베이스가 여기 없었던 것은 그 조건 때문이었다. 실행부가
+//    scopes 를 넘기지 않았고 stopSpinner 도 인자 없이 불려, 겹치는 순간 서로의 작업을
+//    끝냈다. 지금은 그 짝이 전부 맞춰져 있으므로(각 실행부가 startSpinner 의 반환값을
+//    stopSpinner/updateSpinner/afterGitOp 에 그대로 넘긴다) 좁게 적을 수 있다.
+//    새 동작을 좁게 적을 때도 같은 순서를 지켜야 한다: 실행부가 자원을 밝히고 op 을
+//    끝까지 들고 다니는 것이 먼저, 표를 좁히는 것이 그다음이다.
+//
+//    반대 방향(동작이 작업보다 넓게 요구하는 것)은 안전하다 — 판정만 보수적이 된다.
+//    push 가 그렇다: 동작은 [REMOTE, REFS]로 커밋과 겹치게 두고, 작업은 [REMOTE]만
+//    붙잡아 push 가 도는 동안 커밋을 막지 않는다.
 const ACTION_SCOPES = {
   // 인덱스만 — 워킹트리의 파일 내용은 그대로다
   stageAll: [INDEX], stageSelected: [INDEX],
   unstageAll: [INDEX], unstageSelected: [INDEX],
   file_stage: [INDEX], file_unstage: [INDEX], file_stage_all: [INDEX],
   'hunk-apply': [INDEX],
-  unlockIndex: [INDEX],
+  // unlockIndex 는 여기 없다 — 삭제하려는 index.lock 은 인덱스를 만지는 명령이라면
+  // 무엇이든 잡을 수 있다(checkout·merge·rebase·commit·discard). 자기 자원만 보고
+  // 판정하면 워킹트리 작업이 도는 동안 그 작업의 락을 지우게 된다. 전부 붙잡은 것으로
+  // 보고, 어떤 작업이든 끝난 뒤에만 연다.
 
   // 워킹트리의 파일을 고쳐 인덱스에 반영
   file_accept_ours: [INDEX, WORKTREE], file_accept_theirs: [INDEX, WORKTREE],
@@ -95,10 +122,17 @@ const ACTION_SCOPES = {
 
   // 리모트만 — 로컬 인덱스·워킹트리를 건드리지 않는다
   'git-fetch': [REMOTE],
-  'git-push': [REMOTE], branch_push: [REMOTE], branch_push_pr: [REMOTE],
-  branch_force_push: [REMOTE],
+  // push 는 REMOTE 만 쓰는 것처럼 보이지만 무엇을 올릴지는 로컬 ref 를 읽어 정한다.
+  // REFS 를 함께 적어야 커밋·리베이스·체크아웃(전부 REFS 를 옮긴다)이 도는 동안 막힌다 —
+  // 그러지 않으면 커밋이 끝나기 전에 push 가 나가 방금 만든 커밋이 빠진 채로 올라간다.
+  // 이 구조는 작업 큐가 아니라 즉시 실행이라, 순서는 자원 겹침으로만 표현할 수 있다.
+  // (작업 쪽 scopes 는 [REMOTE] 그대로다 — push 가 도는 동안 커밋을 막을 이유는 없다.
+  //  동작이 작업보다 넓게 요구하는 것은 안전한 방향이다: 판정만 보수적이 된다.)
+  'git-push': [REMOTE, REFS], branch_push: [REMOTE, REFS], branch_push_pr: [REMOTE, REFS],
+  branch_force_push: [REMOTE, REFS],
+  remote_push_tags: [REMOTE, REFS],
+  // 리모트 쪽 ref 만 지운다 — 올릴 로컬 ref 를 읽지 않는다
   branch_delete_remote: [REMOTE], remotebranch_delete_remote: [REMOTE],
-  remote_push_tags: [REMOTE],
   remote_prune: [REMOTE, REFS],
 
   // 로컬 ref 만
@@ -113,13 +147,63 @@ const ACTION_SCOPES = {
   remote_add: [CONFIG], remote_remove: [CONFIG], remote_set_url: [CONFIG],
   remote_rename: [CONFIG, REMOTE],
 
-  // 스태시 목록만 — 저장/적용(git-stash, stash_apply)은 워킹트리를 오가므로 여기 없다
+  // 스태시 목록만 — 저장/적용은 워킹트리를 오가므로 아래 STASH_IO 쪽이다
   stash_drop: [STASH], stash_rename: [STASH],
+
+  // ── 워킹트리를 고치되 HEAD 는 그대로 ──
+  // 인덱스를 읽어 잠그는 명령이 섞여 있어(`git checkout -- <path>`, `git rm`) INDEX 도 함께.
+  file_discard: WORKTREE_IO,
+  file_remove_keep: WORKTREE_IO, file_remove_delete: WORKTREE_IO,
+  tab_discard_all: WORKTREE_IO, tab_clean: WORKTREE_IO,
+  tab_apply_patch: WORKTREE_IO,
+  cherry_pick_stage: WORKTREE_IO,
+  // 충돌 해결 결과를 파일에 쓰고 인덱스에 얹는다
+  'conflict-apply': WORKTREE_IO, 'merge-apply': WORKTREE_IO,
+
+  // ── 워킹트리와 스태시 사이 ──
+  'git-stash': STASH_IO, stash_apply: STASH_IO, file_stash_one: STASH_IO,
+
+  // ── 커밋 ──
+  // 인덱스를 트리로 굳히고 HEAD 를 옮긴다 — 워킹트리 파일은 그대로다. 그래서 커밋이
+  // 도는 동안에도 fetch(리모트만 쓴다)는 열려 있다. WORKTREE 가 함께 있는 것은
+  // 같은 [Commit] 버튼이 rebase 진행 중에는 `rebase --continue` 로 갈라지기 때문이다 —
+  // 그쪽은 워킹트리까지 옮기므로, 두 갈래 중 넓은 쪽에 맞춰야 판정하지 않은 자원을
+  // 점유하는 일이 없다.
+  'commit-submit': REWRITE, 'commit-enter': REWRITE, 'commit-amend': REWRITE,
+  amend_commit: REWRITE,
+
+  // ── 진행 중인 작업에서 빠져나오기 ──
+  // 인덱스·워킹트리·ref 를 되돌린다. 리모트는 건드리지 않으므로 fetch 와는 겹치지 않는다.
+  'op-abort': REWRITE, 'op-skip': REWRITE, 'op-menu': REWRITE,
+
+  // ── 워킹트리를 갈아엎고 HEAD 를 옮기는 것들 ──
+  checkout: REWRITE, branch_checkout: REWRITE,
+  remotebranch_checkout_local: REWRITE, remotebranch_checkout_tracking: REWRITE,
+  merge: REWRITE, branch_merge_into: REWRITE,
+  reset: REWRITE,
+  cherry_pick: REWRITE, revert: REWRITE,
+  reword_commit: REWRITE, squash_commit: REWRITE, fixup_commit: REWRITE,
+  edit_commit: REWRITE, drop_commit: REWRITE,
+
+  // 로컬 변경에 막히면 stash 로 비우고 다시 시도하는 길이 딸려 있다 — 그 재시도가
+  // 스태시까지 건드리므로 여기서 미리 함께 요구한다(재시도는 새 작업으로 등록된다).
+  new_branch: REWRITE_WITH_STASH,
+  branch_new_branch: REWRITE_WITH_STASH, remotebranch_new_branch: REWRITE_WITH_STASH,
+  rebase: REWRITE_WITH_STASH, branch_rebase_onto: REWRITE_WITH_STASH,
+
+  // ── 리모트를 거쳐 워킹트리까지 옮긴다 ──
+  'git-pull': PULL, branch_pull: PULL, branch_pull_rebase: PULL, branch_ff: PULL,
+
+  // ── 별도 워크트리 ──
+  // 다른 디렉터리를 만들고 지운다 — 지금 저장소의 인덱스도 워킹트리도 건드리지 않는다.
+  worktree_new: [REFS, CONFIG], worktree_remove: [REFS, CONFIG],
+  worktree_prune: [REFS],
 };
 
 const ACTION_SCOPE_PREFIXES = [
-  ['push_to_remote:', [REMOTE]],
-  ['tag_push:', [REMOTE]],
+  // 올릴 대상을 로컬 ref 에서 읽는다 — 'git-push' 주석 참고
+  ['push_to_remote:', [REMOTE, REFS]],
+  ['tag_push:', [REMOTE, REFS]],
   ['tag_delete_remote:', [REMOTE]],
   ['tag_delete:', [REFS]],
   ['branch_track:', [CONFIG]],
@@ -307,19 +391,22 @@ const REQUIRES_COMMIT_SELECTION = new Set([
 const REPO_FREE_ACTIONS = new Set(['tab_init', 'tab_clone', 'tab_change_repo']);
 
 // index.lock 과 무관한 쓰기 동작 — 인덱스를 건드리지 않으므로 락이 있어도 막지 않는다.
-// (락 해제 버튼 자신도 여기 있어야 한다. 아니면 락이 걸린 순간 빠져나올 수 없다.)
-const INDEX_FREE_ACTIONS = new Set([
-  'unlockIndex', 'git-fetch',
-  'branch_pin', 'branch_track', 'branch_untrack', 'branch_rename',
-  'remote_add', 'remote_remove', 'remote_rename', 'remote_set_url', 'remote_prune',
-  'committer-name', 'committer-email', 'reset-committer-name', 'reset-committer-email',
-  'tab_change_repo', 'tab_clone', 'worktree_open',
-]);
-const INDEX_FREE_PREFIXES = ['branch_track:'];
+//
+// 예전에는 수기 목록이었고, 그래서 나중에 추가된 동작이 줄줄이 빠져 있었다 —
+// push, 태그 만들기·지우기, 원격 브랜치 삭제, 스태시 정리는 인덱스와 아무 상관이
+// 없는데도 락이 걸린 동안 함께 막혔다. 자원 표에 이미 답이 있으므로 거기서 유도한다.
+// 목록이 하나 줄고, 앞으로 자원을 적어 두기만 하면 여기는 저절로 맞는다.
+//
+// 예외 둘:
+//   - unlockIndex 는 락을 지우는 자신이다. 자원상 INDEX 를 요구하지만 락이 있을 때만
+//     의미가 있으므로 여기서 통과시켜야 빠져나올 수 있다.
+//   - 저장소를 바꾸는 길은 지금 저장소의 락과 무관하다. 이걸 막으면 락이 걸린 저장소에
+//     갇힌다.
+const REPO_SWITCH_ACTIONS = new Set(['tab_change_repo', 'tab_clone', 'worktree_open']);
 
 function isIndexFree(id) {
-  if (INDEX_FREE_ACTIONS.has(id)) return true;
-  return INDEX_FREE_PREFIXES.some(p => id.startsWith(p));
+  if (id === 'unlockIndex' || REPO_SWITCH_ACTIONS.has(id)) return true;
+  return !scopesOf(id).includes(INDEX);
 }
 
 // ── 동작별 개별 전제 ──
@@ -500,18 +587,66 @@ function context() {
   };
 }
 
+// ── 확인창을 거쳐 미뤄진 동작의 재검사 ──
+// 확인 다이얼로그를 여는 시점에 이미 전체 판정을 통과했고, 무엇에 대고 실행할지도
+// 그때 정해져 화면과 무관하게 pending 상태로 보관된다. 확인 버튼을 누르기까지 사이에
+// 달라질 수 있는 것은 "지금 시작해도 되는 상황인가"뿐이다 — 로딩, 인덱스 잠금,
+// 진행 중인 작업, 자원 겹침. 그래서 그 축만 다시 본다.
+//
+// 대상 조건(EXTRA_RULES, 커밋 선택)까지 다시 보면 안 된다. 다이얼로그가 들고 있는
+// 대상이 아니라 지금 화면의 선택을 보게 되어, 멀쩡히 확정된 작업이 "선택된 파일이
+// 없다"로 막힌다.
+// opts.allowDuringOperation: 진행 중인 작업을 스스로 걷어내고 다시 시도하는 길
+// (중단된 rebase 를 abort 하고 재시도)에는 그 작업을 이유로 막으면 안 된다 —
+// 막으면 빠져나올 방법이 사라진다. 자원 겹침과 나머지 전제는 그대로 본다.
+function startBlockedReason(id, snap, opts) {
+  if (!id) return null;
+  const s = snap || snapshot();
+
+  if (REQUIRES_OPERATION.has(id)) {
+    if (!s.op) return REASON.NO_OPERATION;
+    if (busyBlocker(id, s)) return REASON.BUSY;
+    return null;
+  }
+
+  if (isReadOnlyAction(id)) {
+    return s.loading ? REASON.LOADING : null;
+  }
+
+  const base = baseReason(id, s);
+  if (base) return base;
+
+  const allowOp = !!(opts && opts.allowDuringOperation);
+  if (!allowOp && s.op && (BLOCKED_DURING_OPERATION.has(id) || matchesPrefix(id, BLOCKED_DURING_OPERATION_PREFIXES))) {
+    return s.opReason;
+  }
+
+  return null;
+}
+
 // ── 실행 직전 게이트 ──
 // 막힌 동작이면 사유를 알리고 false 를 돌려준다. 호출부는 false 면 그냥 돌아가면 된다.
 //   - 다른 쓰기 작업이 도는 중이라면 창 타이틀의 진행 표시 옆에 잠깐 덧붙인다
 //     (진행 메시지를 덮지 않기 위해서다)
 //   - 그 밖의 사유는 힌트바에 토스트로 띄운다
-function guardAction(id, extra) {
-  const reason = disabledReason(id, extra);
-  if (reason === null) return true;
+function reportBlocked(reason) {
   const spinner = require('./spinner');
   if (state.spinnerActive) spinner.flashBusy();
   else spinner.showToast(reason, 1600);
   return false;
+}
+
+function guardAction(id, extra) {
+  const reason = disabledReason(id, extra);
+  if (reason === null) return true;
+  return reportBlocked(reason);
+}
+
+// 확인창의 실행 버튼을 눌렀을 때의 게이트 — 판정 범위는 startBlockedReason 참고.
+function guardDeferredAction(id, opts) {
+  const reason = startBlockedReason(id, null, opts);
+  if (reason === null) return true;
+  return reportBlocked(reason);
 }
 
 // ── 메뉴 항목에 판정 결과 싣기 ──
@@ -548,7 +683,9 @@ module.exports = {
   context,
   isEnabled,
   disabledReason,
+  startBlockedReason,
   guardAction,
+  guardDeferredAction,
   decorateMenuItems,
   selectedTargets,
   stageableTargets,

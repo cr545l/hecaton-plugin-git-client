@@ -1,5 +1,5 @@
 const { state, ui } = require('./state');
-const { gitExec, gitExecChecked, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
+const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { label: 'Pending', days: 0 },
@@ -882,7 +882,7 @@ async function refreshAsync(options = {}) {
     const insideWorkTree = (preLines[0] || '').trim();
     const preGitDir = (preLines[1] || '').trim();
     const preCommonDir = (preLines[2] || '').trim();
-    if (!preCheck || !preCheck.ok || insideWorkTree !== 'true') {
+    if (!gitProcessSucceeded(preCheck) || insideWorkTree !== 'true') {
       if (state.gitDir) {
         state.isGitRepo = true;
         state.ignoredLoading = false;
@@ -895,7 +895,7 @@ async function refreshAsync(options = {}) {
       }
       state.isGitRepo = false;
       const parts = [];
-      if (preCheck && preCheck.ok && insideWorkTree !== 'true') {
+      if (gitProcessSucceeded(preCheck) && insideWorkTree !== 'true') {
         parts.push('Not a git repository');
       } else if (!preCheck) {
         parts.push('exec_process returned null');

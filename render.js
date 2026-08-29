@@ -330,15 +330,23 @@ function renderBody() {
   const H = '\u2500', V = '\u2502', CROSS = '\u253c';
   const T_DOWN = '\u252c', T_UP = '\u2534', T_RIGHT = '\u251c', T_LEFT = '\u2524';
 
-  const leftW = ui.leftPanelCollapsed
+  const repoSetupMode = !state.loading && !state.isGitRepo;
+  const leftW = repoSetupMode
+    ? 0
+    : ui.leftPanelCollapsed
     ? 0
     : Math.max(1, Math.min(width - 4, Math.floor(width * ui.verticalDividerRatio)));
-  const divider1W = ui.leftPanelCollapsed ? 0 : 1;
+  const divider1W = repoSetupMode || ui.leftPanelCollapsed ? 0 : 1;
   const remaining = width - leftW - divider1W;
 
   // Layout depends on view mode
   let middleW, divider2W, rightW;
-  if (state.rightView === 'log' || state.rightView === 'fresh') {
+  if (repoSetupMode) {
+    // 저장소를 고르기 전에는 패널 레이아웃 대신 전체 폭의 설정 화면을 쓴다.
+    middleW = 0;
+    divider2W = 0;
+    rightW = width;
+  } else if (state.rightView === 'log' || state.rightView === 'fresh') {
     // 2-column: left | right (history+detail top/bottom)
     middleW = 0;
     divider2W = 0;
@@ -372,6 +380,37 @@ function renderBody() {
       if (idx === ui.hoveredTitleZoneIndex) return colors.value + ansi.bold + CSI + '4m';
       return collapsed ? colors.dim : colors.title + ansi.bold;
     };
+
+    if (repoSetupMode) {
+      let row = ansi.moveTo(startRow, startCol);
+      let col = startCol;
+      const heading = ' Git Setup ';
+      row += colors.cyan + ansi.bold + ansi.inverse + heading + ansi.reset;
+      col += visLen(heading);
+
+      const setupActions = [
+        { label: ' Initialize Here ', action: 'tab_init' },
+        { label: ' Open Repository... ', action: 'tab_change_repo' },
+        { label: ' Clone Repository... ', action: 'tab_clone' },
+      ];
+      for (const item of setupActions) {
+        if (col + visLen(item.label) > startCol + width) break;
+        const idx = zoneIdx++;
+        const on = caps().isEnabled(item.action);
+        ui.titleClickZones.push({
+          row: startRow,
+          colStart: col,
+          colEnd: col + visLen(item.label) - 1,
+          action: item.action,
+          enabled: on,
+        });
+        row += buttonStyle(on, idx === ui.hoveredTitleZoneIndex,
+          colors.value, colors.cursorBg + colors.value + ansi.bold + CSI + '4m')
+          + item.label + ansi.reset;
+        col += visLen(item.label);
+      }
+      return row + ' '.repeat(Math.max(0, startCol + width - col));
+    }
 
     // Build right-side panel buttons string first to know its width
     let rightParts = []; // { label, action, collapsed }
@@ -591,8 +630,81 @@ function renderBody() {
   // Reset scroll pct (will be set by panel builders)
   ui.scrollPct = { status: -1, files: -1, diff: -1, history: -1, detail: -1 };
 
+  function buildRepositorySetupPanel(w, h) {
+    const lines = new Array(Math.max(0, h)).fill('');
+    const zones = [];
+    if (w <= 0 || h <= 0) return { lines, zones };
+
+    const entries = state.gitNotFound
+      ? []
+      : [
+          { label: '[I] Initialize Repository Here', action: 'tab_init' },
+          { label: '[O] Open Existing Repository...', action: 'tab_change_repo' },
+          { label: '[C] Clone Repository...', action: 'tab_clone' },
+        ];
+    const contentHeight = state.gitNotFound ? 5 : 9;
+    const top = Math.max(0, Math.floor((h - contentHeight) / 2));
+
+    function centerLine(row, text, style) {
+      if (row < 0 || row >= lines.length) return;
+      const shown = truncate(text, Math.max(1, w - 2));
+      const col = Math.max(0, Math.floor((w - visLen(shown)) / 2));
+      lines[row] = ' '.repeat(col) + (style || '') + shown + ansi.reset;
+    }
+
+    centerLine(top, state.gitNotFound ? 'Git executable not found' : 'This folder is not a Git repository',
+      state.gitNotFound ? colors.red + ansi.bold : colors.cyan + ansi.bold);
+    centerLine(top + 2, truncate(state.cwd || '', Math.max(1, w - 4)), colors.dim);
+
+    if (state.gitNotFound) {
+      centerLine(top + 4, 'Install Git and reopen this plugin to continue.', colors.dim);
+      return { lines, zones };
+    }
+
+    centerLine(top + 4, 'Set up version control even when this folder has no files yet.', colors.dim);
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const row = top + 6 + i;
+      if (row >= lines.length) break;
+      const shown = truncate(entry.label, Math.max(1, w - 2));
+      const col = Math.max(0, Math.floor((w - visLen(shown)) / 2));
+      const on = caps().isEnabled(entry.action);
+      const style = buttonStyle(on, ui.hoveredRepoSetupAction === entry.action,
+        colors.value, colors.cursorBg + colors.value + ansi.bold + CSI + '4m');
+      lines[row] = ' '.repeat(col) + style + shown + ansi.reset;
+      zones.push({ lineIdx: row, colStart: col, colEnd: col + visLen(shown) - 1, action: entry.action, enabled: on });
+    }
+    return { lines, zones };
+  }
+
   // -- Body --
-  if (state.rightView === 'fresh') {
+  if (repoSetupMode) {
+    const setup = buildRepositorySetupPanel(width, contentH);
+    const bodyTop = startRow + titleRows + 1;
+    ui.repoSetupClickZones = setup.zones.map(zone => ({
+      row: bodyTop + zone.lineIdx,
+      colStart: startCol + zone.colStart,
+      colEnd: startCol + zone.colEnd,
+      action: zone.action,
+      enabled: zone.enabled,
+    }));
+    ui.fileLineMap = [];
+    ui.fileHeaderZones = [];
+    ui.leftTabZones = [];
+    ui.leftPanelClickMap = [];
+    ui.rightDiffH = 0;
+    ui.filesMaxScroll = 0;
+    ui.diffMaxScroll = 0;
+    ui.logListMaxScroll = 0;
+    ui.logDetailMaxScroll = 0;
+    ui.freshListMaxScroll = 0;
+    ui.freshDetailMaxScroll = 0;
+    for (let i = 0; i < bodyH; i++) {
+      const row = bodyTop + i;
+      buf.push(ansi.moveTo(row, startCol) + padRight(i < setup.lines.length ? setup.lines[i] : '', width));
+    }
+  } else if (state.rightView === 'fresh') {
+    ui.repoSetupClickZones = [];
     // 2-column body: left | right (fresh panel with top/bottom split)
     ui.fileLineMap = [];
     const rightLines = buildFreshPanel(rightW, contentH);
@@ -620,6 +732,7 @@ function renderBody() {
       }
     }
   } else if (state.rightView === 'log') {
+    ui.repoSetupClickZones = [];
     // 2-column body: left | right (log panel with top/bottom split)
     ui.fileLineMap = [];
     const rightLines = buildLogPanel(rightW, contentH);
@@ -647,6 +760,7 @@ function renderBody() {
       }
     }
   } else {
+    ui.repoSetupClickZones = [];
     // 3-column body: left | middle (files) | right (diff+commit)
     const middleLines = middleW > 0 ? buildFileListPanel(middleW, contentH) : [];
     const rightLines = rightW > 0 ? buildDiffCommitPanel(rightW, contentH) : [];
@@ -750,9 +864,15 @@ function renderBody() {
     windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply' + ansi.reset;
     hintContent = windowHint;
   } else if (!state.isGitRepo && (state.error || state.cwd)) {
-    // 처리상태(clone/init 진행 메시지)는 창 타이틀이 맡는다 — 여기서는 경로/에러만.
-    const msg = state.spinnerActive ? ('cwd: ' + state.cwd) : (state.error || 'cwd: ' + state.cwd);
-    hintContent = ' ' + colors.red + msg + ansi.reset;
+    // 비저장소는 오류가 아니라 설정 가능한 시작 상태다. 자세한 진단 문자열 대신 사용자가
+    // 지금 할 수 있는 동작을 안내하고, 실제 오류(git 실행 파일 없음)만 빨간색으로 남긴다.
+    if (state.spinnerActive) {
+      hintContent = ' ' + colors.dim + 'cwd: ' + state.cwd + ansi.reset;
+    } else if (state.gitNotFound) {
+      hintContent = ' ' + colors.red + 'Git executable not found' + ansi.reset;
+    } else {
+      hintContent = ' ' + colors.dim + '[I] initialize  [O] open  [C] clone' + ansi.reset;
+    }
   } else if (state.error && !state.spinnerActive) {
     // 쓰기 작업 진행 메시지(spinnerActive 중의 state.error)와 refresh 스피너는
     // 창 타이틀에서 점자 스피너와 함께 표시한다 — 힌트바는 에러/토스트만 맡아
@@ -884,7 +1004,8 @@ function renderBody() {
 
   // Scrollbar overlays
   ui.scrollbarOverlays = [];
-  if (SIXEL_ENABLED) {
+  ui.hScrollbarZones = [];
+  if (SIXEL_ENABLED && !repoSetupMode) {
     const sbBodyTop = startRow + titleRows + 1;
     const midStart = startCol + leftW + divider1W;
 
@@ -954,7 +1075,6 @@ function renderBody() {
     }
 
     // Horizontal scrollbars (sixel)
-    ui.hScrollbarZones = [];
     const hasSixel = ui.cellW > 0 && ui.cellH > 0;
     if (hasSixel) {
       function addHScrollbar(target, hScreenRow, hColStart, hCols, viewportCols, scrollX, maxScrollX) {
@@ -1010,7 +1130,7 @@ function renderBody() {
   ui.lastLayout = { startRow, startCol, width, height, leftW, divider1W, middleW, divider2W, rightW, bodyH, titleRows };
 
   // Commit button zone (diff mode only)
-  if (state.rightView !== 'log' && state.rightView !== 'fresh' && ui.rightDiffH >= 0) {
+  if (!repoSetupMode && state.rightView !== 'log' && state.rightView !== 'fresh' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const visLines = ui.commitMsgVisibleLines || 1;
     const hsbOffset = ui.diffMaxScrollX > 0 ? 1 : 0;
@@ -1085,7 +1205,7 @@ function renderBody() {
   if (ui.hoveredAreaIndex >= ui.clickableAreas.length) ui.hoveredAreaIndex = -1;
 
   // Position cursor at text input location for IME composition
-  if (state.mode === 'commit' && state.rightView !== 'log' && ui.rightDiffH >= 0) {
+  if (!repoSetupMode && state.mode === 'commit' && state.rightView !== 'log' && ui.rightDiffH >= 0) {
     const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
     const topLine = ui.commitTopLine || 0;
     const cursorLineIdx = ui.commitCursorLineIdx || 0;
