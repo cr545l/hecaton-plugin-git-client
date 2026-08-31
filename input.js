@@ -6,14 +6,14 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   splitUpstreamRef,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,
   gitMergeAbort, gitCherryPickAbort, gitCherryPickSkip, gitRevertAbort, gitRevertSkip,
-  gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
+  gitStageAsync, gitStageMultiple, gitUnstageMultiple,
   gitWriteRebaseMessage, gitCheckRebaseConflicts, gitWriteConflictResolution,
   buildHunkPatchText, gitApplyPatchText,
 } = require('./git');
 const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinner');
 // 동작 가능 여부는 actions.js 한 곳에서 판정한다 — 화면의 딤 처리와 여기의 차단이
 // 같은 규칙을 봐야 "보이는데 안 눌린다"가 생기지 않는다.
-const { guardAction, isEnabled, disabledReason, stageableTargets, unstageableTargets, SCOPE } = require('./actions');
+const { guardAction, runOrQueue, isEnabled, disabledReason, stageableTargets, unstageableTargets, SCOPE } = require('./actions');
 // 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
 const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
@@ -144,8 +144,10 @@ function showPushNameMismatchDialog(info) {
 // Push current branch. With multiple remotes, let the user pick one via a
 // context menu (handled by 'push_to_remote:' in context-menu.js); otherwise
 // push directly to the tracked/sole remote.
+//
+// 게이트는 호출부(requestPush)가 맡는다 — 예약되어 나중에 실행될 때는 대기열이 이미
+// 판정을 마친 뒤라, 여기서 또 보면 같은 검사를 두 번 하게 된다.
 function pushCurrentBranch() {
-  if (!guardAction('git-push')) return;
   if (state.remotes.length > 1) {
     hecaton.menu.show({ items: buildPushRemoteMenuItems() }).catch(() => null);
     return;
@@ -174,6 +176,51 @@ function pushCurrentBranch() {
       stopSpinner(pushOp);
     }
   });
+}
+
+// ── 리모트 동작의 진입점 ──
+// 셋 다 화면에서 대상을 고르지 않는다(무엇을 올리고 받을지는 실행 순간의 HEAD 와
+// 업스트림 설정이 정한다). 그래서 지금 막혀 있으면 버리지 않고 예약해 두었다가,
+// 붙잡고 있던 작업이 끝날 때 그대로 실행한다 — 커밋을 걸고 곧바로 Push 를 누르는
+// 흐름이 이 셋이다. 예약 조건과 그 전제는 actions.QUEUEABLE_ACTIONS 에 있다.
+function requestPush() {
+  runOrQueue('git-push', pushCurrentBranch);
+}
+
+function runFetch() {
+  const fetchOp = startSpinner('Fetching...', [REMOTE]);
+  gitFetchAsync(state.cwd).then(async err => {
+    if (err) {
+      stopSpinner(fetchOp);
+      showErrorDialog(err);
+      render();
+    } else {
+      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...', settle: true, scopes: fetchOp.scopes });
+      stopSpinner(fetchOp);
+    }
+  });
+}
+
+function requestFetch() {
+  runOrQueue('git-fetch', runFetch);
+}
+
+function runPull() {
+  const pullOp = startSpinner('Pulling...', PULL_SCOPES);
+  gitPullAsync(state.cwd).then(async err => {
+    if (err) {
+      stopSpinner(pullOp);
+      showErrorDialog(err);
+      render();
+    } else {
+      refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...', settle: true, scopes: pullOp.scopes });
+      stopSpinner(pullOp);
+    }
+  });
+}
+
+function requestPull() {
+  runOrQueue('git-pull', runPull);
 }
 
 function maybeLoadMoreLog() {
@@ -311,15 +358,36 @@ function enterAmendCommitMode() {
 // [s]/[u] 키, 파일 목록 헤더의 Stage/Unstage 버튼이 같은 코드를 쓴다. 대상 계산도
 // 활성 여부 판정과 같은 함수(actions.stageableTargets)를 쓰므로, 버튼이 살아 있는데
 // 눌러도 아무 일이 없는 어긋남이 생기지 않는다.
-async function runStageSelection(isStage) {
-  const files = (isStage ? stageableTargets() : unstageableTargets()).map(t => t.file);
-  if (files.length === 0) return;
-  state.selectedFiles.clear();
+// 대상은 부르는 쪽이 정해서 넘긴다 — 예약을 거쳐 나중에 실행될 때 화면의 선택을 다시
+// 읽으면 그때는 이미 다른 파일이 골라져 있다(requestStageSelection 참고).
+async function runStageSelection(isStage, files) {
+  if (!files || files.length === 0) return;
   const op = startSpinner(isStage ? 'Staging...' : 'Unstaging...', [INDEX]);
   const err = isStage
     ? await gitStageMultiple(state.cwd, files)
     : await gitUnstageMultiple(state.cwd, files);
   finishStageOp(isStage, files, err, op);
+}
+
+// ── 스테이징 요청 ──
+// git add 는 프로세스를 새로 띄우는 일이라, 그 사이에 고른 다음 파일이 예전에는 통째로
+// 버려졌다("busy, action ignored"). 이제는 지금 고른 대상을 확정해 예약에 실어 보낸다.
+// 연달아 누르면 대상이 한 예약으로 합쳐져(merge:'union') git 도 한 번만 부른다.
+//
+// 대상 계산은 활성 여부 판정과 같은 함수(actions.stageableTargets)를 쓴다 — 버튼이
+// 살아 있는데 눌러도 아무 일이 없는 어긋남이 생기지 않는다.
+function requestStageFiles(isStage, files) {
+  const id = isStage ? 'stageSelected' : 'unstageSelected';
+  // 고를 것이 없으면 판정에 맡긴다 — 사유(Nothing to stage 등)는 그쪽이 안다.
+  if (!files || files.length === 0) { guardAction(id); return; }
+  runOrQueue(id, list => runStageSelection(isStage, list), { payload: files });
+}
+
+function requestStageSelection(isStage) {
+  const files = (isStage ? stageableTargets() : unstageableTargets()).map(t => t.file);
+  if (files.length === 0) { guardAction(isStage ? 'stageSelected' : 'unstageSelected'); return; }
+  state.selectedFiles.clear();
+  requestStageFiles(isStage, files);
 }
 
 async function runStageAll(isStage) {
@@ -331,6 +399,12 @@ async function runStageAll(isStage) {
   const op = startSpinner(isStage ? 'Staging all...' : 'Unstaging all...', [INDEX]);
   const err = isStage ? await gitStageAll(state.cwd) : await gitUnstageAll(state.cwd);
   finishStageOp(isStage, files, err, op);
+}
+
+// 전부 담기/내리기는 대상이 "그때의 전부"라 들고 갈 목록이 없다 — 실행하는 순간의
+// 화면을 기준으로 삼는 것이 오히려 사용자가 뜻한 바다.
+function requestStageAll(isStage) {
+  runOrQueue(isStage ? 'stageAll' : 'unstageAll', () => runStageAll(isStage));
 }
 
 // op 은 startSpinner 가 돌려준 작업 표다 — 인덱스만 붙잡는 스테이징은 fetch 같은 다른
@@ -469,7 +543,7 @@ async function handleKey(key) {
 
   // Ctrl+Shift+P / Cmd+Shift+P: push
   if (key === CSI + '112;6u' || key === CSI + '112;10u') {
-    pushCurrentBranch();
+    requestPush();
     return;
   }
 
@@ -598,14 +672,12 @@ async function handleKey(key) {
     }
     case 's': {
       if (state.rightView === 'log') break;
-      if (!guardAction('stageSelected')) break;
-      await runStageSelection(true);
+      requestStageSelection(true);
       break;
     }
     case 'u': {
       if (state.rightView === 'log') break;
-      if (!guardAction('unstageSelected')) break;
-      await runStageSelection(false);
+      requestStageSelection(false);
       break;
     }
     case 'c': {
@@ -1748,37 +1820,13 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'git-fetch') {
               handled = true;
-              if (!guardAction('git-fetch')) break;
-              const fetchOp = startSpinner('Fetching...', [REMOTE]);
-              gitFetchAsync(state.cwd).then(async err => {
-                if (err) {
-                  stopSpinner(fetchOp);
-                  showErrorDialog(err);
-                  render();
-                } else {
-                  refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...', settle: true, scopes: fetchOp.scopes });
-                  stopSpinner(fetchOp);
-                }
-              });
-              handled = true;
+              requestFetch();
             } else if (zone.action === 'git-pull') {
               handled = true;
-              if (!guardAction('git-pull')) break;
-              const pullOp = startSpinner('Pulling...', PULL_SCOPES);
-              gitPullAsync(state.cwd).then(async err => {
-                if (err) {
-                  stopSpinner(pullOp);
-                  showErrorDialog(err);
-                  render();
-                } else {
-                  refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...', settle: true, scopes: pullOp.scopes });
-                  stopSpinner(pullOp);
-                }
-              });
-              handled = true;
+              requestPull();
             } else if (zone.action === 'git-push') {
-              pushCurrentBranch();
               handled = true;
+              requestPush();
             } else if (zone.action === 'git-stash') {
               handled = true;
               if (!guardAction('git-stash')) break;
@@ -2250,12 +2298,10 @@ async function handleMouseData(data) {
                   break;
                 }
                 if (zone.action === 'stageAll' || zone.action === 'unstageAll') {
-                  if (!guardAction(zone.action)) break;
-                  runStageAll(zone.action === 'stageAll');
+                  requestStageAll(zone.action === 'stageAll');
                   break;
                 }
-                if (!guardAction(zone.action)) break;
-                runStageSelection(zone.action === 'stageSelected');
+                requestStageSelection(zone.action === 'stageSelected');
                 break;
               }
             }
@@ -2268,13 +2314,14 @@ async function handleMouseData(data) {
             const now = Date.now();
 
             if (fileIdx === ui.lastClickFileIdx && now - ui.lastClickTime < 400) {
-              // Double-click: stage/unstage toggle — 막혀 있으면 선택만 남기고 사유를 알린다.
+              // Double-click: stage/unstage toggle — 막혀 있으면 예약해 둔다. 파일을
+              // 연달아 더블클릭하는 흐름이라, 앞의 git 이 도는 사이 누른 것이 버려지면
+              // 눌렀는지 아닌지를 목록으로 되짚어야 한다. 대상이 파일 하나로 분명하므로
+              // 그대로 실어 보내면 된다.
               const item = buildFileList()[fileIdx];
               const isUnstage = item && item.type === 'staged';
-              if (item && item.type !== 'ignored' && guardAction(isUnstage ? 'unstageSelected' : 'stageSelected')) {
-                const dblOp = startSpinner(isUnstage ? 'Unstaging...' : 'Staging...', [INDEX]);
-                (isUnstage ? gitUnstageAsync(state.cwd, item.file) : gitStageAsync(state.cwd, item.file))
-                  .then(err => finishStageOp(!isUnstage, [item.file], err, dblOp));
+              if (item && item.type !== 'ignored') {
+                requestStageFiles(!isUnstage, [item.file]);
               }
               ui.lastClickFileIdx = -1;
               ui.lastClickTime = 0;

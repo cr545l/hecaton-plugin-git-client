@@ -8,6 +8,7 @@ const hostScroll = require('./scroll');
 const persist = require('./persist');
 const { panelLoadingLabel } = require('./spinner');
 const actions = require('./actions');
+const queue = require('./queue');
 
 // ── 버튼 스타일의 단일 규칙 ──
 // 지금 눌러도 되는 버튼만 평상시 기본 전경색으로 그리고, 막힌 버튼은 흐리게(dim) 둔다.
@@ -17,6 +18,22 @@ function buttonStyle(enabled, hovered, enabledStyle, hoverStyle) {
   if (!enabled) return colors.disabled;
   if (hovered) return hoverStyle || (colors.value + ansi.bold + CSI + '4m');
   return enabledStyle || colors.value;
+}
+
+// ── 예약까지 함께 보는 버튼 ──
+// 상태가 셋이다: 지금 눌리는가(평상시 색), 눌러 뒀고 곧 나가는가(cyan), 아예 안 되는가
+// (dim). 예약된 것을 dim 으로 그리면 무시된 것처럼 읽히고, 예약으로 받아질 것을 dim 으로
+// 그리면 "못 누르는 줄 알았는데 되더라"가 된다 — 그래서 판정도 isActionable 쪽을 본다.
+function actionStyle(action, hovered, enabledStyle, hoverStyle) {
+  if (queue.hasFor(action)) {
+    return hovered ? colors.cursorBg + colors.cyan + ansi.bold + CSI + '4m' : colors.cyan + ansi.bold;
+  }
+  return buttonStyle(caps().isActionable(action), hovered, enabledStyle, hoverStyle);
+}
+
+// 클릭존에 실을 값 — 예약으로 받아지는 버튼은 클릭을 계속 받아야 한다.
+function actionClickable(action) {
+  return caps().isActionable(action) || queue.hasFor(action);
 }
 
 // 목록의 선택 줄 배경. 포커스가 diff/detail 쪽으로 가도 선택 자체는 그대로 두고 흐리게만
@@ -539,11 +556,10 @@ function renderBody() {
           const btn = actionBtns[i];
           const label = ' ' + btn.label + ' ';
           const si = zoneIdx++;
-          const on = caps().isEnabled(btn.action);
-          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action, enabled: on });
+          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action, enabled: actionClickable(btn.action) });
           const hasCount = (btn.action === 'git-pull' && state.behind > 0)
             || (btn.action === 'git-push' && state.ahead > 0);
-          const style = buttonStyle(on, si === ui.hoveredTitleZoneIndex,
+          const style = actionStyle(btn.action, si === ui.hoveredTitleZoneIndex,
             hasCount ? colors.orange + ansi.bold : colors.value,
             colors.cursorBg + colors.value + ansi.bold + CSI + '4m');
           row1 += style + label + ansi.reset;
@@ -880,9 +896,24 @@ function renderBody() {
     const isInProgress = state.error.endsWith('...');
     const msgColor = isInProgress ? colors.yellow : colors.red;
     hintContent = ' ' + msgColor + state.error + ansi.reset;
+  } else if (ui.hoveredAction && queue.hasFor(ui.hoveredAction)) {
+    // 예약된 버튼 — 왜 안 나갔는지가 아니라 언제 나가는지, 그리고 물릴 방법을 알린다.
+    // 대상을 들고 가는 예약은 무엇을 실었는지가 더 중요하다(또 누르면 거기에 보탠다).
+    const entry = queue.findFor(ui.hoveredAction);
+    const count = entry && Array.isArray(entry.payload) ? entry.payload.length : 0;
+    hintContent = ' ' + colors.cyan + 'Queued' + (count > 0 ? ' (' + count + ' file' + (count > 1 ? 's' : '') + ')' : '')
+      + ansi.reset + colors.dim
+      + (count > 0
+        ? ' — runs when the current operation finishes; click again to add'
+        : ' — runs when the current operation finishes (click to cancel)')
+      + ansi.reset;
   } else if (ui.hoveredAction && caps().disabledReason(ui.hoveredAction)) {
     // 딤드 버튼에 마우스를 올린 동안만 사유를 보여 준다 — 색만으로는 "왜"를 알 수 없다.
-    hintContent = ' ' + colors.dim + caps().disabledReason(ui.hoveredAction) + ansi.reset;
+    // 눌러도 버려지지 않고 예약될 버튼이라면 그 점을 함께 알린다 — 사유만 보여 주면
+    // 흐리지도 않은 버튼에 "다른 작업이 도는 중"이라고만 적혀 눌러도 되는지 알 수 없다.
+    const reason = caps().disabledReason(ui.hoveredAction);
+    const willQueue = caps().isActionable(ui.hoveredAction);
+    hintContent = ' ' + colors.dim + reason + (willQueue ? ' — click to queue' : '') + ansi.reset;
   } else if (state.rightView === 'fresh') {
     hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
   } else if (state.operationState) {
@@ -1735,12 +1766,12 @@ function buildFileListPanel(w, h) {
     }
 
     const allZoneIdx = ui.fileHeaderZones.length;
-    const allOn = caps().isEnabled('stageAll');
-    const allBtnStyle = buttonStyle(allOn, ui.hoveredFileHeaderIdx === allZoneIdx);
+    const allOn = actionClickable('stageAll');
+    const allBtnStyle = actionStyle('stageAll', ui.hoveredFileHeaderIdx === allZoneIdx);
 
     const zoneIdx = ui.fileHeaderZones.length + 1;
-    const selOn = caps().isEnabled('stageSelected');
-    const btnStyle = buttonStyle(selOn, ui.hoveredFileHeaderIdx === zoneIdx);
+    const selOn = actionClickable('stageSelected');
+    const btnStyle = actionStyle('stageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = cursorCol;
     const btnStart = allBtnStart + allBtnLabel.length + 1;
@@ -1790,12 +1821,12 @@ function buildFileListPanel(w, h) {
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
 
     const allZoneIdx = ui.fileHeaderZones.length;
-    const allOn = caps().isEnabled('unstageAll');
-    const allBtnStyle = buttonStyle(allOn, ui.hoveredFileHeaderIdx === allZoneIdx);
+    const allOn = actionClickable('unstageAll');
+    const allBtnStyle = actionStyle('unstageAll', ui.hoveredFileHeaderIdx === allZoneIdx);
 
     const zoneIdx = ui.fileHeaderZones.length + 1;
-    const selOn = caps().isEnabled('unstageSelected');
-    const btnStyle = buttonStyle(selOn, ui.hoveredFileHeaderIdx === zoneIdx);
+    const selOn = actionClickable('unstageSelected');
+    const btnStyle = actionStyle('unstageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = headerLabelLen + gap;
     const btnStart = allBtnStart + allBtnLabel.length + 1;

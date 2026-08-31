@@ -39,7 +39,7 @@ const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
 // 메뉴를 만들 때(decorateMenuItems)와 실행할 때(guardAction)가 같은 표를 보므로,
 // "메뉴에선 살아 있는데 눌러도 안 되는" 어긋남이 생기지 않는다.
-const { guardAction, guardDeferredAction, decorateMenuItems, operationLabel, SCOPE } = require('./actions');
+const { guardAction, guardOrQueue, guardDeferredAction, decorateMenuItems, operationLabel, SCOPE } = require('./actions');
 // 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
 const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
@@ -568,7 +568,14 @@ async function handleContextMenuAction(actionId) {
   // 직접 막아야 중첩 실행(커밋 중 discard, rebase 중 checkout 등)이 안 생긴다.
   // 메뉴에서 이미 딤 처리된 항목이라도 호스트가 흘려보낼 수 있으니 한 번 더 본다.
   // 복사/열기 같은 읽기 액션은 어떤 상황에서도 그대로 통과한다.
-  if (!guardAction(actionId)) return;
+  //
+  // 예약할 수 있는 동작(리모트로 올리고 받는 것들)은 막혔을 때 버리지 않고 대기열에
+  // 넣는다. 다시 태우는 길은 같은 id 로 이 함수를 부르는 것이다 — 대상을 그때 다시
+  // 읽으므로, 예약 시점의 낡은 값을 들고 가지 않는다.
+  // 다시 태울 때는 대기열이 이미 판정을 마친 뒤라 이 게이트를 그대로 통과한다.
+  // 실패는 각 분기가 오류 창으로 알리므로, 여기서는 예약 실행이 미처리 거부로 새지
+  // 않게만 받아 둔다.
+  if (!guardOrQueue(actionId, () => { handleContextMenuAction(actionId).catch(() => null); })) return;
 
   // Tab context menu actions
   if (actionId === 'tab_refresh') {

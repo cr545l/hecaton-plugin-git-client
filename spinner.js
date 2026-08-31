@@ -78,6 +78,10 @@ function endOp(op) {
   const wasRunning = _ops[idx].phase === 'running';
   _ops.splice(idx, 1);
   syncOpState(wasRunning);
+  // 자원이 하나 풀렸다 — 그것 때문에 막혀 예약된 동작이 있으면 이제 될 수도 있다.
+  // 실제 실행은 한 틱 뒤다(queue.scheduleDrain 주석 참고): 여기서 바로 실행하면
+  // 작업을 끝내는 도중에 새 작업이 등록부를 다시 건드린다.
+  require('./queue').scheduleDrain();
   return true;
 }
 
@@ -248,11 +252,14 @@ function showToast(msg, ttlMs = 1000) {
 }
 
 // 테스트가 상태를 직접 세팅하고 시작할 수 있도록 등록부를 비운다.
+// 예약도 함께 비운다 — 앞 테스트가 남긴 예약이 다음 테스트의 작업이 끝날 때 실행되면
+// 아무도 시키지 않은 git 명령이 나간다.
 function resetOps() {
   _ops = [];
   state.activeOps = _ops;
   state.spinnerActive = false;
   state.settlingWrite = false;
+  require('./queue').clear();
 }
 
 module.exports = {

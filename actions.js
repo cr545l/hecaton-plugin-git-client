@@ -218,17 +218,135 @@ function scopesOf(id) {
   return ALL_SCOPES;
 }
 
+// ── 뒷정리 갱신(settling)을 지나쳐 보내는 동작 ──
+// settling 이 막는 것은 자원 경합이 아니다. git 명령은 이미 끝나 인덱스도 ref 도
+// 확정됐고, 남은 것은 그 결과를 화면에 다시 읽어오는 일뿐이다. 그래서 이 구간의
+// 진짜 위험은 하나다 — 화면에 남은 낡은 목록을 보고 대상을 고르는 것.
+//
+// 아래 동작들은 대상을 화면에서 고르지 않는다. 무엇을 올리고 받을지는 실행하는 순간의
+// 저장소(HEAD, 업스트림 설정)에서 정해지므로, 목록이 낡았든 아니든 결과가 같다.
+// 커밋을 누르고 곧바로 Push 를 누르는 흐름이 여기서 살아난다: 커밋의 git 명령이
+// 끝나는 순간 push 가 나가고, 목록 갱신은 그 옆에서 계속 돈다. 갱신은 이 환경에서
+// 명령 자체보다 오래 걸리므로(프로세스 생성이 느리다) 기다림의 대부분이 여기였다.
+//
+// 넓히기 전에 반드시 확인할 것: running 단계는 그대로 막힌다. 여기 넣어도 되는 것은
+// "그 작업의 git 명령이 끝난 뒤라면 지금 해도 결과가 같은가"에 예라고 답할 수 있는
+// 동작뿐이다.
+const SETTLE_TRANSPARENT = new Set(['git-push', 'git-pull', 'git-fetch']);
+const SETTLE_TRANSPARENT_PREFIXES = ['push_to_remote:'];
+
+function ignoresSettling(id) {
+  if (SETTLE_TRANSPARENT.has(id)) return true;
+  return SETTLE_TRANSPARENT_PREFIXES.some(p => id.startsWith(p));
+}
+
 // 지금 이 동작과 자원이 겹치는 작업 — 없으면 null.
 function busyBlocker(id, s) {
   if (s.ops.length === 0) return null;
   const need = scopesOf(id);
-  return s.ops.find(op => (op.scopes || ALL_SCOPES).some(sc => need.includes(sc))) || null;
+  const skipSettling = ignoresSettling(id);
+  return s.ops.find(op => {
+    // 자원을 밝히지 않은 작업(phase 조차 없는 경로)은 예전처럼 전부를 붙잡은 것으로
+    // 본다 — settling 인지도 알 수 없으므로 지나쳐 보내지 않는다.
+    if (skipSettling && op.phase === 'settling') return false;
+    return (op.scopes || ALL_SCOPES).some(sc => need.includes(sc));
+  }) || null;
+}
+
+// ── 예약할 수 있는 동작 ──
+// 대기열(queue.js)은 "지금은 막혔지만 곧 된다"를 대신 기다려 주는 장치다. 그래서
+// 무엇에 대고 실행할지가 예약 시점이 아니라 실행 시점의 저장소에서 정해지는 동작만
+// 넣는다. 화면에서 대상을 고르는 동작을 예약하면, 풀려날 때는 그 목록이 이미 다른
+// 것으로 바뀌어 있다 — 커밋 뒤의 Staged 목록이 그렇다.
+//
+// 확인 다이얼로그나 메뉴를 여는 동작도 넣지 않는다. 한참 뒤에 갑자기 창이 뜨면
+// 무엇에 대한 물음인지 알 수 없다. (git-push 는 리모트가 여럿일 때 메뉴를 열지만,
+// 그 메뉴는 예약이 풀리면서 뜨는 것이라 방금 누른 Push 와 이어져 읽힌다.)
+//
+// 값은 예약의 성질이다:
+//   branch    — 실행 시점의 현재 브랜치가 예약할 때와 같아야 한다.
+//   blockedBy — 지금 막고 있는 작업이 이 자원을 잡고 있으면 아예 예약하지 않는다.
+//               기다려 봐야 그 작업이 예약의 전제를 무너뜨리기 때문이다(canQueueNow).
+//   merge     — 같은 동작을 다시 눌렀을 때 대상을 합칠 전략. 없으면 취소로 읽는다.
+const QUEUEABLE_ACTIONS = new Map([
+  // 리모트로 올리고 받는 것들 — 무엇을 올릴지는 실행 순간의 HEAD 와 업스트림이 정한다.
+  // 워킹트리를 갈아엎는 작업(체크아웃·머지·리베이스·리셋·pull)이 도는 동안에는 예약을
+  // 받지 않는다: 풀려날 때 올라가는 것은 누를 때 보던 브랜치가 아니다.
+  ['git-push', { branch: true, blockedBy: [WORKTREE] }],
+  ['git-pull', { branch: true, blockedBy: [WORKTREE] }],
+  ['git-fetch', {}],
+
+  // ── 스테이징 ──
+  // 파일을 하나씩 골라 s/u 를 누르는 흐름이 이 구조에서 가장 자주 씹혔다. git add 는
+  // 프로세스 하나를 새로 띄우는 일이라(이 환경에서는 그 자체가 눈에 띄게 느리다) 그
+  // 사이에 누른 다음 파일이 통째로 버려졌다.
+  //
+  // 대상은 예약할 때 확정해 들고 간다(payload). 화면의 선택을 실행 시점에 다시 읽으면
+  // 그때는 이미 다른 파일이 골라져 있다 — 예약이 사고가 되는 지점이 정확히 거기다.
+  // 같은 동작을 또 누르면 취소가 아니라 대상을 보탠다: 파일을 하나씩 고르는 흐름이
+  // 곧 그것이고, 합쳐 두면 git 도 한 번만 부른다.
+  //
+  // blockedBy 가 REFS·WORKTREE 인 것은 예약한 대상의 상태를 갈아엎는 작업들이기
+  // 때문이다(커밋·체크아웃·리셋·discard). 스테이징끼리는 INDEX 만 쓰므로 서로 예약이
+  // 된다 — 노리는 것이 바로 그 조합이다.
+  ['stageSelected', { blockedBy: [REFS, WORKTREE], merge: 'union' }],
+  ['unstageSelected', { blockedBy: [REFS, WORKTREE], merge: 'union' }],
+  // 전부 담기/내리기는 대상이 "그때의 전부"라 들고 갈 목록이 없다.
+  ['stageAll', { blockedBy: [REFS, WORKTREE] }],
+  ['unstageAll', { blockedBy: [REFS, WORKTREE] }],
+]);
+const QUEUEABLE_PREFIXES = [['push_to_remote:', { branch: true, blockedBy: [WORKTREE] }]];
+
+// 예약 조건 — 예약할 수 없는 동작이면 null.
+function queueOptions(id) {
+  if (!id) return null;
+  const known = QUEUEABLE_ACTIONS.get(id);
+  if (known) return known;
+  for (const [prefix, opts] of QUEUEABLE_PREFIXES) {
+    if (id.startsWith(prefix)) return opts;
+  }
+  return null;
+}
+
+function isQueueable(id) {
+  return queueOptions(id) !== null;
+}
+
+// 지금 이 상황에서 예약을 걸어도 그 예약이 유효하게 남는가.
+//
+// 예약은 "조금 뒤면 된다"를 대신 기다려 주는 장치다. 그런데 지금 막고 있는 작업이
+// 그사이 예약의 전제를 무너뜨린다면, 기다린 끝에 실행되는 것은 사용자가 시킨 일이
+// 아니다. 무엇이 전제를 무너뜨리는지는 동작마다 다르므로 표(blockedBy)로 적는다:
+//   - Push 는 HEAD 브랜치가 그대로여야 한다 → 워킹트리를 갈아엎는 작업(체크아웃·
+//     머지·리베이스·리셋·pull)이 도는 동안에는 받지 않는다.
+//   - 스테이징은 고른 파일의 상태가 그대로여야 한다 → 커밋·체크아웃·리셋(REFS)과
+//     discard(WORKTREE)가 도는 동안에는 받지 않는다.
+// 커밋은 워킹트리를 건드리지 않고, 스테이징은 인덱스만 쓴다 — 그래서 커밋 중 Push 도,
+// 스테이징 중 스테이징도 예약된다. 이 장치가 노리는 조합이 정확히 그 둘이다.
+//
+// 실행 시점의 검사(queue.staleReason)만으로는 이걸 잡을 수 없다. 그 검사는 화면의
+// state 를 보는데, 예약이 풀리는 시점에는 결과를 다시 읽는 갱신이 아직 돌고 있어
+// 작업 직전의 값이 그대로 남아 있다(afterGitOp 은 refresh 를 걸고 그다음 stopSpinner
+// 를 부른다). 두 검사는 서로 다른 구멍을 막으므로 둘 다 있다.
+function canQueueNow(id, opts, s) {
+  const blocker = busyBlocker(id, s || snapshot());
+  if (!blocker) return true;
+  // 무엇을 붙잡는지 밝히지 않은 작업(저장소를 통째로 갈아 끼우는 clone/init)은 끝난
+  // 뒤에 무엇이 남을지 알 수 없다 — 예약도 받지 않는다. 판단이 불확실할 때는 막는
+  // 쪽이라는 이 표의 원칙이 여기에도 그대로 걸린다.
+  if (!blocker.scopes) return false;
+  const guardScopes = opts && opts.blockedBy;
+  if (!guardScopes || guardScopes.length === 0) return true;
+  return !guardScopes.some(sc => blocker.scopes.includes(sc));
 }
 
 // 진행 중인 작업 목록. 자원을 밝히지 않은 채 진행 표시만 켜진 경로(스코프를 아직
 // 지정하지 않은 호출부, 상태를 직접 세팅하는 테스트)는 무엇을 붙잡고 있는지 알 수
 // 없으므로 전부 붙잡고 있다고 본다 — 판단이 불확실할 때는 막는 쪽이 안전하다.
-const UNSCOPED_OP = Object.freeze({ label: '', scopes: ALL_SCOPES });
+// scopes 를 null 로 둔다 — "전부 붙잡은 것으로 본다"는 판정은 busyBlocker 가 하고,
+// 여기서는 "밝히지 않았다"는 사실 자체를 남긴다. 예약을 받을지 정할 때 그 구분이
+// 필요하다(canQueueNow): 무엇이 남을지 모르는 작업 뒤에는 예약도 걸 수 없다.
+const UNSCOPED_OP = Object.freeze({ label: '', scopes: null });
 function activeOps() {
   const ops = Array.isArray(state.activeOps) ? state.activeOps : [];
   if (ops.length > 0) return ops;
@@ -576,6 +694,20 @@ function isEnabled(id, extra, snap) {
   return disabledReason(id, extra, snap) === null;
 }
 
+// 지금 눌러서 뭔가 일어나는가 — 곧바로 실행되거나, 예약으로 받아지거나.
+//
+// 화면 표시는 이쪽을 봐야 한다. isEnabled 로 그리면 예약될 동작이 흐리게 나오고,
+// 그러면 "못 누르는 줄 알았는데 눌러 보니 되더라"가 된다. 이 코드베이스가 판정을 한
+// 곳에 모은 이유가 그 어긋남을 없애기 위해서였다.
+function isActionable(id, extra, snap) {
+  const s = snap || snapshot();
+  const reason = disabledReason(id, extra, s);
+  if (reason === null) return true;
+  if (reason !== REASON.BUSY) return false;
+  const rules = queueOptions(id);
+  return !!(rules && canQueueNow(id, rules, s));
+}
+
 // ── 같은 프레임 안에서 스냅샷 재사용 ──
 // render 는 한 번 그릴 때 열 개 남짓한 버튼을 물어본다. 매번 새로 계산할 이유가 없다.
 function context() {
@@ -583,6 +715,7 @@ function context() {
   return {
     snapshot: s,
     isEnabled: (id, extra) => isEnabled(id, extra, s),
+    isActionable: (id, extra) => isActionable(id, extra, s),
     disabledReason: (id, extra) => disabledReason(id, extra, s),
   };
 }
@@ -642,6 +775,55 @@ function guardAction(id, extra) {
   return reportBlocked(reason);
 }
 
+// ── 예약까지 보는 게이트 ──
+// guardAction 과 같은 자리에 쓰되, 자원이 겹쳐서만 막힌 예약 가능 동작은 버리지 않고
+// 대기열에 넣는다. retry 는 자원이 풀렸을 때 이 동작을 다시 태우는 길이다.
+//
+// opts:
+//   extra   — 판정에 넘길 추가 정보(대상 목록 등). disabledReason 의 것과 같은 뜻이다.
+//   payload — 예약이 들고 갈 대상. 실행할 때 retry(payload) 로 되돌려 준다. 화면의
+//             선택을 실행 시점에 다시 읽으면 그때는 이미 다른 것이 골라져 있으므로,
+//             대상이 화면에 매인 동작은 여기에 담아 확정해 둔다.
+//
+// 반환값은 guardAction 과 같은 뜻이다(true 면 호출부가 그대로 진행). 예약했을 때도
+// false 다 — 지금 실행하지는 않기 때문이다.
+function guardOrQueue(id, retry, opts) {
+  if (!id) return true;
+  const queue = require('./queue');
+  const extra = opts && opts.extra;
+  const payload = opts && opts.payload;
+  const rules = queueOptions(id);
+
+  // 이미 예약된 동작을 다시 눌렀다. 대상을 보태는 동작(스테이징)이면 합치고, 그렇지
+  // 않으면 취소로 읽는다 — 같은 버튼을 다시 누르는 것이 "역시 그만두겠다"의 가장
+  // 자연스러운 표현이고, 예약을 걷어낼 다른 길도 없다.
+  const queued = queue.findFor(id);
+  if (queued) {
+    if (rules && rules.merge && payload !== undefined) queue.mergePayload(queued, payload, rules.merge);
+    else queue.cancel(queued.id);
+    return false;
+  }
+
+  const s = snapshot();
+  const reason = disabledReason(id, extra, s);
+  if (reason === null) return true;
+  // 자원 겹침만 예약한다. 나머지 사유(리모트 없음, 스테이지 없음 …)는 기다린다고
+  // 풀리는 것이 아니므로 예전처럼 알리고 버린다.
+  if (reason === REASON.BUSY && typeof retry === 'function') {
+    if (rules && canQueueNow(id, rules, s) && queue.enqueue(id, retry, rules, payload)) return false;
+  }
+  return reportBlocked(reason);
+}
+
+// 게이트를 통과하면 곧바로 실행하는 형태. 통과하지 못하면 예약되거나 알림만 나간다.
+// 예약된 뒤에는 run(payload) 로 실행되므로, 호출부는 지금 실행하는 경로에서도 같은
+// 인자를 받도록 써야 두 경로가 같은 대상을 본다.
+function runOrQueue(id, run, opts) {
+  if (!guardOrQueue(id, run, opts)) return false;
+  run(opts && opts.payload);
+  return true;
+}
+
 // 확인창의 실행 버튼을 눌렀을 때의 게이트 — 판정 범위는 startBlockedReason 참고.
 function guardDeferredAction(id, opts) {
   const reason = startBlockedReason(id, null, opts);
@@ -667,7 +849,9 @@ function decorateMenuItems(items, snap) {
       }
     }
     if (item.enabled === false || !item.id) continue;
-    if (disabledReason(item.id, null, s) !== null) item.enabled = false;
+    // 예약으로 받아지는 항목은 잠그지 않는다 — 잠그면 호스트가 클릭을 흘려버려
+    // 예약할 기회 자체가 없어지고, 화면 표시와 실제 동작이 어긋난다.
+    if (!isActionable(item.id, null, s)) item.enabled = false;
   }
   return items;
 }
@@ -679,12 +863,19 @@ module.exports = {
   ACTION_SCOPES,
   scopesOf,
   isReadOnlyAction,
+  isQueueable,
+  queueOptions,
+  canQueueNow,
+  ignoresSettling,
   snapshot,
   context,
   isEnabled,
+  isActionable,
   disabledReason,
   startBlockedReason,
   guardAction,
+  guardOrQueue,
+  runOrQueue,
   guardDeferredAction,
   decorateMenuItems,
   selectedTargets,

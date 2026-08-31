@@ -24,12 +24,16 @@ function formatProgressStatus() {
   if (state.spinnerActive && state.error) msg = state.error;
   else if (state.refreshing) msg = state.refreshMessage || 'Refreshing...';
   else if (state.logLoadingMore) msg = 'Loading more commits...';
-  if (!msg) return '';
+  // 지금 도는 작업 때문에 막혀 예약해 둔 동작 — 무엇이 이어질지를 진행 표시 뒤에
+  // 덧붙인다("⠹ Committing... → Push"). 눌린 것이 무시되지 않았다는 신호이므로,
+  // 진행 표시가 없는 찰나(작업이 끝나고 예약이 실행되기 직전)에도 남겨 둔다.
+  const queued = require('./queue').summary();
+  if (!msg && !queued) return '';
   const frame = BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length];
   // 쓰기 작업 중 차단된 입력의 피드백도 처리상태의 일부로 타이틀에서 잠깐 보여준다.
   const busy = state.spinnerActive && state.busyFlashUntil && Date.now() < state.busyFlashUntil
     ? ' — busy, action ignored' : '';
-  return frame + ' ' + msg + busy;
+  return frame + ' ' + (msg || 'Queued') + busy + (queued ? ' → ' + queued : '');
 }
 
 function formatWindowTitle() {
