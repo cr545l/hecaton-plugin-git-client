@@ -41,10 +41,12 @@ function formatWindowTitle() {
   // 저장소 확정 전(clone/init 진행 중 등)에도 처리상태는 타이틀에 보여준다.
   if (!state.branch) return progress;
   const parts = [];
-  if (progress) parts.push(progress);
-  parts.push(state.branch);
+  // 변경점 표시(*N)는 처리상태보다도 앞. 타이틀이 잘리는 자리(탭/작업표시줄)에서
+  // 가장 먼저 사라지지 않아야 하는 정보이고, 스피너는 어차피 움직여서 눈에 띈다.
   const totalChanges = getLocalChangeCount();
   if (totalChanges > 0) parts.push(`*${totalChanges}`);
+  if (progress) parts.push(progress);
+  parts.push(state.branch);
   if (state.behind > 0) parts.push(`↓${state.behind}`);
   if (state.ahead > 0) parts.push(`↑${state.ahead}`);
   return parts.join(' | ');

@@ -6,6 +6,28 @@ const {
 function baseName(p) { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return s.substring(s.lastIndexOf('/') + 1); }
 function extName(p) { const b = baseName(p); const i = b.lastIndexOf('.'); return i <= 0 ? '' : b.substring(i); }
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
+// .gitignore 에 적힐 패턴 문자열. 선택이 여럿이면 파일마다 다른 패턴이 나올 수
+// 있으므로 중복을 걷어내고 순서를 지켜 모은다.
+function ignorePatternsFor(targets, kind) {
+  const out = [];
+  for (const item of targets) {
+    if (!item || !item.file) continue;
+    let pattern = '';
+    if (kind === 'name') pattern = baseName(item.file);
+    else if (kind === 'ext') { const ext = extName(item.file); pattern = ext ? '*' + ext : ''; }
+    else pattern = '/' + item.file.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (pattern && !out.includes(pattern)) out.push(pattern);
+  }
+  return out;
+}
+
+// 무엇이 추가되는지 메뉴에서 바로 보이도록 라벨 뒤에 괄호로 붙인다. 패턴이 여럿일
+// 때 전부 늘어놓으면 메뉴가 길어지므로 첫 패턴과 나머지 개수만 보여준다.
+function ignoreLabel(base, patterns) {
+  if (patterns.length === 0) return base;
+  const rest = patterns.length > 1 ? ' +' + (patterns.length - 1) : '';
+  return base + ' (' + patterns[0] + rest + ')';
+}
 const {
   gitCherryPick, gitRevert, gitCheckoutRef,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo,
@@ -181,6 +203,9 @@ function buildFileContextMenuItems(fileItem, fileItems) {
   const canUnstage = targets.some((item) => item && item.type === 'staged');
   // untracked 파일은 추적 대상이 아니므로 버전관리 제외 불가
   const canRemoveFromRepo = targets.some((item) => item && item.type !== 'untracked');
+  const ignoreNamePatterns = ignorePatternsFor(targets, 'name');
+  const ignoreExtPatterns = ignorePatternsFor(targets, 'ext');
+  const ignorePathPatterns = ignorePatternsFor(targets, 'path');
 
   const items = [
     { id: 'file_open', label: 'Open' },
@@ -219,9 +244,9 @@ function buildFileContextMenuItems(fileItem, fileItems) {
       id: 'file_ignore',
       label: 'Ignore',
       children: [
-        { id: 'file_ignore_name', label: 'Ignore by Name' },
-        { id: 'file_ignore_ext', label: 'Ignore by Extension' },
-        { id: 'file_ignore_path', label: 'Ignore by Path' },
+        { id: 'file_ignore_name', label: ignoreLabel('Ignore by Name', ignoreNamePatterns), enabled: ignoreNamePatterns.length > 0 },
+        { id: 'file_ignore_ext', label: ignoreLabel('Ignore by Extension', ignoreExtPatterns), enabled: ignoreExtPatterns.length > 0 },
+        { id: 'file_ignore_path', label: ignoreLabel('Ignore by Path', ignorePathPatterns), enabled: ignorePathPatterns.length > 0 },
       ],
     },
     { id: 'file_stash_one', label: 'Stash ' + targets.length + ' File' + (targets.length > 1 ? 's' : '') + '...' },
