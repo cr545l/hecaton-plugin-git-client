@@ -1,4 +1,4 @@
-const { state, ui } = require('./state');
+const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir } = require('./state');
 const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
@@ -348,7 +348,26 @@ function refreshInBackground(options = {}, followup = {}) {
     });
 }
 
-function buildFileList() {
+// ── 워킹트리 파일 목록 ──
+// state.cursor / state.selectedFiles / ui.fileLineMap 이 전부 이 목록의 인덱스를 가리키므로,
+// 화면에 보이는 줄과 1:1 이어야 한다. 트리 모드에서 디렉토리 줄이 생기면 그것도 한 줄이니
+// 여기서 함께 내보낸다 — 렌더만 따로 트리를 만들면 커서가 보이는 줄을 건너뛰게 된다.
+//
+// 항목의 모양:
+//   파일  { kind:'file', section, type, index, status, file, name, depth }
+//   폴더  { kind:'dir',  section, type:'dir', dir, name, depth, collapsed, files:[파일 항목…] }
+// 평면 모드의 파일 항목도 같은 모양이라(depth 0, name = 경로 전체) 아래쪽 코드가 모드를
+// 따질 일이 없다. 폴더는 file 을 갖지 않는다 — 파일 경로를 받는 자리에 섞여 들어가면
+// 존재하지 않는 경로로 git 을 부르게 되므로, 일부러 없는 값으로 걸리게 둔다.
+
+// 구획(section)은 헤더 하나로 묶이는 범위다. untracked 는 화면에서 Unstaged 헤더 아래에
+// 함께 놓이므로 같은 구획으로 본다.
+function sectionOf(type) {
+  if (type === 'unstaged' || type === 'untracked') return 'unstaged';
+  return type;
+}
+
+function rawFileEntries() {
   const list = [];
   for (let i = 0; i < state.unstaged.length; i++) {
     list.push({ type: 'unstaged', index: i, status: state.unstaged[i].status, file: state.unstaged[i].file });
@@ -367,6 +386,112 @@ function buildFileList() {
   return list;
 }
 
+// 대소문자를 먼저 무시하고 비교한다 — 파일 탐색기와 같은 차례로 놓여야 눈이 따라간다.
+// 같으면 원문으로 갈라 'A' 와 'a' 가 매번 자리를 바꾸지 않게 한다.
+function compareName(a, b) {
+  const la = a.toLowerCase();
+  const lb = b.toLowerCase();
+  if (la !== lb) return la < lb ? -1 : 1;
+  return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+function splitPath(file) {
+  return String(file || '').replace(/\\/g, '/').split('/').filter(Boolean);
+}
+
+// 한 구획의 파일들을 폴더/파일 줄로 펼쳐 out 에 이어 붙인다.
+// 폴더가 먼저, 그다음 파일 — 둘 다 이름순.
+//
+// 한 번의 후위 순회로 줄(rows)과 하위 파일 목록(files)을 함께 올려 보낸다. 폴더 줄이
+// 들고 있는 files 는 화면에 놓인 바로 그 파일 줄 객체들이라, 폴더로 고른 대상과 파일로
+// 고른 대상이 같은 것을 가리킨다(다중 선택 중복 제거가 여기에 기댄다).
+function pushTreeRows(out, section, entries) {
+  const root = { dirs: new Map(), files: [] };
+  for (const e of entries) {
+    const parts = splitPath(e.file);
+    let node = root;
+    for (let d = 0; d < parts.length - 1; d++) {
+      let child = node.dirs.get(parts[d]);
+      if (!child) { child = { dirs: new Map(), files: [] }; node.dirs.set(parts[d], child); }
+      node = child;
+    }
+    node.files.push({ ...e, kind: 'file', section, name: parts[parts.length - 1] || e.file });
+  }
+
+  function walk(node, prefix, depth) {
+    const rows = [];
+    const files = [];
+    for (const name of Array.from(node.dirs.keys()).sort(compareName)) {
+      const dir = prefix ? prefix + '/' + name : name;
+      const sub = walk(node.dirs.get(name), dir, depth + 1);
+      const collapsed = isCollapsedFileDir(section, dir);
+      // 접혀 있어도 대표하는 대상은 그대로다 — 접어 둔 폴더에 무시나 담기를 걸 수 있어야 한다.
+      rows.push({ kind: 'dir', section, type: 'dir', dir, name, depth, collapsed, files: sub.files });
+      if (!collapsed) rows.push(...sub.rows);
+      files.push(...sub.files);
+    }
+    for (const f of node.files.sort((a, b) => compareName(a.name, b.name))) {
+      const row = { ...f, depth };
+      rows.push(row);
+      files.push(row);
+    }
+    return { rows, files };
+  }
+
+  out.push(...walk(root, '', 0).rows);
+}
+
+function buildFileList() {
+  const raw = rawFileEntries();
+  if (!ui.fileTreeView) {
+    return raw.map(e => ({ ...e, kind: 'file', section: sectionOf(e.type), name: e.file, depth: 0 }));
+  }
+  const out = [];
+  for (const section of ['unstaged', 'staged', 'ignored']) {
+    const entries = raw.filter(e => sectionOf(e.type) === section);
+    if (entries.length > 0) pushTreeRows(out, section, entries);
+  }
+  return out;
+}
+
+// 폴더 줄이 가리키는 것은 그 아래 파일 전부다. 스테이징·discard 처럼 파일 단위로 도는
+// 동작은 전부 여기를 거쳐 폴더를 펼친 뒤 다룬다 — 그래야 폴더에 커서를 두고 's' 를
+// 눌러도 뜻대로 움직인다. 겹치는 파일(폴더와 그 안의 파일을 함께 고른 경우)은 한 번만.
+function expandFileTargets(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items || []) {
+    if (!item) continue;
+    for (const f of (item.kind === 'dir' ? item.files : [item])) {
+      if (!f || !f.file) continue;
+      const key = f.type + ':' + f.file;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(f);
+    }
+  }
+  return out;
+}
+
+// 다중 선택을 목록 재구성 너머로 잇기 위한 식별자. 인덱스는 목록이 바뀌면 다른 줄을
+// 가리키므로 그대로 들고 갈 수 없다.
+function targetKey(item) {
+  if (!item) return '';
+  return item.kind === 'dir' ? 'dir:' + item.section + ':' + item.dir : item.type + ':' + item.file;
+}
+
+// 커서가 놓인 구획의 범위 [start, end). 다중 선택은 이 범위를 넘지 않는다 — 담을 것과
+// 내릴 것이 한 선택에 섞이면 실행 결과를 예측할 수 없다.
+function sectionRangeAt(list, idx) {
+  const item = list[idx];
+  if (!item) return [0, list.length];
+  let start = idx;
+  let end = idx + 1;
+  while (start > 0 && list[start - 1].section === item.section) start--;
+  while (end < list.length && list[end].section === item.section) end++;
+  return [start, end];
+}
+
 function selectedItem() {
   const list = buildFileList();
   if (list.length === 0) return null;
@@ -377,6 +502,41 @@ function clampCursor() {
   const list = buildFileList();
   if (list.length === 0) state.cursor = 0;
   else state.cursor = Math.min(state.cursor, list.length - 1);
+}
+
+// 폴더를 접거나 편다. 목록이 통째로 다시 만들어져 인덱스를 믿을 수 없으므로, 커서는
+// 그 폴더를 경로로 다시 찾아 옮긴다. 접힌 안쪽으로 사라진 다중 선택은 remap 이 걷어낸다 —
+// 보이지 않는 줄을 고른 채로 두면 화면에 없는 파일에 대고 명령이 나간다.
+function toggleFileDir(dirItem, fallbackIdx) {
+  if (!dirItem || dirItem.kind !== 'dir') return;
+  state._prevFileList = buildFileList();
+  toggleCollapsedFileDir(dirItem.section, dirItem.dir);
+  remapSelectedFiles();
+  const after = buildFileList();
+  const key = targetKey(dirItem);
+  const at = after.findIndex(item => targetKey(item) === key);
+  state.cursor = at >= 0 ? at : Math.min(fallbackIdx || 0, Math.max(0, after.length - 1));
+  clampCursor();
+  updateDiff();
+}
+
+// 트리 ↔ 평면 전환. 줄의 뜻이 통째로 달라지므로 커서와 선택을 경로 기준으로 다시 잡고,
+// 폴더에 커서가 남았을 때를 대비해 diff 도 갱신한다.
+function setFileTreeView(on) {
+  const next = !!on;
+  if (ui.fileTreeView === next) return;
+  const before = buildFileList();
+  const cursorKey = targetKey(before[Math.min(state.cursor, before.length - 1)]);
+  state._prevFileList = before;
+  ui.fileTreeView = next;
+  remapSelectedFiles();
+  const after = buildFileList();
+  // 평면에서 보던 파일은 트리에서도 그대로 있다. 접힌 폴더 안으로 들어가 사라졌다면
+  // 커서만 처음으로 되돌린다.
+  const idx = after.findIndex(item => targetKey(item) === cursorKey);
+  state.cursor = idx >= 0 ? idx : 0;
+  clampCursor();
+  updateDiff();
 }
 
 // ── 즉시 state 업데이트 (git status 호출 없이 로컬 state만 조작) ──
@@ -446,18 +606,13 @@ function remapSelectedFiles() {
   const oldList = state._prevFileList || [];
   const selectedPaths = new Set();
   for (const idx of state.selectedFiles) {
-    if (idx < oldList.length) {
-      const item = oldList[idx];
-      selectedPaths.add(item.type + ':' + item.file);
-    }
+    if (idx < oldList.length) selectedPaths.add(targetKey(oldList[idx]));
   }
   state.selectedFiles.clear();
   if (selectedPaths.size > 0) {
     const newList = buildFileList();
     for (let i = 0; i < newList.length; i++) {
-      if (selectedPaths.has(newList[i].type + ':' + newList[i].file)) {
-        state.selectedFiles.add(i);
-      }
+      if (selectedPaths.has(targetKey(newList[i]))) state.selectedFiles.add(i);
     }
   }
 }
@@ -1981,7 +2136,9 @@ let _diffDebounceTimer = null;
 
 function updateDiff() {
   const item = selectedItem();
-  if (!item) {
+  // 폴더 줄에는 볼 diff 가 없다. 여러 파일을 한데 이어 붙여 봐야 어느 줄이 어느 파일인지
+  // 알 수 없으므로, 파일을 고르라는 평소 안내를 그대로 둔다.
+  if (!item || item.kind === 'dir') {
     if (_diffDebounceTimer) { clearTimeout(_diffDebounceTimer); _diffDebounceTimer = null; }
     endPanelLoading('diff');
     state.diffLines = [];
@@ -2179,6 +2336,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
+  expandFileTargets, sectionRangeAt, setFileTreeView, toggleFileDir,
   refreshAsync, refreshLog, loadMoreLog, buildLogGraphRows, rebuildLogGraphRows, selectedLogRef, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,

@@ -21,6 +21,18 @@ function ignorePatternsFor(targets, kind) {
   return out;
 }
 
+// 폴더를 무시할 때 .gitignore 에 적힐 패턴. 끝의 '/' 가 "디렉토리만"을 뜻하므로,
+// 같은 이름의 파일까지 함께 사라지는 일이 없다.
+function ignoreDirPatterns(dirs, kind) {
+  const out = [];
+  for (const d of dirs) {
+    if (!d || !d.dir) continue;
+    const pattern = kind === 'name' ? d.name + '/' : '/' + d.dir + '/';
+    if (!out.includes(pattern)) out.push(pattern);
+  }
+  return out;
+}
+
 // 무엇이 추가되는지 메뉴에서 바로 보이도록 라벨 뒤에 괄호로 붙인다. 패턴이 여럿일
 // 때 전부 늘어놓으면 메뉴가 길어지므로 첫 패턴과 나머지 개수만 보여준다.
 function ignoreLabel(base, patterns) {
@@ -55,7 +67,7 @@ const {
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
   resolveWorkTreeRoot, splitUpstreamRef,
 } = require('./git');
-const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock, invalidateCommitterCache } = require('./refresh');
+const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock, invalidateCommitterCache, expandFileTargets, setFileTreeView } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
@@ -191,6 +203,10 @@ function buildStashContextMenuItems(stashRef, stashMessage) {
   return decorateMenuItems(items);
 }
 
+// 폴더 메뉴가 내보내는 file_* 항목 — 전부 여러 파일을 한꺼번에 다루는 것들이다.
+// 여기 없는 id 가 폴더 대상으로 들어오면 실행하지 않는다.
+const DIR_SAFE_FILE_ACTIONS = new Set(['file_stage', 'file_unstage', 'file_discard', 'file_stash_one']);
+
 function isConflictFile(item) {
   return item && item.status === 'U';
 }
@@ -198,7 +214,10 @@ function isConflictFile(item) {
 function buildFileContextMenuItems(fileItem, fileItems) {
   if (!fileItem || !fileItem.file) return [];
 
-  const targets = Array.isArray(fileItems) && fileItems.length > 0 ? fileItems : [fileItem];
+  // 다중 선택에 폴더 줄이 섞여 있으면 그 아래 파일로 펼친다 — 라벨의 개수와 활성 판정이
+  // 실제로 손댈 대상과 같아야 한다(처리부도 같은 함수로 펼친다).
+  const targets = expandFileTargets(
+    Array.isArray(fileItems) && fileItems.length > 0 ? fileItems : [fileItem]);
   const canStage = targets.some((item) => item && item.type !== 'staged');
   const canUnstage = targets.some((item) => item && item.type === 'staged');
   // untracked 파일은 추적 대상이 아니므로 버전관리 제외 불가
@@ -256,9 +275,70 @@ function buildFileContextMenuItems(fileItem, fileItems) {
     { id: 'file_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
     { type: 'separator' },
     { id: 'file_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' },
+    { type: 'separator' },
+    ...fileTreeMenuItems(),
   ];
 
   return decorateMenuItems(items);
+}
+
+// 폴더 줄의 컨텍스트 메뉴. 파일 단위 동작(담기/내리기/되돌리기/스태시)은 폴더를 그 아래
+// 파일 전부로 펼쳐 기존 file_* 처리부가 그대로 받는다 — 같은 동작을 두 벌로 두면 한쪽만
+// 고쳐지는 날이 온다. 무시와 경로 복사만 폴더 자신이 대상이라 dir_* 로 따로 둔다.
+function buildDirContextMenuItems(dirItem, selection) {
+  if (!dirItem || dirItem.kind !== 'dir') return [];
+
+  const rows = Array.isArray(selection) && selection.length > 0 ? selection : [dirItem];
+  const dirs = rows.filter(r => r && r.kind === 'dir');
+  if (dirs.length === 0) dirs.push(dirItem);
+  const files = expandFileTargets(rows);
+
+  const canStage = files.some(f => f.type !== 'staged' && f.type !== 'ignored');
+  const canUnstage = files.some(f => f.type === 'staged');
+  const canDiscard = files.some(f => f.type !== 'ignored');
+
+  // 폴더 이름만 적으면 저장소 어디에 있든 같은 이름이 전부 걸린다('node_modules/').
+  // 경로로 적으면 이 자리 하나만 걸린다('/src/util/'). 둘의 결과가 다르므로 라벨에
+  // 실제로 적힐 패턴을 그대로 보여 준다.
+  const dirNamePatterns = ignoreDirPatterns(dirs, 'name');
+  const pathPatterns = ignoreDirPatterns(dirs, 'path');
+
+  const label = dirs.length > 1 ? dirs.length + ' folders' : "'" + dirItem.name + "'";
+  const fileLabel = files.length + ' File' + (files.length > 1 ? 's' : '');
+
+  const items = [
+    { id: 'file_stage', label: 'Stage ' + fileLabel, enabled: canStage },
+    { id: 'file_unstage', label: 'Unstage ' + fileLabel, enabled: canUnstage },
+    { id: 'file_discard', label: 'Discard changes in ' + label + '...', icon: 'warning', enabled: canDiscard },
+    { type: 'separator' },
+    {
+      id: 'dir_ignore',
+      label: 'Ignore',
+      children: [
+        { id: 'dir_ignore_name', label: ignoreLabel('Ignore by Name', dirNamePatterns), enabled: dirNamePatterns.length > 0 },
+        { id: 'dir_ignore_path', label: ignoreLabel('Ignore by Path', pathPatterns), enabled: pathPatterns.length > 0 },
+      ],
+    },
+    { id: 'file_stash_one', label: 'Stash ' + fileLabel + '...', enabled: canDiscard },
+    { type: 'separator' },
+    { id: 'dir_copy_path', label: 'Copy Path', icon: 'copy' },
+    { id: 'dir_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
+    { type: 'separator' },
+    { id: 'dir_show_in_explorer', label: 'Show in Explorer' },
+    { id: 'dir_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' },
+    { type: 'separator' },
+    ...fileTreeMenuItems(),
+  ];
+
+  return decorateMenuItems(items);
+}
+
+// 트리/평면 전환은 워킹트리를 보는 방식이라, 파일·폴더 메뉴와 탭 메뉴 어디서 열든
+// 같은 항목이 같은 자리에 있어야 한다.
+function fileTreeMenuItems() {
+  return [
+    { id: 'file_tree_view', label: 'Show Files as Tree', checked: !!ui.fileTreeView },
+  ];
 }
 
 function buildTabContextMenuItems() {
@@ -269,6 +349,8 @@ function buildTabContextMenuItems() {
     { id: 'tab_apply_patch', label: 'Apply Patch from Clipboard...' },
     { id: 'tab_discard_all', label: 'Discard All Changes...', icon: 'warning', enabled: hasLocalChanges },
     { id: 'tab_clean', label: 'Remove All Untracked Files...', icon: 'warning' },
+    { type: 'separator' },
+    ...fileTreeMenuItems(),
     { type: 'separator' },
     { id: 'tab_change_repo', label: 'Change Repository...' },
     { id: 'tab_clone', label: 'Clone Repository...' },
@@ -910,14 +992,78 @@ async function handleContextMenuAction(actionId) {
     return;
   }
 
+  // 파일 목록 트리/평면 전환 — 어느 메뉴에서 눌러도 같은 동작.
+  if (actionId === 'file_tree_view') {
+    setFileTreeView(!ui.fileTreeView);
+    render();
+    return;
+  }
+
+  // Directory context menu actions (tree view)
+  if (actionId.startsWith('dir_')) {
+    const dirItem = ui.contextMenuFileItem;
+    if (!dirItem || dirItem.kind !== 'dir') return;
+    const rows = Array.isArray(ui.contextMenuFileItems) && ui.contextMenuFileItems.length > 0
+      ? ui.contextMenuFileItems
+      : [dirItem];
+    const dirs = rows.filter(r => r && r.kind === 'dir');
+    if (dirs.length === 0) dirs.push(dirItem);
+
+    switch (actionId) {
+      case 'dir_ignore_name':
+      case 'dir_ignore_path': {
+        const kind = actionId === 'dir_ignore_name' ? 'name' : 'path';
+        const patterns = ignoreDirPatterns(dirs, kind);
+        if (patterns.length === 0) break;
+        const dirIgnoreOp = startSpinner('Ignoring...', [WORKTREE]);
+        let err = null;
+        for (const pattern of patterns) {
+          const oneErr = await gitIgnorePattern(state.cwd, pattern);
+          if (!err && oneErr) err = oneErr;
+        }
+        await afterGitOp(err, 'Ignore', {}, dirIgnoreOp);
+        break;
+      }
+      case 'dir_copy_path': {
+        copyToClipboard(dirs.map(d => d.dir).join('\n'));
+        break;
+      }
+      case 'dir_copy_full_path': {
+        copyToClipboard(dirs.map(d => joinPath(state.cwd, d.dir)).join('\n'));
+        break;
+      }
+      case 'dir_show_in_explorer': {
+        showInExplorer(ui.contextMenuFilePath).then(err => {
+          if (err) showError('Show in Explorer failed:\n' + err);
+        });
+        break;
+      }
+      case 'dir_open_explorer': {
+        hecaton.overlay.open({ plugin_id: 'dev.hecaton.explorer', params: { path: ui.contextMenuFilePath } }).catch(() => null);
+        break;
+      }
+    }
+    return;
+  }
+
   // File context menu actions
   if (actionId.startsWith('file_')) {
-    const fileItem = ui.contextMenuFileItem;
+    const menuItem = ui.contextMenuFileItem;
     const fullPath = ui.contextMenuFilePath;
-    const fileItems = Array.isArray(ui.contextMenuFileItems) && ui.contextMenuFileItems.length > 0
+    const rows = Array.isArray(ui.contextMenuFileItems) && ui.contextMenuFileItems.length > 0
       ? ui.contextMenuFileItems
-      : (fileItem ? [fileItem] : []);
-    if (!fileItem || !fileItem.file) return;
+      : (menuItem ? [menuItem] : []);
+    // 폴더 메뉴에서 넘어온 file_* 은 폴더가 대상이다 — 그 아래 파일 전부로 펼쳐야
+    // 아래 처리부가 예전 그대로 돌아간다.
+    const fileItems = expandFileTargets(rows);
+    // 파일 하나를 전제로 하는 항목(blame/history/외부 diff)은 폴더에서는 메뉴에 없다.
+    // 그래도 첫 파일을 대표로 세워 두면 잘못된 파일에 대고 도는 길이 열리므로, 폴더가
+    // 대상일 때는 여러 파일을 다루는 항목만 통과시킨다.
+    const fileItem = menuItem && menuItem.kind === 'dir' ? null : menuItem;
+    if (!menuItem) return;
+    if (!fileItem && fileItems.length === 0) return;
+    if (!fileItem && !DIR_SAFE_FILE_ACTIONS.has(actionId)) return;
+    if (fileItem && !fileItem.file) return;
 
     switch (actionId) {
       case 'file_open': {
@@ -3028,6 +3174,7 @@ module.exports = {
   buildHistoryContextMenuItems,
   buildStashContextMenuItems,
   buildFileContextMenuItems,
+  buildDirContextMenuItems,
   buildRemotesContextMenuItems,
   buildPushRemoteMenuItems,
   buildRemoteBranchContextMenuItems,

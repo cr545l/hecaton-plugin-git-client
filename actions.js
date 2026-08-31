@@ -119,6 +119,7 @@ const ACTION_SCOPES = {
   file_accept_ours: [INDEX, WORKTREE], file_accept_theirs: [INDEX, WORKTREE],
   // .gitignore 파일만 고친다
   file_ignore_name: [WORKTREE], file_ignore_ext: [WORKTREE], file_ignore_path: [WORKTREE],
+  dir_ignore_name: [WORKTREE], dir_ignore_path: [WORKTREE],
 
   // 리모트만 — 로컬 인덱스·워킹트리를 건드리지 않는다
   'git-fetch': [REMOTE],
@@ -380,11 +381,13 @@ const READ_ONLY_ACTIONS = new Set([
   'stash_copy_sha', 'stash_copy_info',
   'branch_copy_name', 'remotebranch_copy_name', 'remote_copy_url',
   'file_copy_path', 'file_copy_full_path', 'file_save_patch',
+  'dir_copy_path', 'dir_copy_full_path',
   'file_external_diff_head', 'file_external_diff_index',
   'file_blame', 'file_history',
   'worktree_copy_path',
   // 파일/탐색기 열기 (현재 저장소를 바꾸지 않음)
   'file_open', 'file_open_explorer', 'file_show_in_explorer',
+  'dir_open_explorer', 'dir_show_in_explorer',
   'worktree_open_explorer', 'worktree_show_in_explorer',
   // UI 상태만 바꾸는 것들
   'branch_pin',
@@ -397,12 +400,14 @@ const READ_ONLY_ACTIONS = new Set([
   // 페이지네이션/서브메뉴 열기
   'history_branch_open', 'branch_tracking_open',
   'branches_submenu', 'branch_tracking', 'interactive_rebase',
-  'file_external_diff', 'file_ignore', 'file_remove',
+  'file_external_diff', 'file_ignore', 'file_remove', 'dir_ignore',
+  // 파일 목록 트리/평면 전환 — 보기 방식만 바꾼다
+  'file_tree_view',
   'branch_tracking_title', 'history_branch_title',
   // 화면 전환/패널 토글 (타이틀 행 버튼)
   'tab-local', 'tab-commits', 'tab-fresh',
   'toggleStatus', 'toggleHistory', 'toggleDetail', 'toggleFiles',
-  'toggleDiff', 'toggleLogSort', 'toggleLogRecovery', 'toggleIgnored',
+  'toggleDiff', 'toggleLogSort', 'toggleLogRecovery', 'toggleIgnored', 'toggleFileTree',
   // 커밋 입력 편집 — 저장소가 아니라 입력창만 건드린다
   'commit-clear',
 ]);
@@ -561,6 +566,11 @@ const EXTRA_RULES = {
   file_accept_ours: (s, extra) => (targetsOf(extra).some(t => t && t.status === 'U') ? null : REASON.NO_FILE),
   file_accept_theirs: (s, extra) => (targetsOf(extra).some(t => t && t.status === 'U') ? null : REASON.NO_FILE),
 
+  // 폴더 단위 무시 — 우클릭한 폴더 줄이 대상이다. 파일 판정(targetsOf)은 폴더를 그 아래
+  // 파일로 펼쳐 버리므로 여기서는 쓰지 않고, 메뉴를 만드는 쪽이 대상 유무를 판단한다.
+  dir_ignore_name: () => null,
+  dir_ignore_path: () => null,
+
   // 되돌리기/청소 — 되돌릴 것이 있어야 한다
   tab_discard_all: (s) => (s.staged + s.unstaged + s.untracked > 0 ? null : REASON.NO_CHANGES),
   tab_clean: (s) => (s.untracked > 0 ? null : REASON.NO_UNTRACKED),
@@ -587,13 +597,20 @@ function fileList() {
   return require('./refresh').buildFileList();
 }
 
-// 커서/다중 선택이 가리키는 파일들 — 's'/'u' 키와 헤더 버튼이 쓰는 대상과 같다.
-function selectedTargets() {
+// 커서/다중 선택이 가리키는 줄들 — 폴더 줄도 그대로 나온다(메뉴 라벨과 판정에 필요).
+function selectedRows() {
   const list = fileList();
   const indices = state.selectedFiles.size > 0
     ? Array.from(state.selectedFiles).sort((a, b) => a - b)
     : (list.length > 0 ? [Math.min(state.cursor, list.length - 1)] : []);
   return indices.map(i => list[i]).filter(Boolean);
+}
+
+// 커서/다중 선택이 가리키는 파일들 — 's'/'u' 키와 헤더 버튼이 쓰는 대상과 같다.
+// 트리 모드의 폴더 줄은 그 아래 파일 전부로 펼친다. 폴더에 커서를 두고 담기를 눌렀을 때
+// "고른 것이 없다"고 답하면, 화면에 분명히 무언가를 고른 채인 사용자에게 설명이 되지 않는다.
+function selectedTargets() {
+  return require('./refresh').expandFileTargets(selectedRows());
 }
 
 // ignored 파일은 git add 가 거부하므로 스테이징 대상에서 뺀다.

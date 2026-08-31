@@ -4,9 +4,9 @@
 // cwd를 못 구하면 예전 전역 경로(~/.hecaton/data/<plugin-dir>)로 폴백한다.
 //
 // 모든 UI 설정을 리포(폴더)별로 저장한다.
-// 리포별(repos): 레이아웃(탭/diff 뷰·패널 접기·분할 비율·fresh 기간·원격/커밋 정렬 모드),
-//               섹션·그룹 접힘, 핀 고정 브랜치, 히스토리 Filter/Hide 지정,
-//               recent 정렬용 사용 기록, 커밋 메시지 드래프트.
+// 리포별(repos): 레이아웃(탭/diff 뷰·패널 접기·분할 비율·fresh 기간·원격/커밋 정렬 모드,
+//               파일 목록 트리 보기), 섹션·그룹·트리 디렉토리 접힘, 핀 고정 브랜치,
+//               히스토리 Filter/Hide 지정, recent 정렬용 사용 기록, 커밋 메시지 드래프트.
 // 전역(global): 더 이상 사용하지 않음(빈 객체로 유지, 다음 저장 때 정리).
 //
 // 예전엔 UI 설정을 global에 저장해 모든 폴더가 같은 배치를 공유했다. 이제 리포별로
@@ -26,6 +26,7 @@ const MAX_REPOS = 30;            // repos 맵 LRU 상한
 const MAX_BRANCH_USAGE = 50;     // remoteRecentBranchUsage 항목 상한
 const MAX_PINNED = 50;           // pinnedBranches 항목 상한
 const MAX_REF_FILTERS = 100;     // filteredRefs / hiddenRefs 각각의 항목 상한
+const MAX_COLLAPSED_DIRS = 300;  // collapsedFileDirs 항목 상한 (큰 저장소에서 무한정 쌓이는 것 방지)
 const FRESH_WINDOW_MAX = 5;      // FRESH_TIME_WINDOWS.length - 1
 
 const PLUGIN_DIR_NAME = (function () {
@@ -85,6 +86,7 @@ function applyLayout(src) {
   ui.remoteSortMode = pickEnum(src.remoteSortMode, ['alpha', 'alpha_desc', 'recent'], ui.remoteSortMode);
   ui.logSortMode = pickEnum(src.logSortMode, ['date', 'branch'], ui.logSortMode);
   if (typeof src.logShowRecovery === 'boolean') ui.logShowRecovery = src.logShowRecovery;
+  if (typeof src.fileTreeView === 'boolean') ui.fileTreeView = src.fileTreeView;
   if (isPlainObject(src.panels)) {
     if (typeof src.panels.left === 'boolean') ui.leftPanelCollapsed = src.panels.left;
     if (typeof src.panels.rightTop === 'boolean') ui.rightTopCollapsed = src.panels.rightTop;
@@ -105,6 +107,7 @@ function captureLayout() {
     remoteSortMode: ui.remoteSortMode,
     logSortMode: ui.logSortMode,
     logShowRecovery: ui.logShowRecovery,
+    fileTreeView: ui.fileTreeView,
     panels: {
       left: ui.leftPanelCollapsed,
       rightTop: ui.rightTopCollapsed,
@@ -115,11 +118,14 @@ function captureLayout() {
   };
 }
 
-function sanitizeBoolMap(v) {
+function sanitizeBoolMap(v, max) {
   if (!isPlainObject(v)) return {};
   const out = {};
+  let n = 0;
   for (const k of Object.keys(v)) {
-    if (typeof v[k] === 'boolean') out[k] = v[k];
+    if (typeof v[k] !== 'boolean') continue;
+    out[k] = v[k];
+    if (max && ++n >= max) break;
   }
   return out;
 }
@@ -162,6 +168,7 @@ function captureRepo() {
     ...captureLayout(),
     collapsedSections: { ...ui.collapsedSections },
     collapsedGroups: { ...ui.collapsedGroups },
+    collapsedFileDirs: sanitizeBoolMap(ui.collapsedFileDirs, MAX_COLLAPSED_DIRS),
     pinnedBranches: sanitizePinnedList(ui.pinnedBranches),
     filteredRefs: sanitizeRefList(ui.filteredRefs),
     hiddenRefs: sanitizeRefList(ui.hiddenRefs),
@@ -268,6 +275,7 @@ function attachRepo(cwd) {
   applyLayout({ ..._layoutFallback, ...(entry || {}) });
   ui.collapsedSections = sanitizeBoolMap(entry && entry.collapsedSections);
   ui.collapsedGroups = sanitizeBoolMap(entry && entry.collapsedGroups);
+  ui.collapsedFileDirs = sanitizeBoolMap(entry && entry.collapsedFileDirs, MAX_COLLAPSED_DIRS);
   ui.pinnedBranches = sanitizePinnedList(entry && entry.pinnedBranches);
   ui.filteredRefs = sanitizeRefList(entry && entry.filteredRefs);
   ui.hiddenRefs = sanitizeRefList(entry && entry.hiddenRefs);

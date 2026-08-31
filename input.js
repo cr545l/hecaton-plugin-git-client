@@ -22,9 +22,9 @@ const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
 const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
-const { buildFileList, selectedItem, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
+const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, revealBranch } = require('./render');
-const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
 let currentMouseShape = 'default';
@@ -391,7 +391,9 @@ function requestStageSelection(isStage) {
 }
 
 async function runStageAll(isStage) {
+  // 트리 모드에서는 폴더 줄도 목록에 있다 — 경로가 없으므로 파일 줄만 센다.
   const files = buildFileList()
+    .filter(item => item.kind !== 'dir')
     .filter(item => (isStage ? item.type !== 'staged' && item.type !== 'ignored' : item.type === 'staged'))
     .map(item => item.file);
   if (files.length === 0) return;
@@ -639,10 +641,7 @@ async function handleKey(key) {
   if ((key === '\x01' || key === CSI + '97;9u') && state.rightView !== 'log' && state.rightView !== 'fresh') {
     const list = buildFileList();
     if (list.length > 0) {
-      const unstagedCount = state.unstaged.length + state.untracked.length;
-      const cursorInUnstaged = state.cursor < unstagedCount;
-      const groupStart = cursorInUnstaged ? 0 : unstagedCount;
-      const groupEnd = cursorInUnstaged ? unstagedCount : list.length;
+      const [groupStart, groupEnd] = sectionRangeAt(list, Math.min(state.cursor, list.length - 1));
       const groupSize = groupEnd - groupStart;
       // Check if all in this group are already selected
       let allSelected = groupSize > 0;
@@ -835,6 +834,24 @@ async function handleKey(key) {
     }
     case '\t': { // Tab
       state.focusPanel = state.focusPanel === 'status' ? 'diff' : 'status';
+      render();
+      break;
+    }
+    case 't':
+    case 'T': {
+      if (state.rightView !== 'diff') break;
+      setFileTreeView(!ui.fileTreeView);
+      render();
+      break;
+    }
+    case '\r':
+    case '\n': {
+      // 폴더 줄에서만 뜻이 있다. 파일 줄의 Enter 는 예전처럼 아무것도 하지 않는다 —
+      // 커서가 파일에 있을 때 무언가 실행되면 목록을 훑다가 사고가 난다.
+      if (state.rightView !== 'diff' || state.focusPanel !== 'status') break;
+      const dirSel = selectedItem();
+      if (!dirSel || dirSel.kind !== 'dir') break;
+      toggleFileDir(dirSel, state.cursor);
       render();
       break;
     }
@@ -1593,14 +1610,13 @@ async function handleMouseData(data) {
       const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
       if (state.rightView !== 'log' && inMiddle && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
         const fileIdx = ui.fileLineMap[bodyRowIdx];
-        const unstagedCount = state.unstaged.length + state.untracked.length;
-        const clickedInUnstaged = fileIdx < unstagedCount;
+        const list = buildFileList();
+        const clickedSection = list[fileIdx] && list[fileIdx].section;
         // Enforce same-group constraint
         if (state.selectedFiles.size > 0) {
           const firstSel = state.selectedFiles.values().next().value;
-          if ((firstSel < unstagedCount) !== clickedInUnstaged) {
-            state.selectedFiles.clear();
-          }
+          const firstSection = list[firstSel] && list[firstSel].section;
+          if (firstSection !== clickedSection) state.selectedFiles.clear();
         }
         if (state.selectedFiles.has(fileIdx)) {
           state.selectedFiles.delete(fileIdx);
@@ -1619,10 +1635,7 @@ async function handleMouseData(data) {
       const inMiddle = L.middleW > 0 && cx >= midStart && cx < midStart + L.middleW;
       if (state.rightView !== 'log' && inMiddle && bodyRowIdx >= 0 && bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
         const fileIdx = ui.fileLineMap[bodyRowIdx];
-        const unstagedCount = state.unstaged.length + state.untracked.length;
-        const clickedInUnstaged = fileIdx < unstagedCount;
-        const groupStart = clickedInUnstaged ? 0 : unstagedCount;
-        const groupEnd = clickedInUnstaged ? unstagedCount : buildFileList().length;
+        const [groupStart, groupEnd] = sectionRangeAt(buildFileList(), fileIdx);
         const anchor = Math.max(groupStart, Math.min(groupEnd - 1, state.cursor));
         const from = Math.max(groupStart, Math.min(anchor, fileIdx));
         const to = Math.min(groupEnd - 1, Math.max(anchor, fileIdx));
@@ -1780,6 +1793,10 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'toggleFiles') {
               ui.middlePanelCollapsed = !ui.middlePanelCollapsed;
+              render();
+              handled = true;
+            } else if (zone.action === 'toggleFileTree') {
+              setFileTreeView(!ui.fileTreeView);
               render();
               handled = true;
             } else if (zone.action === 'toggleDiff') {
@@ -2311,9 +2328,16 @@ async function handleMouseData(data) {
           if (bodyRowIdx < ui.fileLineMap.length && ui.fileLineMap[bodyRowIdx] >= 0) {
             state.selectedFiles.clear();
             const fileIdx = ui.fileLineMap[bodyRowIdx];
+            const clicked = buildFileList()[fileIdx];
             const now = Date.now();
 
-            if (fileIdx === ui.lastClickFileIdx && now - ui.lastClickTime < 400) {
+            if (clicked && clicked.kind === 'dir') {
+              // 트리에서 제일 잦은 동작이라 더블클릭 뒤에 숨기지 않는다. 접고 펴면
+              // 아래 줄이 통째로 밀리므로 커서는 인덱스가 아니라 그 폴더를 다시 찾아 옮긴다.
+              toggleFileDir(clicked, fileIdx);
+              ui.lastClickFileIdx = -1;
+              ui.lastClickTime = 0;
+            } else if (fileIdx === ui.lastClickFileIdx && now - ui.lastClickTime < 400) {
               // Double-click: stage/unstage toggle — 막혀 있으면 예약해 둔다. 파일을
               // 연달아 더블클릭하는 흐름이라, 앞의 git 이 도는 사이 누른 것이 버려지면
               // 눌렀는지 아닌지를 목록으로 되짚어야 한다. 대상이 파일 하나로 분명하므로
@@ -2586,8 +2610,11 @@ function handleContextMenuRequest(col, row) {
         ui.contextMenuStashRef = null;
         ui.contextMenuFileItem = item;
         ui.contextMenuFileItems = targets;
-        ui.contextMenuFilePath = joinPath(state.cwd, item.file);
-        hecaton.menu.show({ items: buildFileContextMenuItems(item, targets) }).catch(() => null);
+        ui.contextMenuFilePath = joinPath(state.cwd, item.kind === 'dir' ? item.dir : item.file);
+        const menuItems = item.kind === 'dir'
+          ? buildDirContextMenuItems(item, targets)
+          : buildFileContextMenuItems(item, targets);
+        hecaton.menu.show({ items: menuItems }).catch(() => null);
       }
       render();
       return;

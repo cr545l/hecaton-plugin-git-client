@@ -147,6 +147,12 @@ const ui = {
   leftPanelClickMap: [],
   collapsedSections: {},
   collapsedGroups: {},
+  // 워킹트리 파일 목록을 트리로 그릴지. 상위 경로 단위로 무시하거나 담으려면 디렉토리
+  // 자체가 목록의 한 줄로 있어야 해서, 평면 목록만으로는 손댈 방법이 없다. 리포별 영속.
+  fileTreeView: false,
+  // 트리에서 접어 둔 디렉토리 — { '<구획>\u0000<경로>': true }. 접힌 것만 담는다.
+  // 같은 경로라도 Unstaged 와 Staged 는 서로 다른 줄이라 접힘도 구획별로 따로 간다.
+  collapsedFileDirs: {},
   leftPanelActiveBranch: null,
   pinnedBranches: [],              // 핀 고정한 로컬 브랜치 이름 — 핀 지정 순서 유지, 리포별 영속
   // 히스토리 Filter/Hide — 값은 풀 refname('refs/heads/x' | 'refs/remotes/origin/x')이다.
@@ -235,6 +241,25 @@ const ui = {
 function init() {
   ui.termCols = hecaton.initialState?.cols || 80;
   ui.termRows = hecaton.initialState?.rows || 24;
+}
+
+// ── 워킹트리 트리 보기 ──
+// 접힘 키는 구획과 경로를 함께 묶는다. Unstaged 의 src/ 를 접었다고 Staged 의 src/ 까지
+// 접히면, 한쪽을 보려다 다른 쪽을 잃는다.
+
+function fileDirKey(section, dir) { return section + '\u0000' + dir; }
+
+function isCollapsedFileDir(section, dir) {
+  return !!ui.collapsedFileDirs[fileDirKey(section, dir)];
+}
+
+// 펼칠 때는 키를 지운다 — false 로 남겨 두면 한 번 열어 본 디렉토리가 전부 쌓여
+// 영속 파일이 저장소 크기만큼 커진다. 결과 접힘 상태를 반환.
+function toggleCollapsedFileDir(section, dir) {
+  const key = fileDirKey(section, dir);
+  if (ui.collapsedFileDirs[key]) { delete ui.collapsedFileDirs[key]; return false; }
+  ui.collapsedFileDirs[key] = true;
+  return true;
 }
 
 // ── 핀 고정 브랜치 ──
@@ -329,6 +354,7 @@ function renameRef(oldKey, newKey) {
 
 module.exports = {
   state, ui, init,
+  isCollapsedFileDir, toggleCollapsedFileDir,
   isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
   localRefKey, remoteRefKey,
   isFilteredRef, isHiddenRef, toggleFilteredRef, toggleHiddenRef,

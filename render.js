@@ -260,6 +260,7 @@ function computeLayoutSig() {
     ui.rightBottomCollapsed ? '1' : '0',
     ui.logSortMode,
     ui.logShowRecovery ? '1' : '0',
+    ui.fileTreeView ? '1' : '0',
     ui.termCols,
     ui.termRows,
   ].join('|');
@@ -449,6 +450,8 @@ function renderBody() {
       }
     } else {
       rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Stage', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
+      // 파일 목록을 트리로 볼지 — Diff 토글과 같은 성격(보는 방식)이라 나란히 둔다.
+      rightParts.push({ label: '  Files: ' + (ui.fileTreeView ? 'tree' : 'flat'), action: 'toggleFileTree', collapsed: false });
       rightParts.push({ label: '  Diff: ' + (state.diffView === 'side' ? 'side' : 'unified'), action: 'toggleDiff', collapsed: false });
     }
     let rightTotalW = 0;
@@ -1702,26 +1705,23 @@ function buildFileListPanel(w, h) {
     return [colors.dim + ' Loading status...' + ansi.reset].slice(0, h);
   }
 
+  // 그릴 줄은 buildFileList 가 정한다 — 커서·다중 선택·클릭 맵이 전부 이 목록의 인덱스를
+  // 가리키므로, 화면을 따로 만들면 보이는 줄과 인덱스가 어긋난다. 트리 모드의 폴더 줄도
+  // 여기 섞여 들어오므로 아래 루프는 두 모드를 구분하지 않는다.
+  const fileList = buildFileList();
+
+  // 줄에서 가로로 스크롤되는 부분(들여쓰기 + 이름). 평면 모드는 depth 0 에 name 이
+  // 경로 전체라 예전과 같은 문자열이 나온다.
+  function entryText(item) {
+    return '  '.repeat(item.depth || 0) + item.name + (item.kind === 'dir' ? '/' : '');
+  }
+
   // Pre-compute horizontal scroll to reserve row for scrollbar
   // Only count files in non-collapsed sections
   let preMaxFileW = 0;
-  for (const f of state.unstaged) {
-    const fw = f.file ? f.file.length : 0;
+  for (const item of fileList) {
+    const fw = entryText(item).length;
     if (fw > preMaxFileW) preMaxFileW = fw;
-  }
-  for (const f of state.untracked) {
-    const fw = f.file ? f.file.length : 0;
-    if (fw > preMaxFileW) preMaxFileW = fw;
-  }
-  for (const f of state.staged) {
-    const fw = f.file ? f.file.length : 0;
-    if (fw > preMaxFileW) preMaxFileW = fw;
-  }
-  if (state.ignored.length > 0 && ui.collapsedSections.ignored === false) {
-    for (const f of state.ignored) {
-      const fw = f.file ? f.file.length : 0;
-      if (fw > preMaxFileW) preMaxFileW = fw;
-    }
   }
   const filesContentWPre = Math.max(1, innerW - 6);
   const preFilesMaxScrollX = Math.max(0, preMaxFileW - filesContentWPre);
@@ -1740,6 +1740,35 @@ function buildFileListPanel(w, h) {
     if (s === 'A') return colors.green;
     if (s === 'R' || s === 'C') return colors.cyan;
     return colors.orange;
+  }
+
+  // 파일 줄과 폴더 줄을 한 자리에서 그린다. 상태 글자 자리(4번째 칸)에 폴더는 접힘
+  // 표시(+/-)를 놓아, 이름 칸이 어느 줄에서나 같은 열에서 시작하게 한다.
+  function pushEntryLine(item, idx) {
+    const isCursor = state.cursor === idx;
+    const isMultiSel = state.selectedFiles.has(idx);
+    if (isCursor) cursorLineIdx = lines.length;
+    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
+    const resetTo = bgColor ? ansi.reset + bgColor : ansi.reset;
+    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
+    let mark;
+    if (item.kind === 'dir') mark = colors.dim + (item.collapsed ? '+' : '-');
+    else if (item.type === 'untracked') mark = colors.dim + '?';
+    else if (item.type === 'ignored') mark = colors.dim + '!';
+    else mark = statusColor(item.status) + item.status;
+    const text = sliceByWidth(entryText(item), state.filesScrollX, innerW - 6);
+    // 무시된 파일과 폴더 이름은 눌러 둔다 — 변경 자체가 아니라 그 둘레의 정보다.
+    const dim = item.kind === 'dir' || item.section === 'ignored';
+    const body = dim ? colors.dim + text + resetTo : text;
+    pushFileLine(bgColor + padRight(prefix + mark + resetTo + ' ' + body, innerW) + ansi.reset, idx);
+  }
+
+  // 한 구획(Unstaged / Staged / Ignored)에 속한 줄을 목록 순서대로 소진한다.
+  function pushSection(section) {
+    while (listIdx < fileList.length && fileList[listIdx].section === section) {
+      pushEntryLine(fileList[listIdx], listIdx);
+      listIdx++;
+    }
   }
 
   // Unstaged (includes untracked)
@@ -1784,32 +1813,7 @@ function buildFileListPanel(w, h) {
     ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'stageSelected', enabled: selOn });
     pushFileLine(headerLine, -1);
   }
-  for (let i = 0; i < state.unstaged.length; i++) {
-    const item = state.unstaged[i];
-    const isCursor = state.cursor === listIdx;
-    const isMultiSel = state.selectedFiles.has(listIdx);
-    if (isCursor) cursorLineIdx = lines.length;
-    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
-    const hasBg = bgColor !== '';
-    const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
-    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + sliceByWidth(item.file, state.filesScrollX, innerW - 6);
-    pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
-    listIdx++;
-  }
-  for (let i = 0; i < state.untracked.length; i++) {
-    const item = state.untracked[i];
-    const isCursor = state.cursor === listIdx;
-    const isMultiSel = state.selectedFiles.has(listIdx);
-    if (isCursor) cursorLineIdx = lines.length;
-    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
-    const hasBg = bgColor !== '';
-    const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
-    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + colors.dim + '?' + resetTo + ' ' + sliceByWidth(item.file, state.filesScrollX, innerW - 6);
-    pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
-    listIdx++;
-  }
+  pushSection('unstaged');
 
   // Staged
   {
@@ -1838,19 +1842,7 @@ function buildFileListPanel(w, h) {
     ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'unstageSelected', enabled: selOn });
     pushFileLine(headerLine, -1);
   }
-  for (let i = 0; i < state.staged.length; i++) {
-    const item = state.staged[i];
-    const isCursor = state.cursor === listIdx;
-    const isMultiSel = state.selectedFiles.has(listIdx);
-    if (isCursor) cursorLineIdx = lines.length;
-    const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
-    const hasBg = bgColor !== '';
-    const resetTo = hasBg ? ansi.reset + bgColor : ansi.reset;
-    const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
-    const line = prefix + statusColor(item.status) + item.status + resetTo + ' ' + sliceByWidth(item.file, state.filesScrollX, innerW - 6);
-    pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
-    listIdx++;
-  }
+  pushSection('staged');
 
   // Ignored
   if (state.ignoredLoaded ? (state.ignored.length > 0 || ui.collapsedSections.ignored === false) : true) {
@@ -1867,22 +1859,14 @@ function buildFileListPanel(w, h) {
     if (!ignoredCollapsed && !state.ignoredLoaded) {
       pushFileLine(colors.dim + '   Loading ignored files...' + ansi.reset, -1);
     } else if (!ignoredCollapsed) {
-      for (let i = 0; i < state.ignored.length; i++) {
-        const item = state.ignored[i];
-        const isCursor = state.cursor === listIdx;
-        if (isCursor) cursorLineIdx = lines.length;
-        const bgColor = isCursor ? cursorBgColor : '';
-        const line = '   ' + colors.dim + '!' + ansi.reset + (bgColor || '') + ' ' + colors.dim + sliceByWidth(item.file, state.filesScrollX, innerW - 6) + ansi.reset;
-        pushFileLine(bgColor + padRight(line, innerW) + ansi.reset, listIdx);
-        listIdx++;
-      }
+      pushSection('ignored');
     }
   }
 
   ui.filesMaxScrollX = preFilesMaxScrollX;
   if (state.filesScrollX > preFilesMaxScrollX) state.filesScrollX = preFilesMaxScrollX;
 
-  if (buildFileList().length === 0) {
+  if (fileList.length === 0) {
     pushFileLine(colors.dim + ' Working tree clean' + ansi.reset, -1);
   }
 
@@ -3743,4 +3727,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons, buildLeftPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };
+module.exports = { render, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };
