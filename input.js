@@ -22,7 +22,7 @@ const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
 const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
-const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
+const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -1783,7 +1783,11 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'toggleLogRecovery') {
               ui.logShowRecovery = !ui.logShowRecovery;
-              if (!rebuildLogGraphRows()) refreshLog();
+              // 끌 때는 그리기 단계에서 걸러 내면 되지만, 켤 때는 유실 커밋이 캐시에 없을
+              // 수 있다 — 꺼져 있는 동안에는 reflog 를 아예 조회하지 않기 때문이다.
+              // 그때만 다시 읽는다.
+              if (ui.logShowRecovery && !logCacheHasRecovery()) refreshLog({ force: true });
+              else if (!rebuildLogGraphRows()) refreshLog();
               updateLogDetail();
               render();
               handled = true;

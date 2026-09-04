@@ -721,11 +721,18 @@ async function queryCommitterConfig(cwd) {
 }
 
 // committer 조회는 fingerprint 캐시에 넣지 않는다 — user.* 는 전역 config 에서도 오고,
-// include/includeIf 로 딸려 오는 파일까지 mtime 으로 좇을 수는 없다. 대신 짧은 TTL 을 둔다.
-// fetch 직후처럼 refresh 가 연달아 도는 구간에서 같은 값을 다시 읽지 않게 하는 것이 목적이고,
-// 이 창을 넘기면 종전대로 다시 읽으므로 밖에서 바꾼 설정도 곧 따라온다.
-// 실제 커밋은 git 이 config 를 직접 읽으므로 이 캐시의 영향을 받지 않는다 — 낡을 수 있는 것은 표시뿐이다.
-const COMMITTER_CACHE_TTL_MS = 10000;
+// include/includeIf 로 딸려 오는 파일까지 mtime 으로 좇을 수는 없다. 대신 TTL 을 둔다.
+// fetch 직후처럼 refresh 가 연달아 도는 구간에서 같은 값을 다시 읽지 않게 하는 것이 목적이다.
+//
+// 그 목적을 실제로 달성하려면 창이 fetch 한 번보다 길어야 한다. 10초로는 모자랐다 —
+// 2026-09-02 실측으로 사내 GitLab 에 붙는 fetch 는 인증 헬퍼 비용만으로 9초가 넘고,
+// 그러면 fetch 직전에 읽어 둔 값이 fetch 가 끝날 때쯤 이미 만료되어 후속 refresh 가
+// config 를 또 읽는다. 정확히 아끼려던 그 한 번을 못 아낀다.
+//
+// 늘려도 위험하지 않다. 플러그인에서 committer 를 고치면 invalidateCommitterCache() 가
+// 즉시 무효화하고, 실제 커밋은 git 이 config 를 직접 읽으므로 이 캐시의 영향을 받지
+// 않는다 — 낡을 수 있는 것은 밖에서 바꾼 설정의 표시뿐이고, 그것도 이 창을 넘기면 따라온다.
+const COMMITTER_CACHE_TTL_MS = 60000;
 let _committerCache = null;
 let _committerCacheCwd = '';
 let _committerCacheAt = 0;
@@ -1484,20 +1491,25 @@ async function refreshAsync(options = {}) {
   }
 }
 
-// 로그 fetch 한도. 첫 paint는 LOG_FAST_LIMIT으로 빨리 띄우고,
-// 백그라운드에서 LOG_FULL_LIMIT으로 받아 그래프를 보강한다.
-const LOG_FAST_LIMIT = 300;
-const LOG_PREFETCH_LIMIT = 2000;
+// 로그 fetch 한도. 한도를 나눠 올리지 않고 처음부터 이 값으로 한 번에 읽는다.
+//
+// 예전에는 300 → 2000 → 6000 으로 세 번에 걸쳐 넓혔다. 첫 paint 를 빨리 띄우려는
+// 설계였는데, 프로세스 생성이 비싼 환경에서는 손해다. 실측(2026-09-02)으로
+// `log --all --max-count=300` 이 1.21초, `--max-count=6000` 이 2.23초 — 한도를 20배
+// 키워도 1초가 안 늘어난다. 대부분이 스폰 고정비이기 때문이다. 반면 단계를 나누면
+// 그 고정비를 단계 수만큼 다시 문다. 게다가 300 의 결과는 6000 의 부분집합이라
+// 나눠 읽는 것은 같은 커밋을 세 번 읽는 일이기도 했다.
 const LOG_FULL_LIMIT = 6000;
 const LOG_PAGE_SIZE = 4000;
 let _logRequestedLimit = LOG_FULL_LIMIT;
 let _logLimitCwd = '';
+// 유실 커밋 보강(reflog → 재조회)이 도는 중인지. 이 구간에 refreshLog 가 또 들어오면
+// 보강 전 목록으로 화면이 되돌아가므로 막는다.
 let _logExpansionRunning = false;
 
-// 로그 조회 결과 캐시. refreshLog 한 번은 git 프로세스를 최대 5개까지 직렬로 쓴다
-// (fast → prefetch → full → reflog → recovered). 그런데 rename branch 처럼 커밋
-// 그래프를 건드리지 않는 작업 뒤에도 액션마다 전량을 다시 돌고 있었다.
-// 그래프의 입력이 그대로면 결과도 그대로이므로, 지문이 같으면 통째로 건너뛴다.
+// 로그 조회 결과 캐시. 커밋 그래프를 건드리지 않는 작업(rename branch 등) 뒤에도
+// 액션마다 전량을 다시 돌고 있었다. 그래프의 입력이 그대로면 결과도 그대로이므로,
+// 지문이 같으면 통째로 건너뛴다.
 //
 // 지문에 넣는 것은 "git 을 다시 불러야만 알 수 있는" 입력뿐이다. 리커버리 토글이나
 // 브랜치 Filter/Hide 는 _lastGraphCommits(원본 커밋 캐시)로 다시 그리면 되므로 넣지 않고,
@@ -1654,6 +1666,11 @@ function applyRefFilters(commits, stashFullHashes) {
 // 정렬 모드 토글 시 git 재조회 없이 그래프만 다시 만들기 위한 마지막 입력 캐시
 let _lastGraphCommits = null;
 let _lastGraphStashHashes = null;
+// 그 캐시가 유실 커밋까지 포함해 만들어졌는지. Recovery 토글이 꺼져 있는 동안에는
+// reflog 를 아예 조회하지 않으므로, 캐시에 유실 커밋이 없는 상태가 정상적으로 생긴다.
+// 그때 토글을 켜면 다시 그리기만 해서는 아무것도 나오지 않으므로 재조회가 필요하다.
+let _lastGraphHasRecovery = false;
+function logCacheHasRecovery() { return _lastGraphHasRecovery; }
 
 function buildLogGraphRows(rawCommits, stashFullHashes) {
   _lastGraphCommits = rawCommits;
@@ -1794,7 +1811,7 @@ function refreshLog(options = {}) {
   state.logLoading = true;
   (async () => {
     // 그래프 입력이 지난번과 같으면 git 을 한 번도 부르지 않는다. 지문 계산은 fs 조회만
-    // 쓰므로(호스트 RPC 중 exec 만 비싸다) 아낀 프로세스 5개에 비하면 사실상 공짜다.
+    // 쓰므로(호스트 RPC 중 exec 만 비싸다) 아낀 프로세스 네 개에 비하면 사실상 공짜다.
     const logFingerprint = await computeLogFingerprint(stashHashes);
     if (_logSeq !== seq) return;
     const cacheHit = !options.force
@@ -1802,7 +1819,10 @@ function refreshLog(options = {}) {
       && logFingerprint === _logCacheFingerprint
       && _logCacheCwd === state.cwd
       && _lastGraphCommits
-      && state.logItems.length > 0;
+      && state.logItems.length > 0
+      // Recovery 를 켠 채로 들어왔는데 캐시가 유실 커밋 없이 만들어진 것이면 다시 읽어야
+      // 한다. 토글이 꺼져 있던 동안의 조회가 그런 캐시를 남긴다.
+      && (!ui.logShowRecovery || _lastGraphHasRecovery);
     if (cacheHit) {
       // 커밋은 그대로여도 리커버리 토글·필터 지정은 그 사이 바뀌었을 수 있다.
       // 원본 커밋 캐시로 다시 그려 현재 표시 설정을 반영한다.
@@ -1836,108 +1856,61 @@ function refreshLog(options = {}) {
     const loadRecovery = () => gitReflogRecoveries(state.cwd, 250, 64, 256)
       .catch(() => ({ hashes: [], refsByHash: {} }));
 
-    // 1차: 빠른 첫 paint (작은 한도). graph는 부분 데이터 기준이라 정확도가 약간 떨어질 수 있으나
-    // 즉시 화면이 뜨므로 체감 속도 우선. _logSeq로 out-of-order 가드.
-    const fastRaw = await gitExec(buildArgs(LOG_FAST_LIMIT, []), state.cwd, 30000);
+    // 1차: 커밋 목록. 한도를 나눠 올리지 않고 요청 한도로 한 번에 읽는다(LOG_FULL_LIMIT 주석 참고).
+    // _logSeq로 out-of-order 가드.
+    const limit = _logRequestedLimit;
+    const raw = await gitExec(buildArgs(limit, []), state.cwd, 30000);
     if (_logSeq !== seq) return;
-    const fastCommits = parseLogRaw(fastRaw, { refsByHash: {} }, new Set());
-    applyLogGraphRows(buildLogGraphRows(fastCommits, stashFullHashes));
-    state.logLoadedLimit = fastCommits.length;
-    state.logHasMore = fastCommits.length >= LOG_FAST_LIMIT;
+    const commits = parseLogRaw(raw, { refsByHash: {} }, new Set());
+    applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
+    _lastGraphHasRecovery = false;
+    state.logLoadedLimit = commits.length;
+    state.logHasMore = commits.length >= limit;
     state.logLoading = false;
     if (state.rightView === 'log') {
       updateLogDetail({ headerOnly: true });
       require('./render').render();
     }
 
-    if (fastCommits.length < LOG_FAST_LIMIT) {
+    // 2차: 유실 커밋 보강. 화면에서 꺼 두었으면 조회 자체를 하지 않는다 — reflog 와
+    // 그 뒤의 재조회로 프로세스를 최대 3개 더 쓰는데, 받아 온 유실 커밋은 그리기 단계
+    // (buildLogGraphRows)에서 어차피 전부 걸러진다. 토글을 다시 켤 때 캐시에 유실 커밋이
+    // 없으면 그때 재조회한다 — logCacheHasRecovery() 를 보는 쪽이 그 판정을 한다.
+    if (!ui.logShowRecovery) {
+      state.recoveryRefs = {};
+      markLogCached(logFingerprint, seq);
+      return;
+    }
+
+    _logExpansionRunning = true;
+    try {
       const recovery = await loadRecovery();
       if (_logSeq !== seq) return;
       state.recoveryRefs = recovery.refsByHash || {};
       const recoveryHashSet = new Set(recovery.hashes || []);
+      // 유실 커밋이 없으면 1차 결과가 곧 최종이다. 재조회할 것이 없으므로 그대로 캐시한다.
       if (recoveryHashSet.size === 0) {
-        state.logHasMore = false;
-        state.logLoadedLimit = fastCommits.length;
-        state.logLoading = false;
+        _lastGraphHasRecovery = true;
         markLogCached(logFingerprint, seq);
-        if (state.rightView === 'log') require('./render').render();
         return;
       }
 
-      const recoveredRaw = await gitExec(buildArgs(LOG_FULL_LIMIT, recovery.hashes || []), state.cwd, 30000);
+      const recoveredRaw = await gitExec(buildArgs(limit, recovery.hashes || []), state.cwd, 30000);
       if (_logSeq !== seq) return;
       const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
-      if (recoveredCommits.length === 0 && fastCommits.length > 0) {
-        // 리커버리 재조회가 빈손으로 왔다 — 화면은 1차 결과 그대로다. 실패했을 수 있는
-        // 결과를 캐시하면 지문이 바뀔 때까지 그 상태에 묶이므로 여기서는 기록하지 않는다.
-        state.logLoading = false;
-        if (state.rightView === 'log') require('./render').render();
-        return;
-      }
+      // 재조회가 빈손으로 왔다 — 화면은 1차 결과 그대로다. 실패했을 수 있는 결과를
+      // 캐시하면 지문이 바뀔 때까지 그 상태에 묶이므로 여기서는 기록하지 않는다.
+      if (recoveredCommits.length === 0 && commits.length > 0) return;
       applyLogGraphRows(buildLogGraphRows(recoveredCommits, stashFullHashes));
+      _lastGraphHasRecovery = true;
       state.logLoadedLimit = recoveredCommits.length;
-      state.logHasMore = false;
+      state.logHasMore = recoveredCommits.length >= limit;
       if (state.rightView === 'log') updateLogDetail();
-      state.logLoading = false;
       markLogCached(logFingerprint, seq);
       if (state.rightView === 'log') require('./render').render();
-      return;
+    } finally {
+      if (_logSeq === seq) _logExpansionRunning = false;
     }
-
-    // 2차: 백그라운드 full-path. 결과가 오면 그래프를 갱신해 정확도/범위를 보강.
-    // 더 큰 limit이라 1차 결과는 superset에 포함됨 → cursor 인덱스 보존 가능.
-    _logExpansionRunning = true;
-
-    const prefetchLimit = Math.min(LOG_PREFETCH_LIMIT, _logRequestedLimit);
-    let expandedCommits = fastCommits;
-    if (prefetchLimit > LOG_FAST_LIMIT) {
-      const prefetchRaw = await gitExec(buildArgs(prefetchLimit, []), state.cwd, 30000);
-      if (_logSeq !== seq) { _logExpansionRunning = false; return; }
-      const prefetchCommits = parseLogRaw(prefetchRaw, { refsByHash: {} }, new Set());
-      if (prefetchCommits.length > 0) {
-        expandedCommits = prefetchCommits;
-        applyLogGraphRows(buildLogGraphRows(expandedCommits, stashFullHashes));
-        state.logLoadedLimit = prefetchLimit;
-        state.logHasMore = expandedCommits.length >= prefetchLimit;
-        if (state.rightView === 'log') updateLogDetail();
-        if (state.rightView === 'log') require('./render').render();
-      }
-    }
-
-    const fullLimit = _logRequestedLimit;
-    if (fullLimit > prefetchLimit && expandedCommits.length >= prefetchLimit) {
-      const fullRaw = await gitExec(buildArgs(fullLimit, []), state.cwd, 30000);
-      if (_logSeq !== seq) { _logExpansionRunning = false; return; }
-      const fullCommits = parseLogRaw(fullRaw, { refsByHash: {} }, new Set());
-      if (fullCommits.length > 0) {
-        expandedCommits = fullCommits;
-        applyLogGraphRows(buildLogGraphRows(expandedCommits, stashFullHashes));
-        state.logLoadedLimit = fullLimit;
-        state.logHasMore = expandedCommits.length >= fullLimit;
-        if (state.rightView === 'log') updateLogDetail();
-        if (state.rightView === 'log') require('./render').render();
-      }
-    }
-
-    _logExpansionRunning = false;
-
-    const recovery = await loadRecovery();
-    if (_logSeq !== seq) return;
-    state.recoveryRefs = recovery.refsByHash || {};
-    const recoveryHashSet = new Set(recovery.hashes || []);
-    if (recoveryHashSet.size === 0) { markLogCached(logFingerprint, seq); return; }
-
-    const recoveredRaw = await gitExec(buildArgs(fullLimit, recovery.hashes || []), state.cwd, 30000);
-    if (_logSeq !== seq) return;
-    const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
-    // 위와 같은 이유로, 빈손으로 온 재조회 결과는 캐시하지 않는다.
-    if (recoveredCommits.length === 0 && expandedCommits.length > 0) return;
-    applyLogGraphRows(buildLogGraphRows(recoveredCommits, stashFullHashes));
-    state.logLoadedLimit = fullLimit;
-    state.logHasMore = recoveredCommits.length >= fullLimit;
-    if (state.rightView === 'log') updateLogDetail();
-    markLogCached(logFingerprint, seq);
-    if (state.rightView === 'log') require('./render').render();
   })().catch(() => {
     if (_logSeq !== seq) return;
     _logExpansionRunning = false;
@@ -1978,8 +1951,10 @@ function loadMoreLog() {
   require('./render').render();
 
   (async () => {
-    const recovery = await gitReflogRecoveries(state.cwd, 250, 64, 256)
-      .catch(() => ({ hashes: [], refsByHash: {} }));
+    // refreshLog 와 같은 이유로, Recovery 가 꺼져 있으면 reflog 조회를 건너뛴다.
+    const recovery = ui.logShowRecovery
+      ? await gitReflogRecoveries(state.cwd, 250, 64, 256).catch(() => ({ hashes: [], refsByHash: {} }))
+      : { hashes: [], refsByHash: {} };
     if (_logSeq !== seq) return;
     state.recoveryRefs = recovery.refsByHash || {};
     const recoveryHashSet = new Set(recovery.hashes || []);
@@ -2001,6 +1976,7 @@ function loadMoreLog() {
     if (_logSeq !== seq) return;
     const commits = parseLogRaw(raw, recovery, recoveryHashSet);
     applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
+    _lastGraphHasRecovery = ui.logShowRecovery;
     state.logCursor = Math.min(keepCursor, Math.max(0, state.logSelectables.length - 1));
     state.logScrollOffset = keepScrollOffset;
     state.logLoadedLimit = targetLimit;
@@ -2337,7 +2313,7 @@ function updateFreshDetail() {
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   expandFileTargets, sectionRangeAt, setFileTreeView, toggleFileDir,
-  refreshAsync, refreshLog, loadMoreLog, buildLogGraphRows, rebuildLogGraphRows, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,

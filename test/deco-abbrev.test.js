@@ -3,17 +3,57 @@ const assert = require('node:assert/strict');
 
 global.hecaton = { fs: {}, process: {}, window: {}, initialState: {} };
 
-const { state } = require('../state');
+const { state, ui } = require('../state');
 const { buildDecoTokens, decoPlainText } = require('../render');
 
 function abbrev(deco) {
   return decoPlainText(buildDecoTokens(deco));
 }
 
-function setRepo({ remotes = [], branches = [] } = {}) {
+function setRepo({ remotes = [], branches = [], current = '' } = {}) {
   state.remotes = remotes;
-  state.branches = branches.map(name => ({ name, isCurrent: false }));
+  state.branch = current;
+  state.branches = branches.map(name => ({ name, isCurrent: name === current }));
+  ui.pinnedBranches = [];
 }
+
+test('history branches are ordered current, pinned, then remaining alphabetically', () => {
+  setRepo({
+    remotes: ['origin'],
+    branches: ['z-current', 'release', 'develop', 'charlie', 'alpha'],
+    current: 'z-current',
+  });
+  ui.pinnedBranches = ['release', 'develop'];
+
+  assert.equal(
+    abbrev('charlie, develop, alpha, z-current, release'),
+    'z-current, release, develop, alpha, charlie'
+  );
+});
+
+test('history branch ordering keeps non-branch decorations in their original slots', () => {
+  setRepo({ branches: ['main', 'pinned', 'alpha'], current: 'main' });
+  ui.pinnedBranches = ['pinned'];
+
+  assert.equal(
+    abbrev('alpha, tag: v1.0, pinned, refs/stash, main'),
+    'main, tag: v1.0, pinned, refs/stash, alpha'
+  );
+});
+
+test('history ordering uses the local branch priority for remote decorations', () => {
+  setRepo({
+    remotes: ['origin'],
+    branches: ['main', 'develop', 'alpha'],
+    current: 'main',
+  });
+  ui.pinnedBranches = ['develop'];
+
+  assert.equal(
+    abbrev('origin/alpha, origin/develop, main, origin/main'),
+    'main@origin, origin/develop, origin/alpha'
+  );
+});
 
 test('로컬 브랜치와 동명의 리모트 추적 브랜치를 접미로 축약한다', () => {
   setRepo({ remotes: ['origin'], branches: ['main'] });

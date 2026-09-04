@@ -237,6 +237,17 @@ const SHARED_WORKTREE_MAX_AGE_MS = GIT_WORKTREE_POLL_INTERVAL_MS - 500;
 // 돌려주지 않으면 그 틱의 await가 영영 끝나지 않아 가드가 true로 굳고, 그러면 이
 // 인스턴스의 폴링이 영구히 멈춘다. 이 시간을 넘긴 가드는 무시하고 다시 돈다.
 const POLL_GUARD_STALE_MS = 30000;
+// 워킹트리 폴링은 매 틱 git status를 스폰한다. 그런데 이 명령이 폴링 주기보다 오래
+// 걸리는 저장소가 있다 — 2026-09-02 실측으로 어떤 저장소는 status 한 번이 7.3초였다
+// (파일이 1,133개뿐인데도 그렇다. 파일 수가 아니라 파일당 I/O 비용이 문제다).
+// 그러면 재진입 가드에 막혀 틱은 계속 버려지고, git status 프로세스만 사실상 상시
+// 하나 떠 있는 상태가 되어 fetch/pull이 무는 .git 락과 정면으로 부딪힌다.
+//
+// 그래서 주기를 고정으로 두지 않고 직전 실행에 걸린 시간에 맞춰 늘린다. 스냅샷 한
+// 번에 T가 걸렸으면 다음 실행은 T * BACKOFF 뒤에야 허용한다 — 폴링이 차지하는 시간
+// 비율을 대략 1/BACKOFF 아래로 묶어, 나머지를 사용자 조작에 내준다.
+const WORKTREE_POLL_BACKOFF = 3;
+const WORKTREE_POLL_MAX_INTERVAL_MS = 60000;
 
 function stopGitWatcher() {
   if (_gitWatcherCleanup) { _gitWatcherCleanup(); _gitWatcherCleanup = null; }
@@ -532,12 +543,16 @@ async function setupGitWatcher() {
   let lastStatusSnapshot = await buildWorktreeSnapshot().catch(() => '') || '';
   let statusPolling = false;
   let statusPollingSince = 0;
+  // 다음 스냅샷을 허용할 시각. 직전 실행이 오래 걸렸으면 그만큼 뒤로 밀린다.
+  let statusPollNextAllowedAt = 0;
   const statusPollInterval = setInterval(async () => {
     if (statusPolling && (Date.now() - statusPollingSince) < POLL_GUARD_STALE_MS) return;
     if (state.loading || state.minimized) return;
     if (state.mode !== 'normal') return;
     // Avoid polling during the short action-coalescing window.
     if (Date.now() - getLastUserRefreshTime() < USER_ACTION_REFRESH_SUPPRESS_MS) return;
+    // status가 폴링 주기보다 오래 걸리는 저장소에서 틱을 계속 버리지 않도록 물러선다.
+    if (Date.now() < statusPollNextAllowedAt) return;
     statusPolling = true;
     statusPollingSince = Date.now();
     try {
@@ -555,7 +570,14 @@ async function setupGitWatcher() {
         if (shared) {
           snapshot = shared.value;
         } else {
+          // 남의 결과를 받아 쓴 틱은 재는 의미가 없다 — 비싼 것은 git 스폰뿐이다.
+          const startedAt = Date.now();
           snapshot = await buildWorktreeSnapshot();
+          const elapsed = Date.now() - startedAt;
+          statusPollNextAllowedAt = Date.now() + Math.min(
+            WORKTREE_POLL_MAX_INTERVAL_MS,
+            Math.max(GIT_WORKTREE_POLL_INTERVAL_MS, elapsed * WORKTREE_POLL_BACKOFF),
+          );
           if (snapshot !== null) coordinate.publishSharedSnapshot('worktree-status', snapshot).catch(() => null);
         }
         if (snapshot !== null && snapshot !== lastStatusSnapshot) {

@@ -135,9 +135,12 @@ test('다른 인스턴스가 진행 중이면 기다린다', async () => {
   await coordinate.endNetworkOp('fetch', true);
 });
 
+// 아래에서 "오래된" 기록을 흉내낼 때 쓰는 나이. coordinate 의 NETOP_STALE_MS(150초)를
+// 확실히 넘겨야 죽은 것으로 판정된다 — 그 미만이면 진행 중으로 보고 기다리는 것이 옳은
+// 동작이라 이 테스트들의 대상이 아니다.
 test('멈춘 지 오래된 진행 기록은 무시하고 직접 실행한다', async () => {
   reset();
-  writeRaw('netop.json', { op: 'fetch', owner: 'dead-instance', startedAt: Date.now() - 120000, finishedAt: 0, ok: false });
+  writeRaw('netop.json', { op: 'fetch', owner: 'dead-instance', startedAt: Date.now() - 300000, finishedAt: 0, ok: false });
   assert.equal(await coordinate.beginNetworkOp('fetch', 3000), 'run');
   await coordinate.endNetworkOp('fetch', true);
 });
@@ -202,9 +205,9 @@ test('응답이 돌아오지 않은 내 작업이 폴링을 영구히 막지 않
 
   // 진행 기록도 함께 낡게 만든다(같은 인스턴스가 멈춘 상황).
   const rec = readRaw('netop.json');
-  rec.startedAt = Date.now() - 120000;
+  rec.startedAt = Date.now() - 300000;
   writeRaw('netop.json', rec);
-  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 120000);
+  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 300000);
 
   assert.equal(await coordinate.isNetworkOpInFlight(), false,
     '억제가 안 풀리면 이 인스턴스의 폴링이 영영 멈춘다');
@@ -213,7 +216,7 @@ test('응답이 돌아오지 않은 내 작업이 폴링을 영구히 막지 않
 test('만료된 로컬 작업은 새 작업 판정을 막지 않는다', async () => {
   reset();
   await coordinate.beginNetworkOp('fetch', 3000);
-  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 120000);
+  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 300000);
   await coordinate.isNetworkOpInFlight();   // 여기서 만료 처리
   assert.equal(await coordinate.isNetworkOpInFlight(), false);
 });

@@ -2305,7 +2305,7 @@ function buildLogPanel(w, h) {
       const isHead = /(?:^|,\s*)HEAD(?:\s*->|,|\s*$)/.test(decoRawOrig);
       const decoTokens = buildDecoTokens(decoRawOrig.split(', ').map(r =>
         r.startsWith('HEAD -> ') ? r.substring(8) : r
-      ).join(', '));
+      ).join(', '), state.branch);
       // 폭 계산은 축약된 표기 기준이어야 subject 잘림 위치가 어긋나지 않는다
       const decoRaw = decoPlainText(decoTokens);
       const decoColorized = decoRaw ? colorizeDecoTokens(decoTokens, state.branch, isHead) : '';
@@ -2982,7 +2982,7 @@ function isPinnedRemoteRef(ref) {
 // decoration 문자열을 토큰으로 쪼개고, 같은 커밋에 있는 동명의 리모트 추적 브랜치를
 // 로컬 브랜치의 접미로 흡수한다. 로컬에 짝이 없는 리모트 ref는 원래대로 "origin/foo"를
 // 유지해 로컬 브랜치와 헷갈리지 않게 둔다.
-function buildDecoTokens(plainDeco) {
+function buildDecoTokens(plainDeco, currentBranch) {
   const refs = plainDeco.split(', ').map(r => r.trim()).filter(r => r && !r.endsWith('/HEAD'));
   const tokens = [];
   const localAt = new Map();
@@ -3013,7 +3013,33 @@ function buildDecoTokens(plainDeco) {
     }
     merged.push(token);
   }
-  return merged;
+
+  // Git의 %D 출력 순서에 기대지 않고 브랜치 ref끼리의 표시 순서를 고정한다.
+  // 태그/stash/recovery 같은 비브랜치 토큰은 원래 자리를 유지하고, 그 사이의 브랜치
+  // 슬롯만 현재 브랜치 -> 핀 지정 순서 -> 나머지 이름 오름차순으로 채운다.
+  const checkedOut = currentBranch
+    || (state.branches.find(b => b.isCurrent) || {}).name
+    || state.branch;
+  const branchTokens = merged
+    .filter(token => token.kind === 'local' || token.kind === 'remote')
+    .map((token, index) => ({ token, index }));
+  branchTokens.sort((a, b) => {
+    const aBranch = a.token.kind === 'remote' ? a.token.branch : a.token.name;
+    const bBranch = b.token.kind === 'remote' ? b.token.branch : b.token.name;
+    const aPin = ui.pinnedBranches.indexOf(aBranch);
+    const bPin = ui.pinnedBranches.indexOf(bBranch);
+    const aRank = aBranch === checkedOut ? 0 : aPin >= 0 ? 1 : 2;
+    const bRank = bBranch === checkedOut ? 0 : bPin >= 0 ? 1 : 2;
+    if (aRank !== bRank) return aRank - bRank;
+    if (aRank === 1 && aPin !== bPin) return aPin - bPin;
+    return a.token.name.localeCompare(b.token.name) || a.index - b.index;
+  });
+
+  let branchIndex = 0;
+  return merged.map(token => {
+    if (token.kind !== 'local' && token.kind !== 'remote') return token;
+    return branchTokens[branchIndex++].token;
+  });
 }
 
 function decoPlainText(tokens) {
@@ -3061,7 +3087,7 @@ function colorizeDecoTokens(tokens, currentBranch, isHead) {
 
 function colorizeDecoration(plainDeco, currentBranch, isHead) {
   if (!plainDeco) return '';
-  return colorizeDecoTokens(buildDecoTokens(plainDeco), currentBranch, isHead);
+  return colorizeDecoTokens(buildDecoTokens(plainDeco, currentBranch), currentBranch, isHead);
 }
 
 // ── 충돌 해결 뷰 ──

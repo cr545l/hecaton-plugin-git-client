@@ -113,7 +113,9 @@ test('pull도 남의 결과로 대체하지 않는다', async () => {
 
 test('멈춘 인스턴스의 기록에 발이 묶이지 않는다', async () => {
   reset();
-  files.set(NETOP, JSON.stringify({ op: 'fetch', owner: 'dead', startedAt: Date.now() - 120000, finishedAt: 0, ok: false }));
+  // coordinate.NETOP_STALE_MS(150초)를 확실히 넘긴 기록이어야 죽은 것으로 판정된다.
+  // 그 미만이면 진행 중으로 보고 기다리는 것이 옳은 동작이라 이 테스트의 대상이 아니다.
+  files.set(NETOP, JSON.stringify({ op: 'fetch', owner: 'dead', startedAt: Date.now() - 300000, finishedAt: 0, ok: false }));
   const err = await git.gitFetchAsync(CWD);
   assert.equal(err, null);
   assert.equal(execCalls.length, 1);

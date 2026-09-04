@@ -127,8 +127,10 @@ async function publishSharedSnapshot(kind, value) {
 
 const NETOP_KIND = 'netop';
 // 인스턴스가 비정상 종료하면 finishedAt이 영영 안 찍힌다. 이 시간을 넘긴 inflight는
-// 죽은 것으로 보고 무시한다 — git 쪽 타임아웃(30초)보다 넉넉하게 잡는다.
-const NETOP_STALE_MS = 45000;
+// 죽은 것으로 보고 무시한다 — git 쪽 네트워크 작업 타임아웃(git.js의
+// NETWORK_OP_TIMEOUT_MS, 120초)보다 넉넉하게 잡는다. 그보다 짧으면 정상적으로 오래
+// 걸리는 fetch를 죽은 것으로 오인해, 기다리던 인스턴스가 같은 작업을 또 건다.
+const NETOP_STALE_MS = 150000;
 
 async function readNetOp() {
   if (!isEnabled() || !await ensureDir()) return null;
