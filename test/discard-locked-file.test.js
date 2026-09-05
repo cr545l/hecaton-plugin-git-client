@@ -97,7 +97,7 @@ test('제자리 복원까지 실패하면 원인과 잠금 안내를 함께 알�
 
 test('미추적 파일은 삭제가 목적이라 폴백 없이 잠금 안내만 덧붙인다', async () => {
   const { calls } = mockGit([
-    [starts('clean', '-f'), { ok: true, exit_code: 1, stdout: '', stderr: 'warning: failed to remove plugin.json: Invalid argument' }],
+    [args => args.indexOf('clean') !== -1, { ok: true, exit_code: 1, stdout: '', stderr: 'warning: failed to remove plugin.json: Invalid argument' }],
   ]);
 
   const err = await gitDiscardFile(CWD, { type: 'untracked', file: 'plugin.json' });

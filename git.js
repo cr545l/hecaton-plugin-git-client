@@ -1320,19 +1320,43 @@ async function gitBranchExists(cwd, name) {
 // checkout/restore/reset: error: unable to unlink old '<path>': Invalid argument
 // clean:                  warning: failed to remove <path>: Invalid argument
 const UNLINK_BLOCKED_RE = /unable to unlink (?:old )?'([^']*)'/i;
-const REMOVE_BLOCKED_RE = /failed to remove [^\n]*: (?:Invalid argument|Permission denied|Device or resource busy|Directory not empty)/i;
+const REMOVE_BLOCKED_RE = /failed to remove ([^\n]*): (?:Invalid argument|Permission denied|Device or resource busy|Directory not empty)/i;
 const LOCKED_FILE_HINT =
   'Another process is holding the file open, so Git cannot delete it before replacing it. '
   + 'Close whatever has it open and try again — a handle inherited by a background process '
   + 'can keep the lock even after the window that opened the file is gone.';
+
+// 잠금과 증상이 같은 별개의 원인: Win32가 파일로 가리킬 수 없는 이름. nul, con,
+// aux, com1 … 은 경로 어디에 있든 장치로 해석되고, 이름 끝의 점·공백은 조용히
+// 잘려 나간다. MSYS나 WSL처럼 NT 네이티브 경로를 쓰는 도구는 그런 이름을 만들 수
+// 있으므로(쉘에서 `> nul` 한 번이면 생긴다) 워크트리에 남을 수 있는데, git은 Win32
+// 경로로 지우려 하므로 Permission denied 로 막히고 discard가 그 파일에서 멈춘다.
+// 프로세스를 닫으라는 안내는 이 경우엔 틀린 진단이라 원인별로 갈라 준다.
+const WIN32_DEVICE_NAME_RE = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i;
+const RESERVED_NAME_HINT =
+  'Windows keeps this name for a device (NUL, CON, AUX, COM1 …) — and also drops a trailing '
+  + 'dot or space — so no Win32 path can point at the entry and Git cannot delete it. Git Bash '
+  + 'reaches it through MSYS: run "rm -rf <path>" from the repository root.';
 
 function isUnlinkBlockedError(message) { return !!message && UNLINK_BLOCKED_RE.test(message); }
 function isFileLockedError(message) {
   return !!message && (UNLINK_BLOCKED_RE.test(message) || REMOVE_BLOCKED_RE.test(message));
 }
 
+// Win32가 이름만으로 열지 못하는 경로인지. 장치 이름은 확장자가 붙어도 장치다.
+function isUnnameablePath(file) {
+  if (!file) return false;
+  const base = String(file).replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  return WIN32_DEVICE_NAME_RE.test(base) || /[. ]$/.test(base);
+}
+
+function lockedFileHintFor(message) {
+  const blocked = unlinkBlockedPaths(message).concat(removeBlockedPaths(message));
+  return blocked.some(isUnnameablePath) ? RESERVED_NAME_HINT : LOCKED_FILE_HINT;
+}
+
 function withLockedFileHint(message) {
-  return isFileLockedError(message) ? message + '\n\n' + LOCKED_FILE_HINT : message;
+  return isFileLockedError(message) ? message + '\n\n' + lockedFileHintFor(message) : message;
 }
 
 // 한 번의 실패 메시지에 여러 경로가 실릴 수 있다(reset --hard). 중복 없이 모은다.
@@ -1345,6 +1369,43 @@ function unlinkBlockedPaths(message) {
     if (m[1] && paths.indexOf(m[1]) === -1) paths.push(m[1]);
   }
   return paths;
+}
+
+// clean 은 지우지 못한 경로마다 warning 한 줄을 남기고 나머지는 계속 지운다.
+// core.quotePath=false 로 돌려야 비ASCII 경로가 8진 이스케이프 없이 실리는데,
+// 제어문자가 든 이름은 그 설정과 무관하게 인용되므로 되돌려 놓는다.
+function removeBlockedPaths(message) {
+  const paths = [];
+  if (!message) return paths;
+  const re = new RegExp(REMOVE_BLOCKED_RE.source, 'gi');
+  let m;
+  while ((m = re.exec(message)) !== null) {
+    const found = m[1] && unquoteGitPath(m[1]);
+    if (found && paths.indexOf(found) === -1) paths.push(found);
+  }
+  return paths;
+}
+
+// Git for Windows가 함께 설치하는 MSYS rm 은 NT 네이티브 경로로 파일을 열기 때문에
+// 장치 이름 해석을 거치지 않는다 — Win32로는 가리킬 수 없는 이름도 그대로 지운다.
+// git 의 ! 별칭이 그 sh 를 띄워 주므로 새 실행 권한 없이 이미 허용된 git 만으로 부를
+// 수 있다. 별칭 본문에 $@ 가 없으면 git 이 sh -c '<cmd> "$@"' 로 감싸 인자를 넘기므로
+// 경로가 셸에 다시 해석되지 않는다. 경로 파싱이 어긋나도 디렉터리까지 날아가지
+// 않도록 -r 은 쓰지 않는다.
+async function forceRemoveUnnameable(cwd, files) {
+  const targets = (files || []).filter(isUnnameablePath);
+  if (targets.length === 0) return false;
+  const r = await gitResult(['-c', 'alias.hecaton-force-remove=!rm -f --', 'hecaton-force-remove', ...targets], cwd, 15000);
+  return !!(r && r.ok && r.exit_code === 0);
+}
+
+// clean 이 이름 때문에 막혔을 때만 MSYS rm 으로 그 경로를 치우고 clean 을 다시 돌린다.
+// 이미 지워졌으면 재실행은 아무 일도 하지 않고 나머지 결과를 그대로 확정한다.
+async function cleanWithUnnameableFallback(cwd, originalError, retry) {
+  if (!(await forceRemoveUnnameable(cwd, removeBlockedPaths(originalError)))) {
+    return withLockedFileHint(originalError);
+  }
+  return withLockedFileHint(await retry());
 }
 
 // 파일을 지우지 않고 내용만 제자리에 되돌린다. source가 'head'면 인덱스를 먼저
@@ -1392,7 +1453,11 @@ async function discardWithInPlaceFallback(cwd, file, source, originalError) {
 }
 
 // 미추적 파일/디렉터리 일괄 삭제 (.gitignore 대상 제외)
-async function gitCleanUntrackedAsync(cwd) { return withLockedFileHint(await gitAsyncWrap(['clean', '-fd'], cwd, 30000)); }
+async function gitCleanUntrackedAsync(cwd) {
+  const run = () => gitAsyncWrap(['-c', 'core.quotePath=false', 'clean', '-fd'], cwd, 30000);
+  const err = await run();
+  return err ? await cleanWithUnnameableFallback(cwd, err, run) : null;
+}
 
 // Restore every tracked path to HEAD, then remove untracked files/directories.
 // Ignored paths are intentionally preserved. An unborn repository has no HEAD,
@@ -1419,8 +1484,11 @@ async function gitDiscardAllChangesAsync(cwd) {
   // A second force is required for untracked directories that are Git repos.
   // Before the first commit there is no committed ignore configuration to
   // restore, so ignored paths must also be removed to guarantee a clean tree.
-  const cleanErr = await gitAsyncWrap(hasHead ? ['clean', '-ffd'] : ['clean', '-ffdx'], cwd, 30000);
-  if (cleanErr) return 'Tracked changes were discarded, but untracked cleanup failed: ' + withLockedFileHint(cleanErr);
+  const runClean = () => gitAsyncWrap(
+    hasHead ? ['-c', 'core.quotePath=false', 'clean', '-ffd'] : ['-c', 'core.quotePath=false', 'clean', '-ffdx'], cwd, 30000);
+  let cleanErr = await runClean();
+  if (cleanErr) cleanErr = await cleanWithUnnameableFallback(cwd, cleanErr, runClean);
+  if (cleanErr) return 'Tracked changes were discarded, but untracked cleanup failed: ' + cleanErr;
   if (hasHead) {
     const submoduleCleanErr = await gitAsyncWrap(['submodule', 'foreach', '--recursive', 'git clean -ffd'], cwd, 30000);
     if (submoduleCleanErr) return 'Top-level changes were discarded, but submodule cleanup failed: ' + submoduleCleanErr;
@@ -1529,9 +1597,12 @@ async function gitRemoteAdd(cwd, name, url) { return await gitRunOrError(['remot
 
 async function gitDiscardFile(cwd, item) {
   if (!item || !item.file) return 'No file selected';
-  // clean은 파일을 지우는 것 자체가 목적이라 제자리 덮어쓰기로 대신할 수 없다 — 사유만 덧붙인다.
+  // clean은 파일을 지우는 것 자체가 목적이라 제자리 덮어쓰기로 대신할 수 없다.
+  // 이름 때문에 막힌 것이라면 MSYS rm 으로 치우고, 잠긴 것이라면 사유만 덧붙인다.
   if (item.type === 'untracked') {
-    return withLockedFileHint(await gitRunOrError(['clean', '-f', '--', item.file], cwd, 10000, 'Discard failed'));
+    const run = () => gitRunOrError(['-c', 'core.quotePath=false', 'clean', '-f', '--', item.file], cwd, 10000, 'Discard failed');
+    const err = await run();
+    return err ? await cleanWithUnnameableFallback(cwd, err, run) : null;
   }
   if (item.type === 'staged') {
     const err = await gitRunOrError(['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], cwd, 10000, 'Discard failed');
@@ -1803,7 +1874,7 @@ module.exports = {
   gitExec,
   gitExecChecked,
   gitProcessSucceeded,
-  unquoteGitPath,
+  unquoteGitPath, isUnnameablePath,
   resolveWorkTreeRoot, findGitDirFromDisk,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
