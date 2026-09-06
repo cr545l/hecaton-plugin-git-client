@@ -24,31 +24,32 @@
 //   - 자원도 마찬가지다. ACTION_SCOPES 에 적지 않은 동작은 전부를 필요로 한다고 본다.
 //   - 단, 판단 근거가 불확실하면 열어 둔다(fail open). 예를 들어 refs 조회가 실패해
 //     브랜치 목록이 비어 있는 상태를 detached 로 단정하면 멀쩡한 push 까지 막힌다.
+const { t } = require('./i18n');
 const { state, ui } = require('./state');
 
 // ── 사유 문자열 ──
 // 힌트바/토스트에 그대로 나가므로 UI 언어(영문)에 맞추고 한 줄로 유지한다.
 const REASON = {
-  LOADING: 'Loading repository...',
-  BUSY: 'Another operation is running',
-  NO_REPO: 'Not a git repository',
-  INDEX_LOCKED: 'Git index is locked — Unlock first',
-  CONFLICTS: 'Resolve conflicts first',
-  NO_OPERATION: 'No operation in progress',
-  DETACHED: 'Detached HEAD — no current branch',
-  NO_REMOTE: 'No remote configured',
-  NO_UPSTREAM: 'No upstream configured',
-  NO_STAGED: 'Nothing staged',
-  NO_STAGEABLE: 'Nothing to stage',
-  NO_UNSTAGEABLE: 'Nothing to unstage',
-  NO_CHANGES: 'No local changes',
-  NO_UNTRACKED: 'No untracked files',
-  NO_STASH: 'No stashes',
-  NO_COMMIT: 'Select a commit in the history first',
-  NO_MESSAGE: 'Commit message is empty',
-  NO_FILE: 'No file selected',
-  NOT_LOCKED: 'Index is not locked',
-  PARTIAL_CONFLICT: 'Select every conflict to apply',
+  LOADING: t('action.loadingRepository'),
+  BUSY: t('action.anotherOperationRunning'),
+  NO_REPO: t('action.notGitRepository'),
+  INDEX_LOCKED: t('action.gitIndexLockedUnlockFirst'),
+  CONFLICTS: t('action.resolveConflictsFirst'),
+  NO_OPERATION: t('action.noOperationProgress'),
+  DETACHED: t('action.detachedHeadNoCurrentBranch'),
+  NO_REMOTE: t('action.noRemoteConfigured'),
+  NO_UPSTREAM: t('action.noUpstreamConfigured'),
+  NO_STAGED: t('action.nothingStaged'),
+  NO_STAGEABLE: t('action.nothingStage'),
+  NO_UNSTAGEABLE: t('action.nothingUnstage'),
+  NO_CHANGES: t('action.noLocalChanges'),
+  NO_UNTRACKED: t('action.noUntrackedFiles'),
+  NO_STASH: t('action.noStashes'),
+  NO_COMMIT: t('action.selectCommitHistoryFirst'),
+  NO_MESSAGE: t('action.commitMessageEmpty'),
+  NO_FILE: t('action.noFileSelected'),
+  NOT_LOCKED: t('action.indexNotLocked'),
+  PARTIAL_CONFLICT: t('action.selectEveryConflictApply'),
 };
 
 // ── 자원 축 ──
@@ -359,11 +360,11 @@ function operationLabel(type) {
   switch (type) {
     case 'rebase-merge':
     case 'rebase-apply':
-      return 'Rebase';
+      return t('action.rebase');
     case 'merge': return 'Merge';
-    case 'cherry-pick': return 'Cherry-pick';
+    case 'cherry-pick': return t('action.cherryPick');
     case 'revert': return 'Revert';
-    default: return 'Operation';
+    default: return t('action.operation');
   }
 }
 
@@ -442,7 +443,7 @@ function snapshot() {
     repo: !!state.isGitRepo,
     locked: !!state.indexLocked,
     op,
-    opReason: op ? operationLabel(op) + ' in progress' : null,
+    opReason: op ?operationLabel(op) + t('action.progress') : null,
     conflicts: state.unstaged.some(isUnmerged) || state.staged.some(isUnmerged),
     staged: state.staged.length,
     unstaged: state.unstaged.length,

@@ -1,6 +1,7 @@
 // Git operations via hecaton host API (exec_process, fs_*)
 // No direct child_process or fs usage — all operations go through host permission system.
 
+const { t } = require('./i18n');
 const nodePath = require('path');
 const coordinate = require('./coordinate');
 
@@ -39,7 +40,7 @@ async function gitExecChecked(args, cwd, timeout) {
 async function git(args, cwd, timeout) {
   const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (!result || !result.ok) {
-    const err = new Error(result ? result.error || 'git failed' : 'exec_process failed');
+    const err = new Error(result ? result.error || 'git failed' : t('git.execProcessFailed'));
     err.stderr = result ? (result.stderr || '') : '';
     err.stdout = result ? (result.stdout || '') : '';
     if (result && result.stdout) return result.stdout.replace(/\r\n/g, '\n');
@@ -65,7 +66,7 @@ function resultText(value) {
 function truncateGitDetail(text) {
   if (text.length <= MAX_GIT_ERROR_DETAIL) return text;
   const half = Math.floor((MAX_GIT_ERROR_DETAIL - 40) / 2);
-  return text.substring(0, half) + '\n... output truncated ...\n' + text.substring(text.length - half);
+  return text.substring(0, half) + t('git.outputTruncated') + text.substring(text.length - half);
 }
 
 function formatGitFailure(result, fallback, timeoutMs) {
@@ -85,18 +86,16 @@ function formatGitFailure(result, fallback, timeoutMs) {
 
   const exitCode = result && (result.exit_code !== undefined ? result.exit_code : result.code);
   let detail = lines.join('\n').trim();
-  if (!detail && exitCode !== undefined && exitCode !== null) detail = 'Git exited with code ' + exitCode + '.';
-  if (!detail) detail = 'Git did not return an error message.';
+  if (!detail && exitCode !== undefined && exitCode !== null) detail = t('git.gitExitedWithCode') + exitCode + '.';
+  if (!detail) detail = t('git.gitDidNotReturnErrorMessage');
   detail = truncateGitDetail(detail);
 
   let message = fallback + ':\n' + detail;
   if (/timed?\s*out|timeout/i.test(combined)) {
-    message += '\n\nThe Git command exceeded ' + Math.round(timeoutMs / 1000)
-      + ' seconds. Wait for any active Git process to finish, then refresh and retry. '
-      + 'For a very large selection, stage fewer files at a time.';
+    message += t('git.commandTimedOut', { seconds: Math.round(timeoutMs / 1000) });
   } else if (/index\.lock|another git process seems to be running/i.test(combined)) {
-    message += '\n\nAnother Git process may still be using the index. Close or wait for it first. '
-      + 'Use the Unlock button only after confirming no Git process is running.';
+    message += t('git.anotherGitProcessMayStillUsing')
+      + t('git.useUnlockButtonOnlyAfterConfirming');
   }
   return message;
 }
@@ -250,15 +249,15 @@ async function gitIsRepo(cwd) {
   // Provide diagnostic detail for troubleshooting
   const detail = {};
   // Dump raw result for diagnosis
-  detail.error = 'raw: ' + JSON.stringify(result);
+  detail.error = 'raw: ' + JSON.stringify(result);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   if (result && result.__rpcError) {
-    detail.error = 'RPC error: ' + (result.__rpcError.message || JSON.stringify(result.__rpcError));
+    detail.error = 'RPC error: ' + (result.__rpcError.message || JSON.stringify(result.__rpcError));  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   } else if (result) {
     if (result.error) detail.error = result.error;
     if (result.stderr) detail.stderr = result.stderr;
     if (result.exit_code !== undefined) detail.exit_code = result.exit_code;
   } else {
-    detail.error = 'exec_process returned null';
+    detail.error = t('git.execProcessReturnedNull');
   }
   if (detail.error && /not found|cannot find|no such file|ENOENT/i.test(detail.error)) {
     detail.notFound = true;
@@ -268,7 +267,7 @@ async function gitIsRepo(cwd) {
 
 async function gitBranch(cwd) {
   try {
-    return (await git(['branch', '--show-current'], cwd)).trim() || 'HEAD (detached)';
+    return (await git(['branch', '--show-current'], cwd)).trim() || t('git.headDetached');
   } catch {
     return '???';
   }
@@ -469,7 +468,7 @@ async function gitDiffUntracked(cwd, file) {
 }
 
 async function gitStage(cwd, file) {
-  return await gitMutation(['add', '-f', '--', file], cwd, 10000, 'Could not stage ' + file);
+  return await gitMutation(['add', '-f', '--', file], cwd, 10000, t('git.couldNotStage') + file);
 }
 
 // unstage는 커밋 하나 없는 저장소(unborn HEAD)에서도 동작해야 한다.
@@ -477,17 +476,17 @@ async function gitStage(cwd, file) {
 // HEAD를 생략한 'reset'을 쓴다. HEAD가 있으면 'reset HEAD'와 동작이 같고,
 // 없으면 인덱스에서 항목을 지워 untracked로 되돌린다. 워킹트리는 어느 쪽이든 그대로다.
 async function gitUnstage(cwd, file) {
-  return await gitMutation(['reset', '--', file], cwd, 10000, 'Could not unstage ' + file);
+  return await gitMutation(['reset', '--', file], cwd, 10000, t('git.couldNotUnstage') + file);
 }
 
 async function gitStageAll(cwd) {
   // Never force ignored files into the index. `-f -A` can unexpectedly walk
   // large ignored trees such as node_modules/.venv and make Stage All time out.
-  return await gitMutation(['add', '-A'], cwd, GIT_MUTATION_TIMEOUT_MS, 'Could not stage all files');
+  return await gitMutation(['add', '-A'], cwd, GIT_MUTATION_TIMEOUT_MS, t('git.couldNotStageAllFiles'));
 }
 
 async function gitUnstageAll(cwd) {
-  return await gitMutation(['reset'], cwd, GIT_MUTATION_TIMEOUT_MS, 'Could not unstage all files');
+  return await gitMutation(['reset'], cwd, GIT_MUTATION_TIMEOUT_MS, t('git.couldNotUnstageAllFiles'));
 }
 
 async function gitCommit(cwd, message) {
@@ -495,7 +494,7 @@ async function gitCommit(cwd, message) {
     await git(['commit', '-m', message], cwd);
     return null;
   } catch (e) {
-    return e.stderr || e.message || 'Commit failed';
+    return e.stderr || e.message || t('git.commitFailed');
   }
 }
 
@@ -592,21 +591,21 @@ async function gitRunOrError(args, cwd, timeout, errorMsg) {
   return stderr || stdout || errorMsg;
 }
 
-async function gitCheckoutOurs(cwd, file) { return await gitRunOrError(['checkout', '--ours', '--', file], cwd, 10000, 'Checkout ours failed'); }
-async function gitCheckoutTheirs(cwd, file) { return await gitRunOrError(['checkout', '--theirs', '--', file], cwd, 10000, 'Checkout theirs failed'); }
+async function gitCheckoutOurs(cwd, file) { return await gitRunOrError(['checkout', '--ours', '--', file], cwd, 10000, t('git.checkoutOursFailed')); }
+async function gitCheckoutTheirs(cwd, file) { return await gitRunOrError(['checkout', '--theirs', '--', file], cwd, 10000, t('git.checkoutTheirsFailed')); }
 
-async function gitRebase(cwd, ref) { return await gitRunOrError(['rebase', ref], cwd, 30000, 'Rebase failed'); }
-async function gitRebaseContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--continue'], cwd, 30000, 'Rebase continue failed'); }
-async function gitRebaseAbort(cwd) { return await gitRunOrError(['rebase', '--abort'], cwd, 30000, 'Rebase abort failed'); }
-async function gitRebaseSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--skip'], cwd, 30000, 'Rebase skip failed'); }
-async function gitMergeContinue(cwd) { return await gitRunOrError(['commit', '--no-edit'], cwd, 30000, 'Merge commit failed'); }
-async function gitMergeAbort(cwd) { return await gitRunOrError(['merge', '--abort'], cwd, 30000, 'Merge abort failed'); }
-async function gitCherryPickContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cwd, 30000, 'Cherry-pick continue failed'); }
-async function gitCherryPickAbort(cwd) { return await gitRunOrError(['cherry-pick', '--abort'], cwd, 30000, 'Cherry-pick abort failed'); }
-async function gitCherryPickSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'cherry-pick', '--skip'], cwd, 30000, 'Cherry-pick skip failed'); }
-async function gitRevertContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'revert', '--continue'], cwd, 30000, 'Revert continue failed'); }
-async function gitRevertAbort(cwd) { return await gitRunOrError(['revert', '--abort'], cwd, 30000, 'Revert abort failed'); }
-async function gitRevertSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'revert', '--skip'], cwd, 30000, 'Revert skip failed'); }
+async function gitRebase(cwd, ref) { return await gitRunOrError(['rebase', ref], cwd, 30000, t('git.rebaseFailed')); }
+async function gitRebaseContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--continue'], cwd, 30000, t('git.rebaseContinueFailed')); }
+async function gitRebaseAbort(cwd) { return await gitRunOrError(['rebase', '--abort'], cwd, 30000, t('git.rebaseAbortFailed')); }
+async function gitRebaseSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'rebase', '--skip'], cwd, 30000, t('git.rebaseSkipFailed')); }
+async function gitMergeContinue(cwd) { return await gitRunOrError(['commit', '--no-edit'], cwd, 30000, t('git.mergeCommitFailed')); }
+async function gitMergeAbort(cwd) { return await gitRunOrError(['merge', '--abort'], cwd, 30000, t('git.mergeAbortFailed')); }
+async function gitCherryPickContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'cherry-pick', '--continue'], cwd, 30000, t('git.cherryPickContinueFailed')); }
+async function gitCherryPickAbort(cwd) { return await gitRunOrError(['cherry-pick', '--abort'], cwd, 30000, t('git.cherryPickAbortFailed')); }
+async function gitCherryPickSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'cherry-pick', '--skip'], cwd, 30000, t('git.cherryPickSkipFailed')); }
+async function gitRevertContinue(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'revert', '--continue'], cwd, 30000, t('git.revertContinueFailed')); }
+async function gitRevertAbort(cwd) { return await gitRunOrError(['revert', '--abort'], cwd, 30000, t('git.revertAbortFailed')); }
+async function gitRevertSkip(cwd) { return await gitRunOrError(['-c', 'core.editor=true', 'revert', '--skip'], cwd, 30000, t('git.revertSkipFailed')); }
 
 async function gitLogCommits(cwd, extraRefs, maxCount) {
   try {
@@ -827,15 +826,15 @@ async function gitRemoteBranches(cwd) {
   }
 }
 
-async function gitCherryPick(cwd, ref) { return await gitRunOrError(['cherry-pick', ref], cwd, 30000, 'Cherry-pick failed'); }
-async function gitCherryPickNoCommit(cwd, ref) { return await gitRunOrError(['cherry-pick', '--no-commit', ref], cwd, 30000, 'Cherry-pick failed'); }
-async function gitRevert(cwd, ref) { return await gitRunOrError(['revert', '--no-edit', ref], cwd, 30000, 'Revert failed'); }
-async function gitCheckoutRef(cwd, ref) { return await gitRunOrError(['checkout', ref], cwd, 10000, 'Checkout failed'); }
+async function gitCherryPick(cwd, ref) { return await gitRunOrError(['cherry-pick', ref], cwd, 30000, t('git.cherryPickFailed')); }
+async function gitCherryPickNoCommit(cwd, ref) { return await gitRunOrError(['cherry-pick', '--no-commit', ref], cwd, 30000, t('git.cherryPickFailed')); }
+async function gitRevert(cwd, ref) { return await gitRunOrError(['revert', '--no-edit', ref], cwd, 30000, t('git.revertFailed')); }
+async function gitCheckoutRef(cwd, ref) { return await gitRunOrError(['checkout', ref], cwd, 10000, t('git.checkoutFailed')); }
 
 async function gitCreateBranch(cwd, name, startPoint) {
   const args = ['checkout', '-b', name];
   if (startPoint) args.push(startPoint);
-  return await gitRunOrError(args, cwd, 10000, 'Create branch failed');
+  return await gitRunOrError(args, cwd, 10000, t('git.createBranchFailed'));
 }
 
 async function gitCreateTag(cwd, name, ref) {
@@ -845,12 +844,12 @@ async function gitCreateTag(cwd, name, ref) {
     await git(args, cwd);
     return null;
   } catch (e) {
-    return e.stderr || e.message || 'Create tag failed';
+    return e.stderr || e.message || t('git.createTagFailed');
   }
 }
 
-async function gitReset(cwd, ref) { return await gitRunOrError(['reset', '--hard', ref], cwd, 30000, 'Reset failed'); }
-async function gitMerge(cwd, ref) { return await gitRunOrError(['merge', ref], cwd, 30000, 'Merge failed'); }
+async function gitReset(cwd, ref) { return await gitRunOrError(['reset', '--hard', ref], cwd, 30000, t('git.resetFailed')); }
+async function gitMerge(cwd, ref) { return await gitRunOrError(['merge', ref], cwd, 30000, t('git.mergeFailed')); }
 
 async function gitAheadBehind(cwd) {
   try {
@@ -862,9 +861,9 @@ async function gitAheadBehind(cwd) {
   }
 }
 
-async function gitFetch(cwd) { return await gitRunOrError(['fetch', '--all', '--prune'], cwd, 30000, 'Fetch failed'); }
-async function gitPull(cwd) { return await gitRunOrError(['pull'], cwd, 30000, 'Pull failed'); }
-async function gitPush(cwd) { return await gitRunOrError(['push'], cwd, 30000, 'Push failed'); }
+async function gitFetch(cwd) { return await gitRunOrError(['fetch', '--all', '--prune'], cwd, 30000, t('git.fetchFailed')); }
+async function gitPull(cwd) { return await gitRunOrError(['pull'], cwd, 30000, t('git.pullFailed')); }
+async function gitPush(cwd) { return await gitRunOrError(['push'], cwd, 30000, t('git.pushFailed')); }
 
 // Async helpers — in Deno runner, exec_process is synchronous RPC,
 // but we wrap in Promise to keep the same API for spinner-compatible callers.
@@ -875,7 +874,7 @@ async function gitAsyncWrap(args, cwd, timeout) {
   // stderr 가 비었다고 'Operation failed' 로 뭉개지 말고 stdout 을 쓴다.
   const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';
   const stdout = r && r.stdout ? r.stdout.replace(/\r\n/g, '\n').trim() : '';
-  return stderr || stdout || 'Operation failed';
+  return stderr || stdout || t('menu.operationFailed');
 }
 
 async function gitCheckRebaseConflicts(cwd, targetRef) {
@@ -1031,7 +1030,7 @@ function buildHunkPatchText(rawLines, hunkIdx) {
 async function gitApplyPatchText(cwd, patchText, opts = {}) {
   try {
     const gitDirAbs = await resolveGitDirAbs(cwd);
-    if (!gitDirAbs) return 'Failed to resolve git directory';
+    if (!gitDirAbs) return t('git.failedResolveGitDirectory');
     const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
     const patchPath = gitDirAbs + sep + 'hecaton-hunk.patch';
     await hecaton.fs.write_file({ path: patchPath, content: patchText });
@@ -1039,9 +1038,9 @@ async function gitApplyPatchText(cwd, patchText, opts = {}) {
     if (opts.cached) args.push('--cached');
     if (opts.reverse) args.push('-R');
     args.push(patchPath);
-    return await gitRunOrError(args, cwd, 10000, 'Apply patch failed');
+    return await gitRunOrError(args, cwd, 10000, t('git.applyPatchFailed'));
   } catch (e) {
-    return (e && e.message) || 'Apply patch failed';
+    return (e && e.message) || t('git.applyPatchFailed');
   }
 }
 
@@ -1049,15 +1048,15 @@ async function gitApplyPatchText(cwd, patchText, opts = {}) {
 // git이 editor를 shell로 실행할 때 'cp "<src>" <대상파일>' 형태가 되도록 복사 명령 구성
 function buildCopyEditorCommand(srcPath) {
   if (typeof process !== 'undefined' && process.platform === 'win32') {
-    return 'cmd /c copy /y "' + srcPath + '"';
+    return 'cmd /c copy /y "' + srcPath + '"';  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   }
-  return 'cp "' + srcPath.replace(/(["\\$`])/g, '\\$1') + '"';
+  return 'cp "' + srcPath.replace(/(["\\$`])/g, '\\$1') + '"';  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
 }
 
 // baseRef..HEAD 커밋을 오래된 순으로 나열 (baseRef가 null이면 루트부터 전체)
 async function listRebaseCommits(cwd, baseRef) {
   const args = ['rev-list', '--reverse'];
-  if (baseRef) args.push(baseRef + '..HEAD'); else args.push('HEAD');
+  if (baseRef) args.push(baseRef + '..HEAD'); else args.push('HEAD');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   const raw = (await gitExec(args, cwd, 15000)).trim();
   return raw ? raw.split('\n').map(s => s.trim()).filter(Boolean) : [];
 }
@@ -1068,16 +1067,16 @@ async function listRebaseCommits(cwd, baseRef) {
 // 에디터를 호출하지 않으므로 edit + amend + continue 방식을 사용해야 한다.
 async function gitRunRebaseTodo(cwd, baseRef, todoContent) {
   const gitDirAbs = await resolveGitDirAbs(cwd);
-  if (!gitDirAbs) return 'Failed to resolve git directory';
+  if (!gitDirAbs) return t('git.failedResolveGitDirectory');
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
   const todoPath = gitDirAbs + sep + 'hecaton-rebase-todo.txt';
   try {
     await hecaton.fs.write_file({ path: todoPath, content: todoContent });
   } catch (e) {
-    return (e && e.message) || 'Failed to write rebase todo';
+    return (e && e.message) || t('git.failedWriteRebaseTodo');
   }
   const args = [
-    '-c', 'sequence.editor=' + buildCopyEditorCommand(todoPath),
+    '-c', 'sequence.editor=' + buildCopyEditorCommand(todoPath),  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
     '-c', 'core.editor=true',
     'rebase', '-i',
   ];
@@ -1090,7 +1089,7 @@ async function gitRunRebaseTodo(cwd, baseRef, todoContent) {
 // (reword todo는 비대화형 환경에서 에디터가 호출되지 않아 사용 불가)
 async function gitRewordCommitAsync(cwd, ref, message) {
   const full = (await gitExec(['rev-parse', ref], cwd)).trim();
-  if (!full) return 'Cannot resolve commit ' + ref;
+  if (!full) return t('git.cannotResolveCommit') + ref;
   const head = (await gitExec(['rev-parse', 'HEAD'], cwd)).trim();
   if (head && head === full) {
     return await gitCommitAmendMessageOnlyAsync(cwd, message);
@@ -1098,7 +1097,7 @@ async function gitRewordCommitAsync(cwd, ref, message) {
   const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
   const base = parent ? full + '^' : null;
   const commits = await listRebaseCommits(cwd, base);
-  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  if (!commits.includes(full)) return t('git.commitNotAncestorHead');
   const todo = commits.map(h => (h === full ? 'edit ' : 'pick ') + h).join('\n') + '\n';
   const startErr = await gitRunRebaseTodo(cwd, base, todo);
   if (startErr) return startErr;
@@ -1113,13 +1112,13 @@ async function gitRewordCommitAsync(cwd, ref, message) {
 // 커밋을 부모로 합치기. discardMessage=true면 fixup(메시지 버림), 아니면 squash(메시지 결합).
 async function gitSquashIntoParentAsync(cwd, ref, discardMessage) {
   const full = (await gitExec(['rev-parse', ref], cwd)).trim();
-  if (!full) return 'Cannot resolve commit ' + ref;
+  if (!full) return t('git.cannotResolveCommit') + ref;
   const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
-  if (!parent) return 'Commit has no parent to squash into';
+  if (!parent) return t('git.commitHasNoParentSquashInto');
   const grandparent = (await gitExec(['rev-parse', '--verify', '--quiet', parent + '^'], cwd)).trim();
   const base = grandparent ? full + '^^' : null;
   const commits = await listRebaseCommits(cwd, base);
-  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  if (!commits.includes(full)) return t('git.commitNotAncestorHead');
   const todo = commits.map(h => (h === full ? (discardMessage ? 'fixup ' : 'squash ') : 'pick ') + h).join('\n') + '\n';
   return await gitRunRebaseTodo(cwd, base, todo);
 }
@@ -1127,11 +1126,11 @@ async function gitSquashIntoParentAsync(cwd, ref, discardMessage) {
 // 커밋을 히스토리에서 제거
 async function gitDropCommitAsync(cwd, ref) {
   const full = (await gitExec(['rev-parse', ref], cwd)).trim();
-  if (!full) return 'Cannot resolve commit ' + ref;
+  if (!full) return t('git.cannotResolveCommit') + ref;
   const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
   const base = parent ? full + '^' : null;
   const commits = await listRebaseCommits(cwd, base);
-  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  if (!commits.includes(full)) return t('git.commitNotAncestorHead');
   const remaining = commits.filter(h => h !== full);
   const todo = remaining.length > 0 ? remaining.map(h => 'pick ' + h).join('\n') + '\n' : 'noop\n';
   return await gitRunRebaseTodo(cwd, base, todo);
@@ -1140,11 +1139,11 @@ async function gitDropCommitAsync(cwd, ref) {
 // 해당 커밋에서 리베이스를 멈춰 내용 수정(amend) 가능 상태로 만든다
 async function gitEditCommitAsync(cwd, ref) {
   const full = (await gitExec(['rev-parse', ref], cwd)).trim();
-  if (!full) return 'Cannot resolve commit ' + ref;
+  if (!full) return t('git.cannotResolveCommit') + ref;
   const parent = (await gitExec(['rev-parse', '--verify', '--quiet', full + '^'], cwd)).trim();
   const base = parent ? full + '^' : null;
   const commits = await listRebaseCommits(cwd, base);
-  if (!commits.includes(full)) return 'Commit is not an ancestor of HEAD';
+  if (!commits.includes(full)) return t('git.commitNotAncestorHead');
   const todo = commits.map(h => (h === full ? 'edit ' : 'pick ') + h).join('\n') + '\n';
   return await gitRunRebaseTodo(cwd, base, todo);
 }
@@ -1162,7 +1161,7 @@ async function gitStageMultiple(cwd, files) {
     ['add', '-f', '--', ...files],
     cwd,
     GIT_MUTATION_TIMEOUT_MS,
-    'Could not stage ' + files.length + ' selected files'
+    t('git.couldNotStagePrefix') + files.length + t('git.selectedFilesSuffix')
   );
 }
 async function gitUnstageMultiple(cwd, files) {
@@ -1172,7 +1171,7 @@ async function gitUnstageMultiple(cwd, files) {
     ['reset', '--', ...files],
     cwd,
     GIT_MUTATION_TIMEOUT_MS,
-    'Could not unstage ' + files.length + ' selected files'
+    t('git.couldNotUnstagePrefix') + files.length + t('git.selectedFilesSuffix')
   );
 }
 
@@ -1209,7 +1208,7 @@ async function hasBranchConfigSection(cwd, name) {
 // 확인하고 남은 config 섹션을 직접 옮겨 마무리한다.
 // 반환: { renamed, error } — renamed 는 ref 가 새 이름으로 옮겨졌는지.
 async function gitRenameBranch(cwd, oldName, newName) {
-  const err = await gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, 'Rename branch failed');
+  const err = await gitRunOrError(['branch', '-m', oldName, newName], cwd, 10000, t('git.renameBranchFailed'));
   if (!err) return { renamed: true, error: null };
   // ref 가 그대로면 이름 충돌·없는 브랜치 같은 평범한 실패다.
   if (!(await branchRefExists(cwd, newName)) || await branchRefExists(cwd, oldName)) {
@@ -1219,18 +1218,17 @@ async function gitRenameBranch(cwd, oldName, newName) {
   if (!(await hasBranchConfigSection(cwd, oldName))) return { renamed: true, error: null };
   const moveErr = await gitRunOrError(
     ['config', '--local', '--rename-section', 'branch.' + oldName, 'branch.' + newName],
-    cwd, 10000, 'Could not move branch config',
+    cwd, 10000, t('git.couldNotMoveBranchConfig'),
   );
   if (!moveErr) return { renamed: true, error: null };
   return {
     renamed: true,
-    error: "Branch was renamed to '" + newName + "', but .git/config could not be updated.\n"
-      + "Upstream settings are still stored under '" + oldName + "'.\n\n" + moveErr,
+    error: t('git.branchRenamedConfigNotUpdated', { newName, oldName, error: moveErr }),
   };
 }
-async function gitDeleteBranch(cwd, name, force) { return await gitRunOrError(['branch', force ? '-D' : '-d', name], cwd, 10000, 'Delete branch failed'); }
-async function gitSetUpstream(cwd, branch, upstream) { return await gitRunOrError(['branch', '--set-upstream-to=' + upstream, branch], cwd, 10000, 'Set upstream failed'); }
-async function gitUnsetUpstream(cwd, branch) { return await gitRunOrError(['branch', '--unset-upstream', branch], cwd, 10000, 'Unset upstream failed'); }
+async function gitDeleteBranch(cwd, name, force) { return await gitRunOrError(['branch', force ? '-D' : '-d', name], cwd, 10000, t('git.deleteBranchFailed')); }
+async function gitSetUpstream(cwd, branch, upstream) { return await gitRunOrError(['branch', '--set-upstream-to=' + upstream, branch], cwd, 10000, t('git.setUpstreamFailed')); }
+async function gitUnsetUpstream(cwd, branch) { return await gitRunOrError(['branch', '--unset-upstream', branch], cwd, 10000, t('git.unsetUpstreamFailed')); }
 
 async function gitGetRemoteUrl(cwd, remote) {
   try {
@@ -1281,9 +1279,9 @@ async function gitPushDeleteTagAsync(cwd, remote, tag) {
   return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, '--delete', 'refs/tags/' + tag], cwd, NETWORK_OP_TIMEOUT_MS));
 }
 
-async function gitRemoteRemove(cwd, name) { return await gitRunOrError(['remote', 'remove', name], cwd, 10000, 'Remote remove failed'); }
-async function gitRemoteRename(cwd, oldName, newName) { return await gitRunOrError(['remote', 'rename', oldName, newName], cwd, 30000, 'Remote rename failed'); }
-async function gitRemoteSetUrl(cwd, name, url) { return await gitRunOrError(['remote', 'set-url', name, url], cwd, 10000, 'Remote set-url failed'); }
+async function gitRemoteRemove(cwd, name) { return await gitRunOrError(['remote', 'remove', name], cwd, 10000, t('git.remoteRemoveFailed')); }
+async function gitRemoteRename(cwd, oldName, newName) { return await gitRunOrError(['remote', 'rename', oldName, newName], cwd, 30000, t('git.remoteRenameFailed')); }
+async function gitRemoteSetUrl(cwd, name, url) { return await gitRunOrError(['remote', 'set-url', name, url], cwd, 10000, t('git.remoteSetUrlFailed')); }
 async function gitRemotePruneAsync(cwd, name) { return await gitAsyncWrap(['remote', 'prune', name], cwd); }
 
 // ── Worktree 관리 ──
@@ -1291,13 +1289,13 @@ async function gitWorktreeAdd(cwd, path, branch, createBranch) {
   const args = ['worktree', 'add'];
   if (createBranch) args.push('-b', branch, path);
   else args.push(path, branch);
-  return await gitRunOrError(args, cwd, 30000, 'Worktree add failed');
+  return await gitRunOrError(args, cwd, 30000, t('git.worktreeAddFailed'));
 }
 async function gitWorktreeRemove(cwd, path, force) {
   const args = ['worktree', 'remove'];
   if (force) args.push('--force');
   args.push(path);
-  return await gitRunOrError(args, cwd, 30000, 'Worktree remove failed');
+  return await gitRunOrError(args, cwd, 30000, t('git.worktreeRemoveFailed'));
 }
 async function gitWorktreePruneAsync(cwd) { return await gitAsyncWrap(['worktree', 'prune'], cwd, 30000); }
 async function gitBranchExists(cwd, name) {
@@ -1322,9 +1320,9 @@ async function gitBranchExists(cwd, name) {
 const UNLINK_BLOCKED_RE = /unable to unlink (?:old )?'([^']*)'/i;
 const REMOVE_BLOCKED_RE = /failed to remove ([^\n]*): (?:Invalid argument|Permission denied|Device or resource busy|Directory not empty)/i;
 const LOCKED_FILE_HINT =
-  'Another process is holding the file open, so Git cannot delete it before replacing it. '
-  + 'Close whatever has it open and try again — a handle inherited by a background process '
-  + 'can keep the lock even after the window that opened the file is gone.';
+  t('git.anotherProcessHoldingFileOpenSo')
+  + t('git.closeWhateverHasItOpenTry')
+  + t('git.canKeepLockEvenAfterWindow');
 
 // 잠금과 증상이 같은 별개의 원인: Win32가 파일로 가리킬 수 없는 이름. nul, con,
 // aux, com1 … 은 경로 어디에 있든 장치로 해석되고, 이름 끝의 점·공백은 조용히
@@ -1334,9 +1332,9 @@ const LOCKED_FILE_HINT =
 // 프로세스를 닫으라는 안내는 이 경우엔 틀린 진단이라 원인별로 갈라 준다.
 const WIN32_DEVICE_NAME_RE = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i;
 const RESERVED_NAME_HINT =
-  'Windows keeps this name for a device (NUL, CON, AUX, COM1 …) — and also drops a trailing '
-  + 'dot or space — so no Win32 path can point at the entry and Git cannot delete it. Git Bash '
-  + 'reaches it through MSYS: run "rm -rf <path>" from the repository root.';
+  t('git.windowsKeepsThisNameDeviceNul')
+  + t('git.dotSpaceSoNoWin32Path')
+  + t('git.reachesItThroughMsysRunRm');
 
 function isUnlinkBlockedError(message) { return !!message && UNLINK_BLOCKED_RE.test(message); }
 function isFileLockedError(message) {
@@ -1413,32 +1411,32 @@ async function cleanWithUnnameableFallback(cwd, originalError, retry) {
 // 잠긴 파일에서도 항상 성공한다. 성공하면 null, 실패하면 사유 문자열.
 async function restoreFileInPlace(cwd, file, source) {
   if (source === 'head') {
-    const indexErr = await gitRunOrError(['restore', '--staged', '--source=HEAD', '--', file], cwd, 10000, 'Index reset failed');
+    const indexErr = await gitRunOrError(['restore', '--staged', '--source=HEAD', '--', file], cwd, 10000, t('git.indexResetFailed'));
     if (indexErr) return indexErr;
   }
 
   const listed = await gitResult(['checkout-index', '--temp', '--', file], cwd, 15000);
-  if (!listed || !listed.ok || listed.exit_code !== 0) return 'the indexed content could not be extracted';
+  if (!listed || !listed.ok || listed.exit_code !== 0) return t('git.indexedContentCouldNotExtracted');
   // 출력은 "<임시파일 이름>\t<경로>" 한 줄. 임시 파일은 실행 디렉터리(=워크트리 루트)에 생긴다.
   const line = (listed.stdout || '').replace(/\r\n/g, '\n').split('\n').filter(Boolean)[0] || '';
   const tab = line.indexOf('\t');
-  if (tab <= 0) return 'the indexed content could not be extracted';
+  if (tab <= 0) return t('git.indexedContentCouldNotExtracted');
 
   const tempAbs = nodePath.join(cwd, line.substring(0, tab));
   let reason = null;
   try {
     // 복사는 대상 파일을 truncate 해서 덮어쓴다 — unlink가 없으니 잠겨 있어도 통과한다.
     const copied = await hecaton.fs.copy({ from_path: tempAbs, to_path: nodePath.join(cwd, file), overwrite: true });
-    if (!copied || copied.ok === false) reason = (copied && copied.error) || 'the in-place overwrite was rejected';
+    if (!copied || copied.ok === false) reason = (copied && copied.error) || t('git.placeOverwriteWasRejected');
   } catch (e) {
-    reason = (e && e.message) || 'the in-place overwrite failed';
+    reason = (e && e.message) || t('git.placeOverwriteFailed');
   }
   try { await hecaton.fs.delete({ path: tempAbs }); } catch { /* 임시 파일이 남아도 동작에는 지장이 없다 */ }
   if (reason) return reason;
 
   // 정말 되돌아갔는지는 git에게 확인받는다. 여기서 걸리면 파일만 건드리고 끝난 것이다.
   const verify = await gitResult(['diff', '--quiet', '--', file], cwd, 10000);
-  if (!verify || !verify.ok || verify.exit_code !== 0) return 'the file still differs after the in-place restore';
+  if (!verify || !verify.ok || verify.exit_code !== 0) return t('git.fileStillDiffersAfterPlaceRestore');
   return null;
 }
 
@@ -1449,7 +1447,7 @@ async function discardWithInPlaceFallback(cwd, file, source, originalError) {
   const reason = await restoreFileInPlace(cwd, file, source);
   if (!reason) return null;
   return originalError + '\n\n' + LOCKED_FILE_HINT
-    + '\n\nRestoring the content in place also failed: ' + reason + '.';
+    + t('git.restoringContentPlaceAlsoFailed') + reason + '.';
 }
 
 // 미추적 파일/디렉터리 일괄 삭제 (.gitignore 대상 제외)
@@ -1479,7 +1477,7 @@ async function gitDiscardAllChangesAsync(cwd) {
     }
     if (recovered) trackedErr = await gitAsyncWrap(['reset', '--hard', '--recurse-submodules', 'HEAD'], cwd, 30000);
   }
-  if (trackedErr) return 'Failed to discard tracked changes: ' + withLockedFileHint(trackedErr);
+  if (trackedErr) return t('git.failedDiscardTrackedChanges') + withLockedFileHint(trackedErr);
 
   // A second force is required for untracked directories that are Git repos.
   // Before the first commit there is no committed ignore configuration to
@@ -1488,27 +1486,27 @@ async function gitDiscardAllChangesAsync(cwd) {
     hasHead ? ['-c', 'core.quotePath=false', 'clean', '-ffd'] : ['-c', 'core.quotePath=false', 'clean', '-ffdx'], cwd, 30000);
   let cleanErr = await runClean();
   if (cleanErr) cleanErr = await cleanWithUnnameableFallback(cwd, cleanErr, runClean);
-  if (cleanErr) return 'Tracked changes were discarded, but untracked cleanup failed: ' + cleanErr;
+  if (cleanErr) return t('git.trackedChangesWereDiscardedButUntracked') + cleanErr;
   if (hasHead) {
     const submoduleCleanErr = await gitAsyncWrap(['submodule', 'foreach', '--recursive', 'git clean -ffd'], cwd, 30000);
-    if (submoduleCleanErr) return 'Top-level changes were discarded, but submodule cleanup failed: ' + submoduleCleanErr;
+    if (submoduleCleanErr) return t('git.topLevelChangesWereDiscardedBut') + submoduleCleanErr;
   }
   return null;
 }
 
 // ── 저장소 생성 ──
-async function gitInit(cwd) { return await gitRunOrError(['init'], cwd, 10000, 'Init failed'); }
+async function gitInit(cwd) { return await gitRunOrError(['init'], cwd, 10000, t('git.initFailed')); }
 async function gitCloneAsync(parentDir, url, dirName) {
   const args = ['clone', url];
   if (dirName) args.push(dirName);
   return await gitAsyncWrap(args, parentDir, 600000);
 }
 
-async function gitDeleteTag(cwd, name) { return await gitRunOrError(['tag', '-d', name], cwd, 10000, 'Delete tag failed'); }
+async function gitDeleteTag(cwd, name) { return await gitRunOrError(['tag', '-d', name], cwd, 10000, t('git.deleteTagFailed')); }
 async function gitCreateTagAnnotated(cwd, name, message, ref) {
   const args = ['tag', '-a', name, '-m', message];
   if (ref) args.push(ref);
-  return await gitRunOrError(args, cwd, 10000, 'Create tag failed');
+  return await gitRunOrError(args, cwd, 10000, t('git.createTagFailed'));
 }
 
 // 클립보드 등 텍스트 패치를 워크트리에 적용. format-patch(mbox) 형식이면 git am으로
@@ -1516,13 +1514,13 @@ async function gitCreateTagAnnotated(cwd, name, message, ref) {
 async function gitApplyPatchFromText(cwd, patchText) {
   const isMbox = /^From [0-9a-f]{40} /m.test(patchText);
   const gitDirAbs = await resolveGitDirAbs(cwd);
-  if (!gitDirAbs) return 'Failed to resolve git directory';
+  if (!gitDirAbs) return t('git.failedResolveGitDirectory');
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
   const patchPath = gitDirAbs + sep + 'hecaton-apply.patch';
   try {
     await hecaton.fs.write_file({ path: patchPath, content: patchText.endsWith('\n') ? patchText : patchText + '\n' });
   } catch (e) {
-    return (e && e.message) || 'Failed to write patch file';
+    return (e && e.message) || t('git.failedWritePatchFile');
   }
   if (isMbox) {
     const err = await gitAsyncWrap(['am', '--whitespace=nowarn', patchPath], cwd, 30000);
@@ -1532,24 +1530,24 @@ async function gitApplyPatchFromText(cwd, patchText) {
     }
     return null;
   }
-  return await gitRunOrError(['apply', '--whitespace=nowarn', patchPath], cwd, 10000, 'Apply patch failed');
+  return await gitRunOrError(['apply', '--whitespace=nowarn', patchPath], cwd, 10000, t('git.applyPatchFailed'));
 }
 
-async function gitStashSave(cwd) { return await gitRunOrError(['stash', 'push'], cwd, 10000, 'Stash failed'); }
-async function gitStashPop(cwd) { return await gitRunOrError(['stash', 'pop'], cwd, 10000, 'Stash pop failed'); }
-async function gitStashApply(cwd, ref) { return await gitRunOrError(['stash', 'apply', ref], cwd, 10000, 'Stash apply failed'); }
-async function gitStashDrop(cwd, ref) { return await gitRunOrError(['stash', 'drop', ref], cwd, 10000, 'Stash drop failed'); }
+async function gitStashSave(cwd) { return await gitRunOrError(['stash', 'push'], cwd, 10000, t('git.stashFailed')); }
+async function gitStashPop(cwd) { return await gitRunOrError(['stash', 'pop'], cwd, 10000, t('git.stashPopFailed')); }
+async function gitStashApply(cwd, ref) { return await gitRunOrError(['stash', 'apply', ref], cwd, 10000, t('git.stashApplyFailed')); }
+async function gitStashDrop(cwd, ref) { return await gitRunOrError(['stash', 'drop', ref], cwd, 10000, t('git.stashDropFailed')); }
 
 async function gitStashRename(cwd, ref, newMessage) {
   try {
     const hash = (await git(['rev-parse', ref], cwd)).trim();
     const r1 = await gitResult(['stash', 'drop', ref], cwd, 10000);
-    if (!r1 || !r1.ok) return 'Stash drop failed';
+    if (!r1 || !r1.ok) return t('git.stashDropFailed');
     const r2 = await gitResult(['stash', 'store', '-m', newMessage, hash], cwd, 10000);
-    if (!r2 || !r2.ok) return 'Stash store failed';
+    if (!r2 || !r2.ok) return t('git.stashStoreFailed');
     return null;
   } catch (e) {
-    return e.stderr || e.message || 'Stash rename failed';
+    return e.stderr || e.message || t('git.stashRenameFailed');
   }
 }
 
@@ -1565,7 +1563,7 @@ async function gitWriteRebaseMessage(cwd, message, opType) {
     await hecaton.fs.write_file({ path: msgPath, content: message + '\n' });
     return null;
   } catch (e) {
-    return e.message || 'Failed to write rebase message';
+    return e.message || t('git.failedWriteRebaseMessage');
   }
 }
 
@@ -1593,22 +1591,22 @@ async function gitCommitMessage(cwd, ref) {
   }
 }
 
-async function gitRemoteAdd(cwd, name, url) { return await gitRunOrError(['remote', 'add', name, url], cwd, 10000, 'Remote add failed'); }
+async function gitRemoteAdd(cwd, name, url) { return await gitRunOrError(['remote', 'add', name, url], cwd, 10000, t('git.remoteAddFailed')); }
 
 async function gitDiscardFile(cwd, item) {
-  if (!item || !item.file) return 'No file selected';
+  if (!item || !item.file) return t('action.noFileSelected');
   // clean은 파일을 지우는 것 자체가 목적이라 제자리 덮어쓰기로 대신할 수 없다.
   // 이름 때문에 막힌 것이라면 MSYS rm 으로 치우고, 잠긴 것이라면 사유만 덧붙인다.
   if (item.type === 'untracked') {
-    const run = () => gitRunOrError(['-c', 'core.quotePath=false', 'clean', '-f', '--', item.file], cwd, 10000, 'Discard failed');
+    const run = () => gitRunOrError(['-c', 'core.quotePath=false', 'clean', '-f', '--', item.file], cwd, 10000, t('git.discardFailed'));
     const err = await run();
     return err ? await cleanWithUnnameableFallback(cwd, err, run) : null;
   }
   if (item.type === 'staged') {
-    const err = await gitRunOrError(['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], cwd, 10000, 'Discard failed');
+    const err = await gitRunOrError(['restore', '--staged', '--worktree', '--source=HEAD', '--', item.file], cwd, 10000, t('git.discardFailed'));
     return err ? await discardWithInPlaceFallback(cwd, item.file, 'head', err) : null;
   }
-  const err = await gitRunOrError(['restore', '--', item.file], cwd, 10000, 'Discard failed');
+  const err = await gitRunOrError(['restore', '--', item.file], cwd, 10000, t('git.discardFailed'));
   return err ? await discardWithInPlaceFallback(cwd, item.file, 'index', err) : null;
 }
 
@@ -1616,25 +1614,25 @@ async function gitDiscardFile(cwd, item) {
 // keepLocal=true  → git rm --cached : 추적 중단, 로컬 파일 유지 (이후 untracked가 됨)
 // keepLocal=false → git rm          : 추적 중단 + 로컬 파일 삭제
 async function gitRemoveFromRepo(cwd, file, keepLocal) {
-  if (!file) return 'No file selected';
+  if (!file) return t('action.noFileSelected');
   const args = keepLocal
     ? ['rm', '--cached', '-r', '-f', '--', file]
     : ['rm', '-r', '-f', '--', file];
-  return await gitRunOrError(args, cwd, 10000, keepLocal ? 'Remove from repository failed' : 'Delete failed');
+  return await gitRunOrError(args, cwd, 10000, keepLocal ? t('git.removeFromRepositoryFailed') : t('git.deleteFailed'));
 }
 
 async function gitStashFile(cwd, file) {
-  if (!file) return 'No file selected';
-  return await gitRunOrError(['stash', 'push', '-u', '--', file], cwd, 10000, 'Stash file failed');
+  if (!file) return t('action.noFileSelected');
+  return await gitRunOrError(['stash', 'push', '-u', '--', file], cwd, 10000, t('git.stashFileFailed'));
 }
 
 async function gitStashFiles(cwd, files) {
-  if (!files || files.length === 0) return 'No files selected';
-  return await gitRunOrError(['stash', 'push', '-u', '--', ...files], cwd, 10000, 'Stash files failed');
+  if (!files || files.length === 0) return t('menu.noFilesSelected');
+  return await gitRunOrError(['stash', 'push', '-u', '--', ...files], cwd, 10000, t('git.stashFilesFailed'));
 }
 
 async function gitIgnorePattern(cwd, pattern) {
-  if (!pattern) return 'No ignore pattern';
+  if (!pattern) return t('git.noIgnorePattern');
   try {
     const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
     const ignorePath = cwd + sep + '.gitignore';
@@ -1647,10 +1645,10 @@ async function gitIgnorePattern(cwd, pattern) {
     if (lines.some(line => line.trim() === normalized)) return null;
     const content = (lines.length > 0 ? lines.join('\n').replace(/\n*$/, '\n') : '') + normalized + '\n';
     const writeRes = await hecaton.fs.write_file({ path: ignorePath, content });
-    if (!writeRes || !writeRes.ok) return 'Failed to write .gitignore';
+    if (!writeRes || !writeRes.ok) return t('git.failedWriteGitignore');
     return null;
   } catch (e) {
-    return e.message || 'Ignore update failed';
+    return e.message || t('git.ignoreUpdateFailed');
   }
 }
 
@@ -1673,13 +1671,13 @@ async function gitBlameFile(cwd, file) {
 async function gitGetConfig(cwd, key) { try { return (await git(['config', key], cwd)).trim(); } catch { return ''; } }
 async function gitGetConfigLocal(cwd, key) { try { return (await git(['config', '--local', key], cwd)).trim(); } catch { return ''; } }
 async function gitGetConfigGlobal(cwd, key) { try { return (await git(['config', '--global', key], cwd)).trim(); } catch { return ''; } }
-async function gitSetConfig(cwd, key, value) { try { await git(['config', key, value], cwd); return null; } catch (e) { return e.stderr || e.message || 'Config set failed'; } }
-async function gitUnsetConfigLocal(cwd, key) { try { await git(['config', '--local', '--unset', key], cwd); return null; } catch (e) { return e.stderr || e.message || 'Config unset failed'; } }
+async function gitSetConfig(cwd, key, value) { try { await git(['config', key, value], cwd); return null; } catch (e) { return e.stderr || e.message || t('git.configSetFailed'); } }
+async function gitUnsetConfigLocal(cwd, key) { try { await git(['config', '--local', '--unset', key], cwd); return null; } catch (e) { return e.stderr || e.message || t('git.configUnsetFailed'); } }
 
 async function gitFreshLog(cwd, days) {
   try {
     const raw = await git(
-      ['log', '--max-count=1000', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],
+      ['log', '--max-count=1000', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
       cwd
     );
     const items = [];
@@ -1865,7 +1863,7 @@ async function gitWriteConflictResolution(cwd, file, content) {
     await hecaton.fs.write_file({ path: repoFilePath(cwd, file), content });
     return null;
   } catch (e) {
-    return e && e.message ? e.message : 'Failed to write conflict resolution';
+    return e && e.message ? e.message : t('git.failedWriteConflictResolution');
   }
 }
 

@@ -16,6 +16,7 @@
 // 아니라 실행 시점의 저장소에서 정해지는 동작만 넣는다. 화면에서 대상을 고르는 동작
 // (파일 스테이징, 고른 커밋으로 reset)을 예약하면 풀려날 때쯤 그 목록이 이미 다른
 // 것으로 바뀌어 있다 — 예약이 사고가 되는 지점이 정확히 거기다.
+const { t } = require('./i18n');
 const { state } = require('./state');
 
 // 예약이 영영 남지 않게 하는 안전망. 정상 흐름에서는 붙잡던 작업이 끝나는 순간
@@ -26,22 +27,22 @@ const TTL_MS = 90000;
 // 타이틀과 토스트에 내보낼 이름. 액션 id 를 그대로 쓰면 'git-push' 같은 내부 이름이
 // 사용자 눈에 보인다.
 const LABELS = {
-  'git-push': 'Push',
-  'git-pull': 'Pull',
-  'git-fetch': 'Fetch',
-  stageSelected: 'Stage',
-  unstageSelected: 'Unstage',
-  stageAll: 'Stage all',
-  unstageAll: 'Unstage all',
+  'git-push': t('menu.push'),
+  'git-pull': t('menu.pull'),
+  'git-fetch': t('queue.fetch'),
+  stageSelected: t('menu.stage'),
+  unstageSelected: t('menu.unstage'),
+  stageAll: t('queue.stageAll'),
+  unstageAll: t('queue.unstageAll'),
 };
-const LABEL_PREFIXES = [['push_to_remote:', 'Push']];
+const LABEL_PREFIXES = [['push_to_remote:', t('menu.push')]];
 
 function labelOf(id) {
   if (LABELS[id]) return LABELS[id];
   for (const [prefix, label] of LABEL_PREFIXES) {
     if (id.startsWith(prefix)) return label;
   }
-  return 'Action';
+  return t('queue.action');
 }
 
 // [{ id, run, label, at, branch }] — branch 는 예약할 때의 현재 브랜치이며,
@@ -160,15 +161,15 @@ function clear() {
 
 // 예약을 유지할 수 없게 된 사유 — 없으면 null.
 function staleReason(entry, now) {
-  if (now - entry.at > TTL_MS) return 'waited too long';
+  if (now - entry.at > TTL_MS) return t('queue.waitedTooLong');
   // 체크아웃이 도는 동안 Push 를 예약해 두면, 풀려날 때는 사용자가 누를 때 보고 있던
   // 브랜치가 아니라 새로 옮겨 간 브랜치가 올라간다. 그건 시킨 일이 아니다.
-  if (entry.branch !== null && entry.branch !== (state.branch || '')) return 'branch changed';
+  if (entry.branch !== null && entry.branch !== (state.branch || '')) return t('queue.branchChanged');
   return null;
 }
 
 function notifyCancelled(entry, reason) {
-  require('./spinner').showToast(entry.label + ' cancelled — ' + reason, 2400);
+  require('./spinner').showToast(entry.label + t('queue.cancelled') + reason, 2400);
 }
 
 function renderNow() {
@@ -211,7 +212,7 @@ function drain() {
       try {
         entry.run(entry.payload);
       } catch (e) {
-        notifyCancelled(entry, (e && e.message) || 'failed to start');
+        notifyCancelled(entry, (e && e.message) || t('queue.failedStart'));
       }
     }
   } finally {

@@ -1,3 +1,4 @@
+const { t } = require('./i18n');
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine } = require('./text');
@@ -48,11 +49,11 @@ const STASH_TEXT = CSI + '38;5;249m'; // ANSI 256 palette #249 (~#b2b2b2)
 function buildCommitterHint(maxWidth) {
   if (!state.isGitRepo || maxWidth < 12) return { content: '', width: 0, zones: [] };
 
-  const name = state.committerName || '(no name)';
-  const email = state.committerEmail || '(no email)';
-  const nameTag = state.committerNameIsLocal ? '[L] ' : '';
-  const emailTag = state.committerEmailIsLocal ? '[L] ' : '';
-  const prefix = maxWidth >= 32 ? ' Committer: ' : ' ';
+  const name = state.committerName || t('ui.noName');
+  const email = state.committerEmail || t('ui.noEmail');
+  const nameTag = state.committerNameIsLocal ? t('ui.l') : '';
+  const emailTag = state.committerEmailIsLocal ? t('ui.l') : '';
+  const prefix = maxWidth >= 32 ? t('ui.committer') : ' ';
   const nameReset = state.committerNameIsLocal ? '\u00D7' : '';
   const emailReset = state.committerEmailIsLocal ? '\u00D7' : '';
   const fixedWidth = visLen(prefix) + visLen(nameTag) + visLen(nameReset)
@@ -214,7 +215,7 @@ function buildBranchHint(name, maxWidth) {
     return joinHintParts([
       { text: name, style: colors.red + ansi.bold },
       { text: tracker ? '← ' + tracker.name : '', style: colors.value },
-      { text: tracker ? '' : 'not tracked by a local branch', style: colors.dim },
+      { text: tracker ? '' : t('ui.notTrackedByLocalBranch'), style: colors.dim },
     ], maxWidth);
   }
 
@@ -228,20 +229,20 @@ function buildBranchHint(name, maxWidth) {
   const holder = state.worktrees.find(w => !w.isCurrent && w.branch === local.name);
 
   let track;
-  if (local.upstreamGone) track = { text: '[gone]', style: colors.red + ansi.bold };
+  if (local.upstreamGone) track = { text: t('ui.gone'), style: colors.red + ansi.bold };
   else if (ahead > 0 || behind > 0) {
     track = {
-      text: (ahead > 0 ? 'push ↑' + ahead + (behind > 0 ? '  ' : '') : '') + (behind > 0 ? 'pull ↓' + behind : ''),
+      text: (ahead > 0 ? t('ui.pushArrow') + ahead + (behind > 0 ? '  ' : '') : '') + (behind > 0 ? t('ui.pullArrow') + behind: ''),
       style: colors.orange + ansi.bold,
     };
-  } else if (upstream) track = { text: 'up to date', style: colors.dim };
-  else track = { text: 'local only', style: colors.dim };
+  } else if (upstream) track = { text: t('ui.upDate'), style: colors.dim };
+  else track = { text: t('ui.localOnly'), style: colors.dim };
 
   return joinHintParts([
     { text: name, style: local.isCurrent ? colors.green + ansi.bold : colors.value },
-    { text: upstream ? '→ ' + upstream + (local.upstream ? '' : ' (not set)') : '', style: colors.red },
+    { text: upstream ? '→ ' + upstream + (local.upstream ? '' : t('ui.notSet')) : '', style: colors.red },
     track,
-    { text: holder ? '[worktree: ' + holder.path + ']' : '', style: colors.cyan },
+    { text: holder ? t('ui.worktree2') + holder.path + ']': '', style: colors.cyan },
   ], maxWidth);
 }
 
@@ -315,7 +316,7 @@ function renderBody() {
   const startRow = 1;
 
   const buf = [];
-  buf.push(ansi.hideCursor + CSI + '?7l');
+  buf.push(ansi.hideCursor + CSI + '?7l');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
 
   // Host-owned scroll: panel builders register their scrollable areas (plus
   // overscan bank content) here; banks/acks/regions are emitted after the body.
@@ -402,14 +403,14 @@ function renderBody() {
     if (repoSetupMode) {
       let row = ansi.moveTo(startRow, startCol);
       let col = startCol;
-      const heading = ' Git Setup ';
+      const heading = t('ui.gitSetup');
       row += colors.cyan + ansi.bold + ansi.inverse + heading + ansi.reset;
       col += visLen(heading);
 
       const setupActions = [
-        { label: ' Initialize Here ', action: 'tab_init' },
-        { label: ' Open Repository... ', action: 'tab_change_repo' },
-        { label: ' Clone Repository... ', action: 'tab_clone' },
+        { label: t('ui.initializeHere'), action: 'tab_init' },
+        { label: t('ui.openRepository'), action: 'tab_change_repo' },
+        { label: t('ui.cloneRepository'), action: 'tab_clone' },
       ];
       for (const item of setupActions) {
         if (col + visLen(item.label) > startCol + width) break;
@@ -432,27 +433,27 @@ function renderBody() {
 
     // Build right-side panel buttons string first to know its width
     let rightParts = []; // { label, action, collapsed }
-    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + 'Status', action: 'toggleStatus', collapsed: ui.leftPanelCollapsed });
+    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + t('ui.status'), action: 'toggleStatus', collapsed: ui.leftPanelCollapsed });
     if (state.rightView === 'log' || state.rightView === 'fresh') {
       // 접기 버튼(Status/Detail)을 먼저, 모드 토글(Sort)은 Diff 토글과 같이 맨 뒤에 둔다.
       if (state.rightView === 'fresh') {
-        rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + 'Files', action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
+        rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + t('ui.files3'), action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
       }
-      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + 'Detail', action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
+      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + t('ui.detail'), action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
       if (state.rightView === 'log') {
-        rightParts.push({ label: '  Sort: ' + (ui.logSortMode === 'date' ? 'date' : 'branch'), action: 'toggleLogSort', collapsed: false });
+        rightParts.push({ label: t('ui.sort') + t(ui.logSortMode === 'date' ? 'ui.sortByDate' : 'ui.sortByBranch'), action: 'toggleLogSort', collapsed: false });
         // 꺼져 있으면 흐리게 — 목록에서 뭔가 빠진 상태라는 걸 버튼만 보고 알 수 있어야 한다.
         rightParts.push({
-          label: '  Recovery: ' + (ui.logShowRecovery ? 'on' : 'off'),
+          label: t('ui.recovery') + (ui.logShowRecovery ? 'on' : 'off'),
           action: 'toggleLogRecovery',
           collapsed: !ui.logShowRecovery,
         });
       }
     } else {
-      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + 'Stage', action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
+      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + t('ui.stage'), action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
       // 파일 목록을 트리로 볼지 — Diff 토글과 같은 성격(보는 방식)이라 나란히 둔다.
-      rightParts.push({ label: '  Files: ' + (ui.fileTreeView ? 'tree' : 'flat'), action: 'toggleFileTree', collapsed: false });
-      rightParts.push({ label: '  Diff: ' + (state.diffView === 'side' ? 'side' : 'unified'), action: 'toggleDiff', collapsed: false });
+      rightParts.push({ label: t('ui.files2') + (ui.fileTreeView ? 'tree' : 'flat'), action: 'toggleFileTree', collapsed: false });
+      rightParts.push({ label: t('ui.diff') + (state.diffView === 'side' ? 'side' : 'unified'), action: 'toggleDiff', collapsed: false });
     }
     let rightTotalW = 0;
     for (const p of rightParts) rightTotalW += visLen(p.label);
@@ -470,9 +471,9 @@ function renderBody() {
       const isLocal = state.rightView === 'diff';
       const isCommits = state.rightView === 'log';
       const isFresh = state.rightView === 'fresh';
-      const localLabel = state.loading ? ' Local ... ' : ` Local *${totalChanges} `;
-      const commitsLabel = ' Commits ';
-      const freshLabel = ' Files ';
+      const localLabel = state.loading ? t('ui.local') : t('ui.localChanges', { totalChanges });
+      const commitsLabel = t('ui.commits');
+      const freshLabel = t('ui.files');
 
       const localIdx = zoneIdx++;
       ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(localLabel) - 1, action: 'tab-local' });
@@ -517,16 +518,16 @@ function renderBody() {
           const rebasedStep = Math.max(0, (op.step || 1) - 1);
           const totalSteps = op.total || '?';
           const rebaseBranch = op.headName || branch;
-          progressLabel = " Rebasing '" + rebaseBranch + "' (rebased " + rebasedStep + '/' + totalSteps + ' commits) ';
+          progressLabel = t('ui.rebasingPrefix') + rebaseBranch + t('ui.rebasedMiddle') + rebasedStep + '/' + totalSteps + t('ui.commitsSuffix');
         } else {
-          const opName = op.type === 'merge' ? 'Merging' : op.type === 'cherry-pick' ? 'Cherry-picking' : 'Reverting';
+          const opName = op.type === 'merge' ? t('ui.merging') : op.type === 'cherry-pick' ? t('ui.cherryPicking') : t('ui.reverting');
           progressLabel = ' ' + opName + ' ';
         }
         row1 += colors.yellow + ansi.bold + progressLabel + ansi.reset;
         col1 += visLen(progressLabel);
 
         // Abort button (모든 작업)
-        const abortLabel = ' Abort ';
+        const abortLabel = t('ui.abort');
         const abortIdx = zoneIdx++;
         const abortOn = caps().isEnabled('op-abort');
         ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'op-abort', enabled: abortOn });
@@ -537,7 +538,7 @@ function renderBody() {
 
         // Skip button (merge는 skip이 없으므로 제외)
         if (op.type !== 'merge') {
-          const skipLabel = ' Skip ';
+          const skipLabel = t('ui.skip');
           const skipIdx = zoneIdx++;
           const skipOn = caps().isEnabled('op-skip');
           ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'op-skip', enabled: skipOn });
@@ -547,13 +548,13 @@ function renderBody() {
           col1 += visLen(skipLabel);
         }
       } else {
-        const pullLabel = state.behind > 0 ? 'Pull \u2193' + state.behind : 'Pull';
-        const pushLabel = state.ahead > 0 ? 'Push \u2191' + state.ahead : 'Push';
+        const pullLabel = state.behind > 0 ? t('ui.pull') + state.behind: t('menu.pull');
+        const pushLabel = state.ahead > 0 ? t('ui.push') + state.ahead: t('menu.push');
         const actionBtns = [
-          { label: 'Fetch', action: 'git-fetch' },
+          { label: t('queue.fetch'), action: 'git-fetch' },
           { label: pullLabel, action: 'git-pull' },
           { label: pushLabel, action: 'git-push' },
-          { label: 'Stash', action: 'git-stash' },
+          { label: t('input.stash'), action: 'git-stash' },
         ];
         for (let i = 0; i < actionBtns.length; i++) {
           const btn = actionBtns[i];
@@ -657,9 +658,9 @@ function renderBody() {
     const entries = state.gitNotFound
       ? []
       : [
-          { label: '[I] Initialize Repository Here', action: 'tab_init' },
-          { label: '[O] Open Existing Repository...', action: 'tab_change_repo' },
-          { label: '[C] Clone Repository...', action: 'tab_clone' },
+          { label: t('ui.iInitializeRepositoryHere'), action: 'tab_init' },
+          { label: t('ui.oOpenExistingRepository'), action: 'tab_change_repo' },
+          { label: t('ui.cCloneRepository'), action: 'tab_clone' },
         ];
     const contentHeight = state.gitNotFound ? 5 : 9;
     const top = Math.max(0, Math.floor((h - contentHeight) / 2));
@@ -671,16 +672,16 @@ function renderBody() {
       lines[row] = ' '.repeat(col) + (style || '') + shown + ansi.reset;
     }
 
-    centerLine(top, state.gitNotFound ? 'Git executable not found' : 'This folder is not a Git repository',
+    centerLine(top, state.gitNotFound ? t('ui.gitExecutableNotFound') : t('ui.thisFolderNotGitRepository'),
       state.gitNotFound ? colors.red + ansi.bold : colors.cyan + ansi.bold);
     centerLine(top + 2, truncate(state.cwd || '', Math.max(1, w - 4)), colors.dim);
 
     if (state.gitNotFound) {
-      centerLine(top + 4, 'Install Git and reopen this plugin to continue.', colors.dim);
+      centerLine(top + 4, t('ui.installGitReopenThisPluginContinue'), colors.dim);
       return { lines, zones };
     }
 
-    centerLine(top + 4, 'Set up version control even when this folder has no files yet.', colors.dim);
+    centerLine(top + 4, t('ui.setUpVersionControlEvenWhen'), colors.dim);
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       const row = top + 6 + i;
@@ -839,40 +840,26 @@ function renderBody() {
 
   let hintContent;
   if (state.mode === 'rebase-menu') {
-    hintContent = colors.yellow + ' Rebase: ' + ansi.reset
-      + colors.value + '[c]ontinue' + ansi.reset + '  '
-      + colors.value + '[a]bort' + ansi.reset + '  '
-      + colors.value + '[s]kip' + ansi.reset;
+    hintContent =colors.yellow + t('ui.rebaseHintLabel') + ansi.reset + colors.value + t('ui.hintContinue') + ansi.reset + '  ' + colors.value + t('ui.hintAbort') + ansi.reset + '  ' + colors.value + t('ui.hintSkip') + ansi.reset;
   } else if (state.mode === 'commit') {
     const commitOpRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
-    const commitHintLabel = commitOpRebase ? ' Continue Rebase: ' : (state.commitAmend && !state.operationState) ? ' Amend: ' : ' Commit: ';
-    const modKey = (typeof process !== 'undefined' && process.platform === 'darwin') ? 'Cmd' : 'Ctrl';
-    const amendHint = state.operationState ? '' : '[' + modKey + '+A]amend  ';
-    hintContent = colors.yellow + commitHintLabel + ansi.reset
-      + colors.dim + '[' + modKey + '+Enter]submit  ' + amendHint + '[Esc]cancel' + ansi.reset;
+    const commitHintLabel = commitOpRebase ? t('ui.continueRebase') : (state.commitAmend && !state.operationState) ? t('ui.amend') : t('ui.commit');
+    const modKey = (typeof process !== 'undefined' && process.platform === 'darwin') ? t('ui.cmd') : t('ui.ctrl');
+    const amendHint = state.operationState ? '' : '[' + modKey + t('ui.amend2');
+    hintContent =colors.yellow + commitHintLabel + ansi.reset + colors.dim + '[' + modKey + t('ui.hintSubmit') + amendHint + t('ui.hintCancel') + ansi.reset;
   } else if (state.mode === 'new-branch') {
-    hintContent = colors.yellow + ' New Branch: ' + ansi.reset
-      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create' + ansi.reset;
+    hintContent =colors.yellow + t('ui.newBranchPrompt') + ansi.reset + colors.value + state.inputBuffer + '█' + ansi.reset + '  ' + colors.dim + t('ui.hintCreate') + ansi.reset;
   } else if (state.mode === 'new-tag') {
-    hintContent = colors.yellow + ' New Tag: ' + ansi.reset
-      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create' + ansi.reset;
+    hintContent =colors.yellow + t('ui.newTagPrompt') + ansi.reset + colors.value + state.inputBuffer + '█' + ansi.reset + '  ' + colors.dim + t('ui.hintCreate') + ansi.reset;
   } else if (state.mode === 'rename-stash') {
-    hintContent = colors.yellow + ' Rename Stash: ' + ansi.reset
-      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]rename' + ansi.reset;
+    hintContent =colors.yellow + t('ui.renameStashPrompt') + ansi.reset + colors.value + state.inputBuffer + '█' + ansi.reset + '  ' + colors.dim + t('ui.hintRename') + ansi.reset;
   } else if (state.mode === 'new-remote') {
-    hintContent = colors.yellow + ' Remote Name: ' + ansi.reset
-      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]next' + ansi.reset;
+    hintContent =colors.yellow + t('ui.remoteNamePrompt') + ansi.reset + colors.value + state.inputBuffer + '█' + ansi.reset + '  ' + colors.dim + t('ui.hintNext') + ansi.reset;
   } else if (state.mode === 'new-remote-url') {
-    hintContent = colors.yellow + ' Remote URL (' + state.inputTarget + '): ' + ansi.reset
-      + colors.value + state.inputBuffer + '\u2588' + ansi.reset + '  '
-      + colors.dim + '[Enter]create' + ansi.reset;
+    hintContent =colors.yellow + t('ui.remoteUrlPrompt') + state.inputTarget + '): ' + ansi.reset + colors.value + state.inputBuffer + '█' + ansi.reset + '  ' + colors.dim + t('ui.hintCreate') + ansi.reset;
   } else if (state.freshTimeWindowMode) {
     const tw = FRESH_TIME_WINDOWS;
-    let windowHint = colors.yellow + ' Time Window: ' + ansi.reset;
+    let windowHint =colors.yellow + t('ui.timeWindow') + ansi.reset;
     for (let i = 0; i < tw.length; i++) {
       if (i === state.freshTimeWindow) {
         windowHint += colors.cursorBg + colors.cyan + ansi.bold + ' ' + tw[i].label + ' ' + ansi.reset + ' ';
@@ -880,17 +867,17 @@ function renderBody() {
         windowHint += colors.dim + ' ' + tw[i].label + ' ' + ansi.reset + ' ';
       }
     }
-    windowHint += colors.dim + '  [\u2190\u2192]select  [Enter]apply' + ansi.reset;
+    windowHint +=colors.dim + t('ui.selectEnterApply') + ansi.reset;
     hintContent = windowHint;
   } else if (!state.isGitRepo && (state.error || state.cwd)) {
     // 비저장소는 오류가 아니라 설정 가능한 시작 상태다. 자세한 진단 문자열 대신 사용자가
     // 지금 할 수 있는 동작을 안내하고, 실제 오류(git 실행 파일 없음)만 빨간색으로 남긴다.
     if (state.spinnerActive) {
-      hintContent = ' ' + colors.dim + 'cwd: ' + state.cwd + ansi.reset;
+      hintContent = ' ' + colors.dim + 'cwd: ' + state.cwd + ansi.reset;  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
     } else if (state.gitNotFound) {
-      hintContent = ' ' + colors.red + 'Git executable not found' + ansi.reset;
+      hintContent = ' ' + colors.red + t('ui.gitExecutableNotFound') + ansi.reset;
     } else {
-      hintContent = ' ' + colors.dim + '[I] initialize  [O] open  [C] clone' + ansi.reset;
+      hintContent = ' ' + colors.dim + t('ui.iInitializeOOpenCClone') + ansi.reset;
     }
   } else if (state.error && !state.spinnerActive) {
     // 쓰기 작업 진행 메시지(spinnerActive 중의 state.error)와 refresh 스피너는
@@ -904,11 +891,11 @@ function renderBody() {
     // 대상을 들고 가는 예약은 무엇을 실었는지가 더 중요하다(또 누르면 거기에 보탠다).
     const entry = queue.findFor(ui.hoveredAction);
     const count = entry && Array.isArray(entry.payload) ? entry.payload.length : 0;
-    hintContent = ' ' + colors.cyan + 'Queued' + (count > 0 ? ' (' + count + ' file' + (count > 1 ? 's' : '') + ')' : '')
+    hintContent = ' ' + colors.cyan + t('ui.queued') + (count > 0 ? ' (' + count + t('ui.fileSuffix') + (count > 1 ? 's' : '') + ')' : '')
       + ansi.reset + colors.dim
       + (count > 0
-        ? ' — runs when the current operation finishes; click again to add'
-        : ' — runs when the current operation finishes (click to cancel)')
+        ? t('ui.runsWhenCurrentOperationFinishesClick')
+        : t('ui.runsWhenCurrentOperationFinishesClick2'))
       + ansi.reset;
   } else if (ui.hoveredAction && caps().disabledReason(ui.hoveredAction)) {
     // 딤드 버튼에 마우스를 올린 동안만 사유를 보여 준다 — 색만으로는 "왜"를 알 수 없다.
@@ -916,21 +903,20 @@ function renderBody() {
     // 흐리지도 않은 버튼에 "다른 작업이 도는 중"이라고만 적혀 눌러도 되는지 알 수 없다.
     const reason = caps().disabledReason(ui.hoveredAction);
     const willQueue = caps().isActionable(ui.hoveredAction);
-    hintContent = ' ' + colors.dim + reason + (willQueue ? ' — click to queue' : '') + ansi.reset;
+    hintContent = ' ' + colors.dim + reason + (willQueue ? t('ui.clickQueue') : '') + ansi.reset;
   } else if (state.rightView === 'fresh') {
-    hintContent = ' ' + colors.dim + '[w]indow  [r]efresh  [Tab]focus' + ansi.reset;
+    hintContent = ' ' + colors.dim + t('ui.wIndowREfreshTabFocus') + ansi.reset;
   } else if (state.operationState) {
     const op = state.operationState;
     const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
-    const label = isRebase ? 'Rebase' : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
+    const label = isRebase ? t('action.rebase') : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert';
     const progress = isRebase && op.step ? ' (' + op.step + '/' + op.total + ')' : '';
     const hasUnmerged = state.unstaged.some(f => f.status === 'U');
     if (hasUnmerged) {
-      hintContent = colors.yellow + ' ' + label + progress + ansi.reset + '  '
-        + colors.dim + '[Tab]focus  [1/2/3] ours/theirs/both  [v]iew  [m] apply  [b] continue' + ansi.reset;
+      hintContent =colors.yellow + ' ' + label + progress + ansi.reset + '  ' + colors.dim + t('ui.tabFocus123Ours') + ansi.reset;
     } else {
       hintContent = colors.yellow + ' ' + label + progress + ansi.reset + '  '
-        + colors.dim + '[b] continue/abort' + (op.type !== 'merge' ? '/skip' : '') + ansi.reset;
+        + colors.dim + t('ui.bContinueAbort') + (op.type !== 'merge' ? '/skip' : '') + ansi.reset;
     }
   } else {
     hintContent = buildStatusHint(leftMaxWidth)
@@ -1201,7 +1187,7 @@ function renderBody() {
     }
     if (state.conflictView) {
       const allSelected = actions.allConflictChunksSelected();
-      const applyLabel = allSelected ? ' Apply resolution ' : ' Select every conflict to apply ';
+      const applyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
       ui.mergeApplyZone = {
         row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1,
         colStart: rpStartCol + 1,
@@ -1334,7 +1320,7 @@ function buildLeftPanel(w, h) {
     const slashIdx = branchName.lastIndexOf('/');
     if (slashIdx >= 0) branchName = branchName.substring(slashIdx + 1);
     // 현재 저장소가 메인이 아닌 linked worktree면 브랜치명 옆에 표기한다.
-    const wtTag = state.isLinkedWorktree ? ' [worktree]' : '';
+    const wtTag = state.isLinkedWorktree ? t('ui.worktree') : '';
     const wtPart = wtTag ? colors.cyan + wtTag + ansi.reset : '';
     if (state.operationState) {
       const op = state.operationState;
@@ -1352,7 +1338,7 @@ function buildLeftPanel(w, h) {
   pushLine('');
 
   if (state.loading) {
-    pushLine(colors.dim + ' Loading...' + ansi.reset);
+    pushLine(colors.dim + t('ui.loading') + ansi.reset);
     ui.leftTabInfo = null;
     ui.leftPanelClickMap = clickMap.slice(0, h);
     return lines.slice(0, h);
@@ -1360,9 +1346,9 @@ function buildLeftPanel(w, h) {
 
   if (!state.isGitRepo) {
     if (state.gitNotFound) {
-      pushLine(colors.red + ' git executable not found' + ansi.reset);
+      pushLine(colors.red + t('ui.gitExecutableNotFound2') + ansi.reset);
     } else {
-      pushLine(colors.red + ' Not a git repository' + ansi.reset);
+      pushLine(colors.red + t('ui.notGitRepository') + ansi.reset);
     }
     ui.leftTabInfo = null;
     ui.leftPanelClickMap = clickMap.slice(0, h);
@@ -1427,7 +1413,7 @@ function buildLeftPanel(w, h) {
     if (wt.branch && !wt.isCurrent) branchesInOtherWorktrees.add(wt.branch);
   }
   // 저장소 자체가 linked worktree면 현재 브랜치에는 상단 브랜치명과 같은 표기를 붙인다.
-  const currentBranchTag = state.isLinkedWorktree ? ' [worktree]' : '';
+  const currentBranchTag = state.isLinkedWorktree ? t('ui.worktree') : '';
 
   // Pinned — 핀 고정한 브랜치를 Branches 위에 모아 그룹 접힘/스크롤과 무관하게 바로 닿게 한다.
   // 목록은 이름만 들고 있으므로 실제로 존재하는 브랜치만 골라 지정 순서대로 그린다.
@@ -1440,7 +1426,7 @@ function buildLeftPanel(w, h) {
     }
     if (pinned.length > 0) {
       const collapsed = !!ui.collapsedSections.pinned;
-      pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Pinned' + ansi.reset, { action: 'toggle-section', section: 'pinned' });
+      pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.pinned') + ansi.reset, { action: 'toggle-section', section: 'pinned' });
       if (!collapsed) {
         for (const b of pinned) {
           // 핀은 눈에 잘 띄라고 모아 둔 목록이니, 현재 브랜치처럼 @리모트와 push/pull
@@ -1459,7 +1445,7 @@ function buildLeftPanel(w, h) {
   let revealLineIdx = -1;
   {
     const collapsed = !!ui.collapsedSections.branches;
-    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Branches' + ansi.reset, { action: 'toggle-section', section: 'branches' });
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.branches') + ansi.reset, { action: 'toggle-section', section: 'branches' });
     if (!collapsed) {
       const groups = new Map();
       const topLevel = [];
@@ -1500,7 +1486,7 @@ function buildLeftPanel(w, h) {
   // Remotes
   {
     const collapsed = !!ui.collapsedSections.remotes;
-    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Remotes' + ansi.reset, { action: 'toggle-section', section: 'remotes' });
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.remotes') + ansi.reset, { action: 'toggle-section', section: 'remotes' });
     if (!collapsed && state.remoteBranches.length > 0) {
       const remoteGroups = new Map();
       for (const rb of state.remoteBranches) {
@@ -1571,7 +1557,7 @@ function buildLeftPanel(w, h) {
   // linked worktree가 하나라도 있을 때(길이 > 1)만 루트 노드를 노출한다.
   if (state.worktrees.length > 1) {
     const collapsed = !!ui.collapsedSections.worktrees;
-    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Worktrees (' + state.worktrees.length + ')' + ansi.reset, { action: 'toggle-section', section: 'worktrees' });
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.worktrees') + state.worktrees.length + ')' + ansi.reset, { action: 'toggle-section', section: 'worktrees' });
     if (!collapsed) {
       // git은 워크트리에 별도 이름을 주지 않는다(.git/worktrees/<id>는 생성 시점 폴더명에서
       // 파생된 내부 식별자일 뿐이고 worktree list도 알려주지 않는다). 표시는 폴더명 기준인데,
@@ -1583,7 +1569,7 @@ function buildLeftPanel(w, h) {
       }
       const worktreeLabel = (w) => {
         const b = basename(w.path || '');
-        if (!b) return w.path || '(unknown)';
+        if (!b) return w.path || t('ui.unknown');
         if ((labelCounts.get(b) || 0) < 2) return b;
         const parent = basename((w.path || '').replace(/[\\/]+[^\\/]+[\\/]*$/, ''));
         return parent ? parent + '/' + b : b;
@@ -1596,7 +1582,7 @@ function buildLeftPanel(w, h) {
         if (wt.isLocked) stateParts.push('locked');
         if (wt.isPrunable) stateParts.push('prunable');
         // 메인/linked 구분은 이름 옆 역할 표기로 — 브랜치명(예: main)과 섞이지 않게 분리한다.
-        const role = wt.isMain ? ' (main)' : '';
+        const role = wt.isMain ? t('ui.main') : '';
         const label = worktreeLabel(wt);
         const detail = stateParts.length > 0 ? '  ' + stateParts.join(', ') : '';
         const labelW = Math.max(1, innerW - 6 - visLen(detail) - visLen(role));
@@ -1615,7 +1601,7 @@ function buildLeftPanel(w, h) {
   // Stashes
   if (state.stashes.length > 0) {
     const collapsed = !!ui.collapsedSections.stashes;
-    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + ' Stashes' + ansi.reset, { action: 'toggle-section', section: 'stashes' });
+    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.stashes') + ansi.reset, { action: 'toggle-section', section: 'stashes' });
     if (!collapsed) {
       for (const s of state.stashes) {
         const isActive = activeBranch === 'stash:' + s.shortHash;
@@ -1702,7 +1688,7 @@ function buildFileListPanel(w, h) {
     ui.fileLineMap = [];
     ui.filesMaxScroll = 0;
     ui.scrollPct.files = -1;
-    return [colors.dim + ' Loading status...' + ansi.reset].slice(0, h);
+    return [colors.dim + t('ui.loadingStatus') + ansi.reset].slice(0, h);
   }
 
   // 그릴 줄은 buildFileList 가 정한다 — 커서·다중 선택·클릭 맵이 전부 이 목록의 인덱스를
@@ -1774,10 +1760,10 @@ function buildFileListPanel(w, h) {
   // Unstaged (includes untracked)
   const unstagedCount = state.unstaged.length + state.untracked.length;
   {
-    const headerLabel = ' Unstaged (' + unstagedCount + ')';
-    const unlockLabel = state.indexLocked ? 'Unlock' : '';
-    const allBtnLabel = 'Stage All';
-    const btnLabel = 'Stage';
+    const headerLabel = t('ui.unstaged') + unstagedCount + ')';
+    const unlockLabel = state.indexLocked ? t('ui.unlock') : '';
+    const allBtnLabel = t('menu.stageAll');
+    const btnLabel = t('menu.stage');
     const unlockLen = unlockLabel ? unlockLabel.length + 1 : 0;
     const totalBtnLen = unlockLen + allBtnLabel.length + 1 + btnLabel.length;
     const headerLabelLen = visLen(headerLabel);
@@ -1817,9 +1803,9 @@ function buildFileListPanel(w, h) {
 
   // Staged
   {
-    const headerLabel = ' Staged (' + state.staged.length + ')';
-    const allBtnLabel = 'Unstage All';
-    const btnLabel = 'Unstage';
+    const headerLabel = t('ui.staged2') + state.staged.length + ')';
+    const allBtnLabel = t('ui.unstageAll');
+    const btnLabel = t('menu.unstage');
     const totalBtnLen = allBtnLabel.length + 1 + btnLabel.length;
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
@@ -1849,7 +1835,7 @@ function buildFileListPanel(w, h) {
     const ignoredCollapsed = ui.collapsedSections.ignored !== false; // default collapsed
     const arrow = ignoredCollapsed ? '+' : '-';
     const ignoredCount = state.ignoredLoading ? '...' : (state.ignoredLoaded ? String(state.ignored.length) : '?');
-    const headerLabel = ' ' + arrow + '  Ignored (' + ignoredCount + ')';
+    const headerLabel = ' ' + arrow + t('ui.ignored') + ignoredCount + ')';
     const zoneIdx = ui.fileHeaderZones.length;
     const isHovered = ui.hoveredFileHeaderIdx === zoneIdx;
     const headerStyle = isHovered ? colors.dim + ansi.bold + CSI + '4m' : colors.dim;
@@ -1857,7 +1843,7 @@ function buildFileListPanel(w, h) {
     ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: 0, btnColEnd: visLen(headerLabel), action: 'toggleIgnored' });
     pushFileLine(headerLine, -1);
     if (!ignoredCollapsed && !state.ignoredLoaded) {
-      pushFileLine(colors.dim + '   Loading ignored files...' + ansi.reset, -1);
+      pushFileLine(colors.dim + t('ui.loadingIgnoredFiles') + ansi.reset, -1);
     } else if (!ignoredCollapsed) {
       pushSection('ignored');
     }
@@ -1867,7 +1853,7 @@ function buildFileListPanel(w, h) {
   if (state.filesScrollX > preFilesMaxScrollX) state.filesScrollX = preFilesMaxScrollX;
 
   if (fileList.length === 0) {
-    pushFileLine(colors.dim + ' Working tree clean' + ansi.reset, -1);
+    pushFileLine(colors.dim + t('ui.workingTreeClean') + ansi.reset, -1);
   }
 
   // Scroll (skip auto-scroll when scrollbar pin is active)
@@ -1979,7 +1965,7 @@ function buildDiffCommitPanel(w, h) {
   // Hunk 단위 스테이징 버튼 (staged/unstaged diff에서만, untracked/conflict 제외)
   ui.diffHunkZones = [];
   const canHunk = !isConflictView && diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffLines.length > 0;
-  const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? '[Unstage hunk]' : '[Stage hunk]') : '';
+  const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? t('ui.unstageHunk') : t('ui.stageHunk')) : '';
   const hunkAvail = hunkBtnLabel ? Math.max(8, innerW - hunkBtnLabel.length - 2) : 0;
   const hunkOn = canHunk && caps().isEnabled('hunk-apply');
   const renderHunkButton = (hunkIdx) => {
@@ -2038,10 +2024,10 @@ function buildDiffCommitPanel(w, h) {
       ui.mergeChunkLineMap = {};
       // 로딩 중에는 "파일을 고르라"는 안내가 사실과 다르다 — 스피너로 바꾸고,
       // 스피너를 그리기 전 짧은 유예 동안에는 빈 줄로 둔다.
-      const spin = panelLoadingLabel('diff', 'Loading diff...');
+      const spin = panelLoadingLabel('diff', t('ui.loadingDiff'));
       if (spin) lines.push(colors.dim + ' ' + spin + ansi.reset);
       else if (state.diffLoading) lines.push('');
-      else lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
+      else lines.push(colors.dim + t('ui.selectFileViewDiff') + ansi.reset);
       for (let i = 1; i < diffH; i++) lines.push('');
       ui.diffMaxScroll = 0;
       ui.diffMaxScrollX = 0;
@@ -2136,7 +2122,7 @@ function buildDiffCommitPanel(w, h) {
       // 색은 지금 실제로 누를 수 있는지를 따른다 — 쓰기 작업 중이면 흐려진다.
       const allSelected = actions.allConflictChunksSelected();
       const canApply = allSelected && caps().isEnabled('merge-apply');
-      const applyLabel = allSelected ? ' Apply resolution ' : ' Select every conflict to apply ';
+      const applyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
       const applyStyle = buttonStyle(canApply, ui.hoveredMergeApplyButton,
         colors.green + ansi.bold, colors.cursorBg + colors.green + ansi.bold + CSI + '4m');
       lines.push(' ' + applyStyle + applyLabel + ansi.reset);
@@ -2155,7 +2141,7 @@ function buildDiffCommitPanel(w, h) {
       ui.commitCursorLineIdx = cursorLineIdx;
 
       // 메시지 지우기 버튼: 첫 줄 오른쪽 끝. 지울 내용이 있을 때만 자리를 차지한다.
-      const clearLabel = '[X]';
+      const clearLabel = t('ui.x');
       const showClear = state.commitMsg.length > 0;
 
       for (let i = 0; i < maxMsgLines; i++) {
@@ -2188,15 +2174,15 @@ function buildDiffCommitPanel(w, h) {
     } else {
       // \uc0c1\ud0dc \uc815\ubcf4 \ud589 (\ub2e8\ucd95\ud0a4 hint \uc5c6\uc774 staged \uac1c\uc218\ub9cc \ud45c\uc2dc)
       const infoText = state.staged.length > 0
-        ? state.staged.length + ' file(s) staged'
-        : 'No files staged';
+        ?state.staged.length + t('ui.fileSStaged')
+        : t('ui.noFilesStaged');
       lines.push(' ' + colors.dim + infoText + ansi.reset);
     }
 
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
     // amend 여부는 오른쪽 토글이 표시하므로 메인 버튼 라벨은 'Commit' 유지(중복 'Amend' 방지)
-    const commitLabel = isRebaseOp ? 'Continue Rebase' : isMergeOp ? 'Commit ' + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert') : 'Commit';
+    const commitLabel = isRebaseOp ? t('ui.continueRebase2') : isMergeOp ? t('ui.commit4') + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert') : t('ui.commit2');
     // 커밋 모드에서는 제출, 일반 모드에서는 커밋 모드 진입 — 누르면 실제로 일어나는 일과
     // 같은 판정을 본다. input.js 의 클릭 처리도 같은 두 id 로 게이트한다.
     const canCommit = state.mode === 'commit'
@@ -2207,7 +2193,7 @@ function buildDiffCommitPanel(w, h) {
     let btnLine = ' ' + commitStyle + commitLabel + ansi.reset;
     // Amend 토글: 작업(merge/rebase 등) 중이 아니면 Commit 버튼 오른쪽에 항상 표시
     if (!state.operationState) {
-      const amendLabel = (state.commitAmend ? '[x]' : '[ ]') + ' Amend last commit';
+      const amendLabel = (state.commitAmend ? t('ui.x2') : '[ ]') + t('ui.amendLastCommit');
       const amendOn = caps().isEnabled('commit-amend');
       const amendStyle = buttonStyle(amendOn, ui.hoveredCommitAmend,
         state.commitAmend ? colors.yellow : colors.value);
@@ -2228,18 +2214,18 @@ function buildDiffCommitPanel(w, h) {
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
     if (state.logLoading) {
-      return [colors.dim + ' Loading commits...' + ansi.reset];
+      return [colors.dim + t('ui.loadingCommits') + ansi.reset];
     }
     // Filter/Hide 때문에 비었으면 "커밋이 없다"가 아니다. 그대로 두면 저장소가 텅 빈 것처럼
     // 보이고, 지정을 걸어 둔 걸 잊었을 때 왜 이렇게 됐는지 알 길이 없다 — 되돌리는 길까지 적는다.
     if (ui.filteredRefs.length > 0 || ui.hiddenRefs.length > 0) {
       return [
-        colors.dim + ' ' + truncate('No commits match the branch filter', w - 1) + ansi.reset,
+        colors.dim + ' ' + truncate(t('ui.noCommitsMatchBranchFilter'), w - 1) + ansi.reset,
         '',
-        colors.dim + ' ' + truncate('Right-click a branch → Clear All Filters / Show All Branches', w - 1) + ansi.reset,
+        colors.dim + ' ' + truncate(t('ui.rightClickBranchClearAllFilters'), w - 1) + ansi.reset,
       ];
     }
-    return [colors.dim + ' No commits yet' + ansi.reset];
+    return [colors.dim + t('ui.noCommitsYet') + ansi.reset];
   }
 
   const innerW = w - 1;
@@ -2457,7 +2443,7 @@ function buildLogPanel(w, h) {
   // Build filtered detail lines (respecting collapsed files)
   // 커밋 헤더는 바로 나오고 본문/패치는 늦게 온다 — 그 사이 상세 끝에 스피너를 붙인다.
   // 스크롤 한계도 이 목록에서 나오므로 원본에 얹어 두고 한 번에 계산한다.
-  const detailSpin = panelLoadingLabel('logDetail', 'Loading diff...');
+  const detailSpin = panelLoadingLabel('logDetail', t('ui.loadingDiff'));
   const detailSource = detailSpin ? [...state.logDetailLines, '', detailSpin] : state.logDetailLines;
   const filteredDetail = filterLogDetailLines(detailSource, ui.collapsedDetailFiles);
   ui.filteredDetailCount = filteredDetail.length;
@@ -2490,7 +2476,7 @@ function buildLogPanel(w, h) {
   if (detailH > 0) {
     const selItem = selectedLogRef();
     if (state.logDetailLines.length === 0) {
-      lines.push(colors.dim + ' Select an item to view details' + ansi.reset);
+      lines.push(colors.dim + t('ui.selectItemViewDetails') + ansi.reset);
       for (let i = 1; i < detailH; i++) lines.push('');
       ui.logDetailMaxScrollX = 0;
     } else {
@@ -2502,10 +2488,10 @@ function buildLogPanel(w, h) {
       }
       const hasFiles = allDetailFiles.length > 0;
       const allCollapsed = hasFiles && allDetailFiles.every(f => ui.collapsedDetailFiles.has(f));
-      const collapseLabel = hasFiles ? (allCollapsed ? ' Expand All ' : ' Collapse All ') : '';
+      const collapseLabel = hasFiles ? (allCollapsed ? t('ui.expandAll') : t('ui.collapseAll')) : '';
       const collapseLabelLen = visLen(collapseLabel);
       function buildRefsLine(refsRaw, maxW, lineIdx) {
-        if (!refsRaw) return colors.dim + ' (no refs)' + ansi.reset;
+        if (!refsRaw) return colors.dim + t('ui.noRefs') + ansi.reset;
         // Register copy zones and build with hover underline
         let col = 1;
         const refs = refsRaw.split(', ');
@@ -2632,7 +2618,7 @@ function buildLogPanel(w, h) {
               const hash = rawText.substring(7);
               ui.detailCopyZones.push({ lineIdx, colStart: 8, colEnd: 8 + hash.length - 1, text: hash });
             } else if (rawText.startsWith('Author: ') || rawText.startsWith('Commit: ')) {
-              const prefix = rawText.startsWith('Author: ') ? 'Author: ' : 'Commit: ';
+              const prefix = rawText.startsWith('Author: ') ? t('ui.author') : t('ui.commit3');
               const rest = rawText.substring(prefix.length);
               // Parse: name <email>  date or name  date
               const emailMatch = rest.match(/^(.+?) <(.+?)>(  .+)?$/);
@@ -2704,7 +2690,7 @@ function heatmapColor(date, windowDays) {
   const ageMs = now - fileTime;
   const windowMs = (windowDays || 7) * 24 * 60 * 60 * 1000;
   const fraction = Math.min(1, Math.max(0, ageMs / windowMs));
-  const t = Math.pow(fraction, 0.6);
+  const ratio = Math.pow(fraction, 0.6);
 
   // 5 stops: #00E5FF → #00C8C8 → #0096C8 → #646464 → #3C3C3C
   const stops = [
@@ -2714,7 +2700,7 @@ function heatmapColor(date, windowDays) {
     [100, 100, 100],
     [60, 60, 60],
   ];
-  const pos = t * (stops.length - 1);
+  const pos = ratio * (stops.length - 1);
   const idx = Math.min(Math.floor(pos), stops.length - 2);
   const f = pos - idx;
   const r = Math.round(stops[idx][0] + (stops[idx + 1][0] - stops[idx][0]) * f);
@@ -2748,7 +2734,7 @@ function freshStatusIcon(status) {
 
 function buildFreshPanel(w, h) {
   if (state.freshItems.length === 0) {
-    return [colors.dim + ' No fresh files' + ansi.reset];
+    return [colors.dim + t('ui.noFreshFiles') + ansi.reset];
   }
 
   const innerW = w - 1;
@@ -2775,7 +2761,7 @@ function buildFreshPanel(w, h) {
   if (listH > 0) {
     const btnLabel = ' ' + tw.label + ' ';
     const btnLen = visLen(btnLabel);
-    const suffix = '  ' + colors.dim + state.freshItems.length + ' file(s)' + ansi.reset;
+    const suffix = '  ' + colors.dim + state.freshItems.length + t('ui.fileS') + ansi.reset;
     const isHovered = ui.hoveredFreshWindow;
     const btnStyle = isHovered ? colors.cursorBg + colors.cyan + ansi.bold + CSI + '4m' : colors.cyan;
     const headerLabel = btnStyle + btnLabel + ansi.reset + suffix;
@@ -2885,17 +2871,17 @@ function buildFreshPanel(w, h) {
   if (detailH > 0) {
     const selItem = state.freshItems[state.freshCursor];
     if (state.freshDetailLines.length === 0) {
-      const spin = panelLoadingLabel('freshDetail', 'Loading diff...');
+      const spin = panelLoadingLabel('freshDetail', t('ui.loadingDiff'));
       if (spin) lines.push(colors.dim + ' ' + spin + ansi.reset);
       else if (state.freshDetailLoading) lines.push('');
-      else lines.push(colors.dim + ' Select a file to view diff' + ansi.reset);
+      else lines.push(colors.dim + t('ui.selectFileViewDiff') + ansi.reset);
       for (let i = 1; i < detailH; i++) lines.push('');
       ui.freshDetailMaxScrollX = 0;
     } else {
       // Header: file info
       if (selItem) {
         const info = selItem.isPending
-          ? colors.cyan + ' \u25c6 ' + truncate(selItem.file, innerW - 4) + ' (pending)' + ansi.reset
+          ?colors.cyan + ' ◆ ' + truncate(selItem.file, innerW - 4) + t('ui.pending') + ansi.reset
           : colors.cyan + ' \u25c6 ' + truncate(selItem.file, innerW - 20) + ' ' + colors.dim + selItem.commitHash + ansi.reset;
         lines.push(truncate(info, innerW));
       } else {
@@ -3146,12 +3132,12 @@ function buildConflictDiffLines(innerW) {
 
   const op = state.operationState || {};
   const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
-  const oursLabel = isRebase ? 'HEAD' : 'Ours';
-  const theirsLabel = isRebase ? 'Incoming' : 'Theirs';
+  const oursLabel = isRebase ? 'HEAD' : t('ui.ours');
+  const theirsLabel = isRebase ? t('ui.incoming') : t('ui.theirs');
   // 어느 쪽이 어느 브랜치인지는 고정 머리말에만 적는다 — 버튼 라벨에 브랜치명을 넣으면
   // 이름이 긴 브랜치에서 버튼이 화면을 넘긴다. rebase 는 onto 위에 얹는 중이라
   // 왼쪽이 리베이스 대상, 오른쪽이 얹히는 브랜치다.
-  const oursName = isRebase ? (op.ontoHash ? 'onto ' + op.ontoHash : '') : (state.branch || '');
+  const oursName = isRebase ? (op.ontoHash ? t('ui.onto') + op.ontoHash: '') : (state.branch || '');
   const theirsName = isRebase ? (op.headName || '') : (op.incomingName || '');
   const file = conflictView.file;
   const chunks = conflictView.chunks;
@@ -3204,11 +3190,10 @@ function buildConflictDiffLines(innerW) {
       { action: 'prev-conflict', text: '[‹]' },
       { action: 'next-conflict', text: '[›]' },
     ];
-    const progress = `${selectedCount}/${total} resolved `;
+    const progress = t('ui.conflictResolved', { selectedCount, total });
     const navW = nav.reduce((sum, b) => sum + visLen(b.text) + 1, 0);
     const headW = Math.max(1, innerW - visLen(progress) - navW);
-    const head = ' ' + colors.yellow + ansi.bold + 'Merge conflict' + ansi.reset
-      + '  ' + colors.cyan + truncate(file, Math.max(4, headW - 18)) + ansi.reset;
+    const head = ' ' + colors.yellow + ansi.bold + t('ui.mergeConflict') + ansi.reset + '  ' + colors.cyan + truncate(file, Math.max(4, headW - 18)) + ansi.reset;
     let line = padRight(head, headW)
       + (total > 0 && selectedCount === total ? colors.green : colors.dim) + progress + ansi.reset;
     for (const b of nav) {
@@ -3265,13 +3250,13 @@ function buildConflictDiffLines(innerW) {
     // ── 선택 버튼 머리 ──
     {
       const isCursor = ui.mergeChunkCursor === chunkIndex;
-      const head = ` ${isCursor ? '▸' : ' '} Conflict ${ordinal}/${total}  `;
+      const head = t('ui.conflictHeader', { cursor: isCursor ? '▸' : ' ', ordinal, total });
       const buttons = [
         // 숫자를 라벨에 박아 둔다 — 마우스로 눌러 본 사람이 다음엔 키로 누를 수 있게.
         // 코드 영역 클릭과 동작은 같지만 action 은 따로 둔다(hover 강조 대상이 다르다).
-        { sel: 'ours', action: 'btn-ours', text: compact ? '[1 ' + oursLabel + ']' : '[ 1 Use ' + oursLabel + ' ]' },
-        { sel: 'theirs', action: 'btn-theirs', text: compact ? '[2 ' + theirsLabel + ']' : '[ 2 Use ' + theirsLabel + ' ]' },
-        { sel: 'both', action: 'btn-both', text: compact ? '[3 Both]' : '[ 3 Keep both ]' },
+        { sel: 'ours', action: 'btn-ours', text: compact ? '[1 ' + oursLabel + ']' : t('ui.1Use') + oursLabel + ' ]'},
+        { sel: 'theirs', action: 'btn-theirs', text: compact ? '[2 ' + theirsLabel + ']' : t('ui.2Use') + theirsLabel + ' ]'},
+        { sel: 'both', action: 'btn-both', text: compact ? t('ui.3Both') : t('ui.3KeepBoth') },
       ];
       const lineIdx = lines.length;
       let line = (isCursor ? white + ansi.bold : colors.dim) + head + ansi.reset;
@@ -3283,9 +3268,9 @@ function buildConflictDiffLines(innerW) {
         line += style + b.text + ansi.reset + ' ';
         zones.push({ lineIdx, colStart: start, colEnd: start + visLen(b.text) - 1, action: b.action, chunkIndex });
       }
-      const status = selection === 'ours' ? oursLabel + ' kept'
-        : selection === 'theirs' ? theirsLabel + ' kept'
-        : selection === 'both' ? 'both kept'
+      const status = selection === 'ours' ?oursLabel + t('ui.kept')
+        : selection === 'theirs' ?theirsLabel + t('ui.kept')
+        : selection === 'both' ? t('ui.bothKept')
         : 'unresolved';
       const pad = innerW - visLen(line) - visLen(status) - 1;
       if (pad > 0) {
@@ -3525,9 +3510,9 @@ function renderSideBySideDiffLines(layout, filePath, scrollX, hunkOpts) {
     }
     if (row.type === 'side-title') {
       lines.push(
-        colors.dim + padRight(' HEAD', layout.leftW) + ansi.reset +
+        colors.dim + padRight(t('ui.head'), layout.leftW) + ansi.reset +
         headerGap +
-        colors.dim + padRight(' STAGED', layout.rightW) + ansi.reset
+        colors.dim + padRight(t('ui.staged'), layout.rightW) + ansi.reset
       );
       continue;
     }
@@ -3725,8 +3710,8 @@ const hintButtons = [];
 function buildHintText() {
   let result = '';
   if (state.selectedFiles.size > 0) {
-    result += colors.cyan + state.selectedFiles.size + ' selected' + ansi.reset + '  ';
-    result += colors.dim + '[s]tage  [u]nstage' + ansi.reset + '  ';
+    result +=colors.cyan + state.selectedFiles.size + t('ui.selected') + ansi.reset + '  ';
+    result +=colors.dim + t('ui.sTageUNstage') + ansi.reset + '  ';
   }
   for (let i = 0; i < hintButtons.length; i++) {
     if (i > 0) result += '  ';

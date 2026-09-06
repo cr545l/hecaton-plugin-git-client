@@ -20,6 +20,8 @@
  *   q       - Quit
  */
 
+const { t } = require('./i18n');
+const i18n = require('./i18n');
 const { state, ui, init: initState } = require('./state');
 const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, computeRefsTreeSignature } = require('./refresh');
 const { render } = require('./render');
@@ -33,6 +35,10 @@ const reap = require('./reap');
 const path = require('path');
 
 async function main() {
+  // 언어부터 정한다 - HECA_LOCALE 이 initialState.locale 로 이미 와 있으므로
+  // RPC 왕복 없이 첫 프레임을 호스트 언어로 그린다 (docs/I18N.md 4장).
+  try { i18n.setLocale((hecaton.initialState || {}).locale); } catch { /* 1.11 미만 호스트 */ }
+
   // Register stdin handler BEFORE any await — the deno runner drops
   // unmatched stdin lines (like resize events) if no callbacks are registered.
   try {
@@ -69,6 +75,12 @@ async function main() {
   hecaton.on('window_restored', () => {
     state.minimized = false;
     refreshAsync().then(() => render());
+  });
+  // 사용자가 실행 중에 호스트 언어를 바꿨다 (API 1.11). 카탈로그만 갈아 끼우고
+  // 전체를 다시 그린다 - 라벨 폭이 통째로 달라져 부분 갱신으로는 부족하다.
+  hecaton.on('locale_changed', (params) => {
+    if (!i18n.setLocale(params && params.locale)) return;
+    render();
   });
   hecaton.on('menu_requested', (params) => {
     handleContextMenuRequest(params.col, params.row);
@@ -149,7 +161,7 @@ async function main() {
       singleProcessStatus: true,
       fastFirstPaint: true,
       statusTimeout: 60000,
-    }, { message: 'Scanning repository...' });
+    }, { message: t('app.scanningRepository') });
   } else {
     await refreshAsync({ statusOnly: true, loadBranch: true, singleProcessStatus: true, fastFirstPaint: true });
     render();
@@ -216,7 +228,7 @@ async function readBranchFromGitDir(gitDir) {
     const res = await hecaton.fs.read_file({ path: path.join(gitDir, 'HEAD') });
     const head = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
     if (head.startsWith('ref: refs/heads/')) return head.substring('ref: refs/heads/'.length);
-    if (head) return 'HEAD (detached)';
+    if (head) return t('git.headDetached');
   } catch { /* ignore */ }
   return '';
 }
@@ -290,7 +302,7 @@ async function applyGitOptimizations(cwd, gitDir) {
         program: 'git', args: ['config', '--local', 'core.untrackedCache', 'true'],
         cwd, timeout_ms: 3000,
       });
-      console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');
+      console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
     }
   } catch { /* ignore */ }
 
@@ -332,7 +344,7 @@ async function applyGitOptimizations(cwd, gitDir) {
         program: 'git', args: ['config', '--local', 'core.fsmonitor', 'true'],
         cwd, timeout_ms: 3000,
       });
-      console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');
+      console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
     }
   } catch { /* ignore */ }
 }
@@ -448,13 +460,13 @@ async function setupGitWatcher() {
   async function statWorktreeEntry(file) {
     try {
       const r = await hecaton.fs.stat({ path: path.join(state.cwd, file) });
-      if (!r || !r.exists) return file + '\tmissing';
+      if (!r || !r.exists) return file + "\tmissing";  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
       const type = r.is_dir ? 'd' : 'f';
       const mtime = r.mtime_ms || 0;
       const size = r.size || 0;
       return file + '\t' + type + '\t' + mtime + '\t' + size;
     } catch {
-      return file + '\tmissing';
+      return file + "\tmissing";  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
     }
   }
 
@@ -599,6 +611,6 @@ async function setupGitWatcher() {
 }
 
 main().catch((e) => {
-  process.stderr.write('Error: ' + e.message + '\n');
+  process.stderr.write('Error: ' + e.message + "\n");  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   process.exit(1);
 });

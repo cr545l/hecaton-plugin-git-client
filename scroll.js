@@ -30,6 +30,7 @@
 // Hosts without the scroll API (no scroll.set in plugin_api_methods.def) fall
 // back to the legacy plugin-side SGR wheel handlers untouched.
 
+const { t } = require('./i18n');
 const { state, ui } = require('./state');
 
 // Fixed off-screen bank slot per region id: bank rows live at
@@ -196,7 +197,7 @@ function buildBank(id, getLine, off, height) {
 // holds at the region's first row. Travels through stdout so it is ordered
 // with the frame it describes.
 function ackString(id, baseRow) {
-  return '\x1b]7741;' + id + ';' + baseRow + ';0\x07';
+  return '\x1b]7741;' + id + ';' + baseRow + ';0\x07';  // i18n-ok: OSC ack 시퀀스
 }
 
 module.exports = {

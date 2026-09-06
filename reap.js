@@ -1,3 +1,4 @@
+const { t } = require('./i18n');
 // 폴링용으로 스폰한 git 프로세스가 부모가 사라진 뒤에도 남는 경우가 있다.
 // 하나하나는 유휴 상태지만 며칠 단위로 쌓이면 핸들과 메모리를 계속 물고 있고,
 // .git 을 열어둔 채 남으면 뒤따르는 git 명령과 경합한다.
@@ -30,7 +31,7 @@ const POLL_COMMAND_PATTERNS = [
 
 const LIST_SCRIPT =
   "Get-CimInstance Win32_Process -Filter \"Name='git.exe'\" | " +
-  "Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress";
+  'Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress';
 
 function isWindows() {
   return typeof process !== 'undefined' && process.platform === 'win32';
@@ -123,7 +124,7 @@ async function reapOrphanedPollProcesses(coordinate) {
     await hecaton.process.exec({ program: 'taskkill', args, timeout_ms: 10000 });
   } catch { return 0; }
 
-  console.log('[git-client] reaped ' + targets.length + ' orphaned poll process(es)');
+  console.log('[git-client] reaped ' + targets.length + ' orphaned poll process(es)');  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
   return targets.length;
 }
 

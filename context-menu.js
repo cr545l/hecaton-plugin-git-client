@@ -1,3 +1,4 @@
+const { t } = require('./i18n');
 const {
   state, ui, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
   localRefKey, remoteRefKey, isFilteredRef, isHiddenRef, toggleFilteredRef, toggleHiddenRef,
@@ -129,28 +130,28 @@ function buildHistoryContextMenuItems() {
 
   items.push(
     { type: 'separator' },
-    { id: 'new_branch', label: 'New Branch...', icon: 'add' },
-    { id: 'new_tag', label: 'New Tag...', icon: 'add' },
+    { id: 'new_branch', label: t('menu.newBranch'), icon: 'add' },
+    { id: 'new_tag', label: t('menu.newTag'), icon: 'add' },
     { type: 'separator' },
-    { id: 'merge', label: "Merge into '" + branch + "'..." },
-    { id: 'rebase', label: "Rebase '" + branch + "' to Here..." },
-    { id: 'reset', label: "Reset '" + branch + "' to Here...", icon: 'warning' },
+    { id: 'merge', label: t('menu.mergeInto', { branch })},
+    { id: 'rebase', label: t('menu.rebaseHere', { branch })},
+    { id: 'reset', label: t('menu.resetHere', { branch }), icon: 'warning' },
     { type: 'separator' },
-    { id: 'checkout', label: 'Checkout Commit...' },
-    { id: 'cherry_pick', label: 'Cherry-pick Commit...' },
-    { id: 'revert', label: 'Revert Commit...' },
-    { id: 'save_patch', label: 'Save as Patch...', icon: 'save' },
+    { id: 'checkout', label: t('menu.checkoutCommit') },
+    { id: 'cherry_pick', label: t('menu.cherryPickCommit') },
+    { id: 'revert', label: t('menu.revertCommit') },
+    { id: 'save_patch', label: t('menu.saveAsPatch'), icon: 'save' },
     { type: 'separator' },
-    { id: 'amend_commit', label: 'Amend Last Commit...' },
+    { id: 'amend_commit', label: t('menu.amendLastCommit') },
     {
       id: 'interactive_rebase',
-      label: 'Interactive Rebase',
+      label: t('menu.interactiveRebase'),
       children: [
-        { id: 'reword_commit', label: 'Edit Message...' },
-        { id: 'squash_commit', label: 'Squash into Parent...' },
-        { id: 'fixup_commit', label: 'Fixup into Parent...' },
-        { id: 'edit_commit', label: 'Edit Commit (Stop Here)...' },
-        { id: 'drop_commit', label: 'Drop Commit...', icon: 'warning' },
+        { id: 'reword_commit', label: t('menu.editMessage') },
+        { id: 'squash_commit', label: t('menu.squashIntoParent') },
+        { id: 'fixup_commit', label: t('menu.fixupIntoParent') },
+        { id: 'edit_commit', label: t('menu.editCommitStopHere') },
+        { id: 'drop_commit', label: t('menu.dropCommit'), icon: 'warning' },
       ],
     },
     { type: 'separator' },
@@ -169,20 +170,20 @@ function buildHistoryContextMenuItems() {
       const tagName = tagMatch[1].trim();
       items.push({
         id: 'tag_menu:' + tagName,
-        label: "Tag '" + tagName + "'",
+        label: t('menu.tag3', { tagName }),
         icon: 'tag',
         children: [
-          { id: 'tag_push:' + tagName, label: "Push to '" + tagRemote + "'" },
-          { id: 'tag_delete:' + tagName, label: 'Delete...', icon: 'warning' },
-          { id: 'tag_delete_remote:' + tagName, label: "Delete on '" + tagRemote + "'...", icon: 'warning' },
+          { id: 'tag_push:' + tagName, label: t('menu.push2', { tagRemote })},
+          { id: 'tag_delete:' + tagName, label: t('menu.delete'), icon: 'warning' },
+          { id: 'tag_delete_remote:' + tagName, label: t('menu.delete3', { tagRemote }), icon: 'warning' },
         ],
       });
     }
   }
 
   items.push(
-    { id: 'copy_sha', label: 'Copy Commit SHA', icon: 'copy', shortcut: 'Ctrl+C' },
-    { id: 'copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
+    { id: 'copy_sha', label: t('menu.copyCommitSha'), icon: 'copy', shortcut: 'Ctrl+C' },
+    { id: 'copy_info', label: t('menu.copyCommitInfo'), icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   );
 
   return decorateMenuItems(items);
@@ -191,14 +192,14 @@ function buildHistoryContextMenuItems() {
 function buildStashContextMenuItems(stashRef, stashMessage) {
   const label = stashMessage ? "'" + stashMessage + "'" : stashRef;
   const items = [
-    { id: 'stash_apply', label: 'Apply ' + label + '...', icon: 'add' },
-    { id: 'stash_rename', label: 'Rename ' + label + '...' },
-    { id: 'stash_drop', label: 'Delete ' + label + '...', icon: 'warning', shortcut: 'Delete' },
+    { id: 'stash_apply', label: t('menu.apply2', { label }), icon: 'add' },
+    { id: 'stash_rename', label: t('menu.rename', { label })},
+    { id: 'stash_drop', label: t('menu.delete4', { label }), icon: 'warning', shortcut: t('menu.delete2') },
     { type: 'separator' },
-    { id: 'stash_compare', label: 'Compare to Local Changes' },
+    { id: 'stash_compare', label: t('menu.compareLocalChanges') },
     { type: 'separator' },
-    { id: 'stash_copy_sha', label: 'Copy Commit SHA', icon: 'copy', shortcut: 'Ctrl+C' },
-    { id: 'stash_copy_info', label: 'Copy Commit Info', icon: 'copy', shortcut: 'Ctrl+Shift+C' },
+    { id: 'stash_copy_sha', label: t('menu.copyCommitSha'), icon: 'copy', shortcut: 'Ctrl+C' },
+    { id: 'stash_copy_info', label: t('menu.copyCommitInfo'), icon: 'copy', shortcut: 'Ctrl+Shift+C' },
   ];
   return decorateMenuItems(items);
 }
@@ -227,54 +228,54 @@ function buildFileContextMenuItems(fileItem, fileItems) {
   const ignorePathPatterns = ignorePatternsFor(targets, 'path');
 
   const items = [
-    { id: 'file_open', label: 'Open' },
+    { id: 'file_open', label: t('menu.open') },
     {
       id: 'file_external_diff',
-      label: 'External Diff',
+      label: t('menu.externalDiff'),
       children: [
-        { id: 'file_external_diff_head', label: 'Compare with HEAD' },
-        { id: 'file_external_diff_index', label: 'Compare with Index' },
+        { id: 'file_external_diff_head', label: t('menu.compareWithHead') },
+        { id: 'file_external_diff_index', label: t('menu.compareWithIndex') },
       ],
     },
-    { id: 'file_show_in_explorer', label: 'Show in Explorer' },
+    { id: 'file_show_in_explorer', label: t('menu.showExplorer') },
     { type: 'separator' },
     { id: 'file_blame', label: 'Blame/Timeline...' },
-    { id: 'file_history', label: 'History...' },
+    { id: 'file_history', label: t('menu.history') },
     { type: 'separator' },
-    { id: 'file_stage', label: 'Stage', enabled: canStage },
-    { id: 'file_unstage', label: 'Unstage', enabled: canUnstage },
-    { id: 'file_discard', label: 'Discard changes...', icon: 'warning' },
+    { id: 'file_stage', label: t('menu.stage'), enabled: canStage },
+    { id: 'file_unstage', label: t('menu.unstage'), enabled: canUnstage },
+    { id: 'file_discard', label: t('menu.discardChanges'), icon: 'warning' },
     {
       id: 'file_remove',
-      label: 'Remove from Version Control',
+      label: t('menu.removeFromVersionControl'),
       enabled: canRemoveFromRepo,
       children: [
-        { id: 'file_remove_keep', label: 'Keep Local File...' },
-        { id: 'file_remove_delete', label: 'Delete Local File...', icon: 'warning' },
+        { id: 'file_remove_keep', label: t('menu.keepLocalFile') },
+        { id: 'file_remove_delete', label: t('menu.deleteLocalFile'), icon: 'warning' },
       ],
     },
     ...(isConflictFile(fileItem) ? [
       { type: 'separator' },
-      { id: 'file_accept_ours', label: 'Accept Ours (HEAD)' },
-      { id: 'file_accept_theirs', label: 'Accept Theirs (Incoming)' },
+      { id: 'file_accept_ours', label: t('menu.acceptOursHead') },
+      { id: 'file_accept_theirs', label: t('menu.acceptTheirsIncoming') },
     ] : []),
-    { id: 'file_stage_all', label: 'Stage All' },
+    { id: 'file_stage_all', label: t('menu.stageAll') },
     {
       id: 'file_ignore',
-      label: 'Ignore',
+      label: t('menu.ignore'),
       children: [
-        { id: 'file_ignore_name', label: ignoreLabel('Ignore by Name', ignoreNamePatterns), enabled: ignoreNamePatterns.length > 0 },
-        { id: 'file_ignore_ext', label: ignoreLabel('Ignore by Extension', ignoreExtPatterns), enabled: ignoreExtPatterns.length > 0 },
-        { id: 'file_ignore_path', label: ignoreLabel('Ignore by Path', ignorePathPatterns), enabled: ignorePathPatterns.length > 0 },
+        { id: 'file_ignore_name', label: ignoreLabel(t('menu.ignoreByName'), ignoreNamePatterns), enabled: ignoreNamePatterns.length > 0 },
+        { id: 'file_ignore_ext', label: ignoreLabel(t('menu.ignoreByExtension'), ignoreExtPatterns), enabled: ignoreExtPatterns.length > 0 },
+        { id: 'file_ignore_path', label: ignoreLabel(t('menu.ignoreByPath'), ignorePathPatterns), enabled: ignorePathPatterns.length > 0 },
       ],
     },
-    { id: 'file_stash_one', label: 'Stash ' + targets.length + ' File' + (targets.length > 1 ? 's' : '') + '...' },
-    { id: 'file_save_patch', label: 'Save as Patch...', icon: 'save' },
+    { id: 'file_stash_one', label: t('menu.stashPrefix') + targets.length + t('menu.fileSuffix') + (targets.length > 1 ? 's' : '') + '...' },
+    { id: 'file_save_patch', label: t('menu.saveAsPatch'), icon: 'save' },
     { type: 'separator' },
-    { id: 'file_copy_path', label: 'Copy Path', icon: 'copy' },
-    { id: 'file_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
+    { id: 'file_copy_path', label: t('menu.copyPath'), icon: 'copy' },
+    { id: 'file_copy_full_path', label: t('menu.copyFullPath'), icon: 'copy' },
     { type: 'separator' },
-    { id: 'file_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' },
+    { id: 'file_open_explorer', label: t('menu.openFileExplorer'), icon: 'folder-opened' },
     { type: 'separator' },
     ...fileTreeMenuItems(),
   ];
@@ -303,29 +304,29 @@ function buildDirContextMenuItems(dirItem, selection) {
   const dirNamePatterns = ignoreDirPatterns(dirs, 'name');
   const pathPatterns = ignoreDirPatterns(dirs, 'path');
 
-  const label = dirs.length > 1 ? dirs.length + ' folders' : "'" + dirItem.name + "'";
-  const fileLabel = files.length + ' File' + (files.length > 1 ? 's' : '');
+  const label = dirs.length > 1 ?dirs.length + t('menu.folders') : "'" + dirItem.name + "'";
+  const fileLabel = files.length + t('menu.file') + (files.length > 1 ? 's' : '');
 
   const items = [
-    { id: 'file_stage', label: 'Stage ' + fileLabel, enabled: canStage },
-    { id: 'file_unstage', label: 'Unstage ' + fileLabel, enabled: canUnstage },
-    { id: 'file_discard', label: 'Discard changes in ' + label + '...', icon: 'warning', enabled: canDiscard },
+    { id: 'file_stage', label: t('menu.stage2', { fileLabel }), enabled: canStage },
+    { id: 'file_unstage', label: t('menu.unstage2', { fileLabel }), enabled: canUnstage },
+    { id: 'file_discard', label: t('menu.discardChanges3', { label }), icon: 'warning', enabled: canDiscard },
     { type: 'separator' },
     {
       id: 'dir_ignore',
-      label: 'Ignore',
+      label: t('menu.ignore'),
       children: [
-        { id: 'dir_ignore_name', label: ignoreLabel('Ignore by Name', dirNamePatterns), enabled: dirNamePatterns.length > 0 },
-        { id: 'dir_ignore_path', label: ignoreLabel('Ignore by Path', pathPatterns), enabled: pathPatterns.length > 0 },
+        { id: 'dir_ignore_name', label: ignoreLabel(t('menu.ignoreByName'), dirNamePatterns), enabled: dirNamePatterns.length > 0 },
+        { id: 'dir_ignore_path', label: ignoreLabel(t('menu.ignoreByPath'), pathPatterns), enabled: pathPatterns.length > 0 },
       ],
     },
-    { id: 'file_stash_one', label: 'Stash ' + fileLabel + '...', enabled: canDiscard },
+    { id: 'file_stash_one', label: t('menu.stash', { fileLabel }), enabled: canDiscard },
     { type: 'separator' },
-    { id: 'dir_copy_path', label: 'Copy Path', icon: 'copy' },
-    { id: 'dir_copy_full_path', label: 'Copy Full Path', icon: 'copy' },
+    { id: 'dir_copy_path', label: t('menu.copyPath'), icon: 'copy' },
+    { id: 'dir_copy_full_path', label: t('menu.copyFullPath'), icon: 'copy' },
     { type: 'separator' },
-    { id: 'dir_show_in_explorer', label: 'Show in Explorer' },
-    { id: 'dir_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' },
+    { id: 'dir_show_in_explorer', label: t('menu.showExplorer') },
+    { id: 'dir_open_explorer', label: t('menu.openFileExplorer'), icon: 'folder-opened' },
     { type: 'separator' },
     ...fileTreeMenuItems(),
   ];
@@ -337,26 +338,26 @@ function buildDirContextMenuItems(dirItem, selection) {
 // 같은 항목이 같은 자리에 있어야 한다.
 function fileTreeMenuItems() {
   return [
-    { id: 'file_tree_view', label: 'Show Files as Tree', checked: !!ui.fileTreeView },
+    { id: 'file_tree_view', label: t('menu.showFilesAsTree'), checked: !!ui.fileTreeView },
   ];
 }
 
 function buildTabContextMenuItems() {
   const hasLocalChanges = state.staged.length > 0 || state.unstaged.length > 0 || state.untracked.length > 0;
   const items = [
-    { id: 'tab_refresh', label: 'Refresh' },
+    { id: 'tab_refresh', label: t('menu.refresh') },
     { type: 'separator' },
-    { id: 'tab_apply_patch', label: 'Apply Patch from Clipboard...' },
-    { id: 'tab_discard_all', label: 'Discard All Changes...', icon: 'warning', enabled: hasLocalChanges },
-    { id: 'tab_clean', label: 'Remove All Untracked Files...', icon: 'warning' },
+    { id: 'tab_apply_patch', label: t('menu.applyPatchFromClipboard') },
+    { id: 'tab_discard_all', label: t('menu.discardAllChanges'), icon: 'warning', enabled: hasLocalChanges },
+    { id: 'tab_clean', label: t('menu.removeAllUntrackedFiles'), icon: 'warning' },
     { type: 'separator' },
     ...fileTreeMenuItems(),
     { type: 'separator' },
-    { id: 'tab_change_repo', label: 'Change Repository...' },
-    { id: 'tab_clone', label: 'Clone Repository...' },
+    { id: 'tab_change_repo', label: t('menu.changeRepository') },
+    { id: 'tab_clone', label: t('menu.cloneRepository') },
   ];
   if (!state.isGitRepo) {
-    items.push({ id: 'tab_init', label: 'Init Repository Here' });
+    items.push({ id: 'tab_init', label: t('menu.initRepositoryHere') });
   }
   return decorateMenuItems(items);
 }
@@ -365,20 +366,20 @@ function buildWorktreeContextMenuItems(wtPath) {
   const wt = wtPath ? state.worktrees.find(w => w.path === wtPath) : null;
   const items = [];
   if (wt && !wt.isCurrent) {
-    items.push({ id: 'worktree_open', label: 'Open in This Window' });
+    items.push({ id: 'worktree_open', label: t('menu.openThisWindow') });
   }
-  items.push({ id: 'worktree_new', label: 'New Worktree...', icon: 'add' });
+  items.push({ id: 'worktree_new', label: t('menu.newWorktree'), icon: 'add' });
   items.push({ type: 'separator' });
   if (wt && !wt.isCurrent && !wt.isBare) {
-    items.push({ id: 'worktree_remove', label: "Remove '" + baseName(wt.path) + "'...", icon: 'warning' });
+    items.push({ id: 'worktree_remove', label: t('menu.remove2', { baseName: baseName(wt.path) }), icon: 'warning' });
   }
-  items.push({ id: 'worktree_prune', label: 'Prune Worktrees' });
+  items.push({ id: 'worktree_prune', label: t('menu.pruneWorktrees') });
   if (wt) {
     // 목록에 절대경로를 표시하지 않으므로 경로 확인/이동은 여기서 한다.
     items.push({ type: 'separator' });
-    items.push({ id: 'worktree_show_in_explorer', label: 'Show in Explorer' });
-    items.push({ id: 'worktree_open_explorer', label: 'Open in File Explorer', icon: 'folder-opened' });
-    items.push({ id: 'worktree_copy_path', label: 'Copy Path', icon: 'copy' });
+    items.push({ id: 'worktree_show_in_explorer', label: t('menu.showExplorer') });
+    items.push({ id: 'worktree_open_explorer', label: t('menu.openFileExplorer'), icon: 'folder-opened' });
+    items.push({ id: 'worktree_copy_path', label: t('menu.copyPath'), icon: 'copy' });
   }
   return decorateMenuItems(items);
 }
@@ -417,8 +418,8 @@ function buildPagedRefMenu({ titleId, title, entries, page, pagePrefix, tail }) 
 
   if (paged) {
     items.push({ type: 'separator' });
-    if (pageIdx > 0) items.push({ id: pagePrefix + (pageIdx - 1), label: 'Previous...' });
-    if (start + slice.length < entries.length) items.push({ id: pagePrefix + (pageIdx + 1), label: 'More...' });
+    if (pageIdx > 0) items.push({ id: pagePrefix + (pageIdx - 1), label: t('menu.previous') });
+    if (start + slice.length < entries.length) items.push({ id: pagePrefix + (pageIdx + 1), label: t('menu.more') });
   }
   for (const item of (tail || [])) items.push(item);
   return decorateMenuItems(items);
@@ -441,7 +442,7 @@ function orderedTrackingRefs(branchName, upstream) {
 }
 
 function trackingEntry(rb, upstream) {
-  return { id: 'branch_track:' + rb, label: rb + (rb === upstream ? ' (current)' : '') };
+  return { id: 'branch_track:' + rb, label: rb + (rb === upstream ? t('menu.current') : '') };
 }
 
 // 리모트가 많을 때 브랜치 메뉴 대신 따로 여는 Tracking 메뉴.
@@ -451,11 +452,11 @@ function buildBranchTrackingMenuItems(branchName, page) {
   const upstream = branch.upstream;
   return buildPagedRefMenu({
     titleId: 'branch_tracking_title',
-    title: "Set upstream of '" + branchName + "' to:",
+    title: t('menu.setUpstream2', { branchName }),
     entries: orderedTrackingRefs(branchName, upstream).map(rb => trackingEntry(rb, upstream)),
     page,
     pagePrefix: 'branch_tracking_page:',
-    tail: upstream ? [{ type: 'separator' }, { id: 'branch_untrack', label: 'Unset Upstream' }] : [],
+    tail: upstream ? [{ type: 'separator' }, { id: 'branch_untrack', label: t('menu.unsetUpstream') }] : [],
   });
 }
 
@@ -463,7 +464,7 @@ function buildBranchTrackingMenuItems(branchName, page) {
 function buildHistoryBranchMenuItems(page) {
   return buildPagedRefMenu({
     titleId: 'history_branch_title',
-    title: 'Checkout branch:',
+    title: t('menu.checkoutBranch'),
     entries: historyBranchEntries(),
     page,
     pagePrefix: 'history_branch_page:',
@@ -481,18 +482,18 @@ function buildHistoryBranchMenuItems(page) {
 function buildRefFilterMenuItems(idPrefix, refKey, label, allowHide) {
   const items = [{ type: 'separator' }];
   items.push(isFilteredRef(refKey)
-    ? { id: idPrefix + 'filter', label: "Unfilter '" + label + "'" }
-    : { id: idPrefix + 'filter', label: "Filter '" + label + "'" });
+    ? { id: idPrefix + 'filter', label: t('menu.unfilter', { label })}
+    : { id: idPrefix + 'filter', label: t('menu.filter', { label })});
   if (allowHide) {
     items.push(isHiddenRef(refKey)
-      ? { id: idPrefix + 'hide', label: "Unhide '" + label + "'" }
-      : { id: idPrefix + 'hide', label: "Hide '" + label + "'" });
+      ? { id: idPrefix + 'hide', label: t('menu.unhide', { label })}
+      : { id: idPrefix + 'hide', label: t('menu.hide', { label })});
   }
   if (ui.filteredRefs.length > 0) {
-    items.push({ id: idPrefix + 'clear_filters', label: 'Clear All Filters (' + ui.filteredRefs.length + ')' });
+    items.push({ id: idPrefix + 'clear_filters', label: t('menu.clearAllFilters', { length: ui.filteredRefs.length })});
   }
   if (ui.hiddenRefs.length > 0) {
-    items.push({ id: idPrefix + 'show_all', label: 'Show All Branches (' + ui.hiddenRefs.length + ')' });
+    items.push({ id: idPrefix + 'show_all', label: t('menu.showAllBranches', { length: ui.hiddenRefs.length })});
   }
   return items;
 }
@@ -506,9 +507,9 @@ function buildBranchContextMenuItems(branchName) {
   const items = [];
 
   if (!branch.isCurrent) {
-    items.push({ id: 'branch_checkout', label: "Checkout '" + branchName + "'" });
-    items.push({ id: 'branch_rebase_onto', label: "Rebase current onto '" + branchName + "'" });
-    items.push({ id: 'branch_merge_into', label: "Merge '" + branchName + "' into current" });
+    items.push({ id: 'branch_checkout', label: t('menu.checkout2', { branchName })});
+    items.push({ id: 'branch_rebase_onto', label: t('menu.rebaseCurrentOnto', { branchName })});
+    items.push({ id: 'branch_merge_into', label: t('menu.mergeIntoCurrent', { branchName })});
   }
 
   // 받아오기 계열은 결과가 HEAD에 들어간다 — merge도 pull도 "어디로"를 고를 수 없다.
@@ -519,17 +520,17 @@ function buildBranchContextMenuItems(branchName) {
   // 대신할지 고르게 한다 — showPullOtherBranchDialog 참고.
   if (upstream) {
     items.push(
-      { id: 'branch_ff', label: "Fast-Forward to '" + upstream + "'" },
-      { id: 'branch_pull', label: "Pull '" + upstream + "'..." },
-      { id: 'branch_pull_rebase', label: "Pull '" + upstream + "' with Rebase..." },
+      { id: 'branch_ff', label: t('menu.fastForward3', { upstream })},
+      { id: 'branch_pull', label: t('menu.pull2', { upstream })},
+      { id: 'branch_pull_rebase', label: t('menu.pullWithRebase', { upstream })},
     );
   }
 
   if (remote) {
     items.push(
-      { id: 'branch_push', label: "Push '" + branchName + "' to '" + remote + "'..." },
-      { id: 'branch_push_pr', label: "Push and Create Pull Request on '" + remote + "'..." },
-      { id: 'branch_force_push', label: "Force Push '" + branchName + "' to '" + remote + "'...", icon: 'warning' },
+      { id: 'branch_push', label: t('menu.push3', { branchName, remote })},
+      { id: 'branch_push_pr', label: t('menu.pushCreatePullRequest', { remote })},
+      { id: 'branch_force_push', label: t('menu.forcePush3', { branchName, remote }), icon: 'warning' },
     );
   }
   // 이름 바꾸기/삭제는 push 묶음 바로 아래에 둔다. 호스트 menu.show는 위치·스크롤 옵션이
@@ -537,47 +538,47 @@ function buildBranchContextMenuItems(branchName) {
   // 삭제 둘은 붙여 두되 로컬을 먼저 둬서, 위에서부터 만나는 첫 "Delete '...'"가 항상
   // 로컬이 되게 한다(원격 push --delete를 로컬 삭제로 오인하는 사고 방지).
   items.push({ type: 'separator' });
-  items.push({ id: 'branch_rename', label: "Rename '" + branchName + "'...", shortcut: 'F2' });
+  items.push({ id: 'branch_rename', label: t('menu.rename2', { branchName }), shortcut: 'F2' });
   if (!branch.isCurrent) {
-    items.push({ id: 'branch_delete', label: "Delete '" + branchName + "' (local)...", shortcut: 'Delete' });
+    items.push({ id: 'branch_delete', label: t('menu.deleteLocal', { branchName }), shortcut: t('menu.delete2') });
   }
   if (upstream) {
-    items.push({ id: 'branch_delete_remote', label: "Delete on Remote: '" + upstream + "'...", icon: 'warning' });
+    items.push({ id: 'branch_delete_remote', label: t('menu.deleteRemote2', { upstream }), icon: 'warning' });
   }
 
   items.push({ type: 'separator' });
   items.push(
-    { id: 'branch_new_branch', label: 'New Branch...', shortcut: 'Ctrl+Shift+B' },
-    { id: 'branch_new_tag', label: 'New Tag...', shortcut: 'Ctrl+Shift+T' },
+    { id: 'branch_new_branch', label: t('menu.newBranch'), shortcut: 'Ctrl+Shift+B' },
+    { id: 'branch_new_tag', label: t('menu.newTag'), shortcut: 'Ctrl+Shift+T' },
   );
   // Worktrees 노드는 linked worktree가 있을 때만 보이므로, 첫 워크트리를 만들 진입점을
   // 브랜치 메뉴에도 둔다. worktree_new는 대상 경로를 쓰지 않아 여기서도 안전하다.
-  items.push({ id: 'worktree_new', label: 'New Worktree...' });
+  items.push({ id: 'worktree_new', label: t('menu.newWorktree') });
 
   // 리모트가 적을 때만 서브메뉴로 붙인다. 많으면 별도 메뉴로 넘겨 payload가 저장소
   // 크기를 따라 커지지 않게 한다 — 그러지 않으면 아래 Pin / Copy Branch Name이 잘린다.
   const trackingChildren = orderedTrackingRefs(branchName, upstream).map(rb => trackingEntry(rb, upstream));
   if (upstream) {
     trackingChildren.push({ type: 'separator' });
-    trackingChildren.push({ id: 'branch_untrack', label: 'Unset Upstream' });
+    trackingChildren.push({ id: 'branch_untrack', label: t('menu.unsetUpstream') });
   }
   if (trackingChildren.length > REF_INLINE_MAX) {
-    items.push({ id: 'branch_tracking_open', label: 'Tracking...' });
+    items.push({ id: 'branch_tracking_open', label: t('menu.tracking') });
   } else if (trackingChildren.length > 0) {
-    items.push({ id: 'branch_tracking', label: 'Tracking', children: trackingChildren });
+    items.push({ id: 'branch_tracking', label: t('menu.tracking2'), children: trackingChildren });
   }
 
   items.push({ type: 'separator' });
   items.push(isPinnedBranch(branchName)
-    ? { id: 'branch_pin', label: "Unpin '" + branchName + "'", icon: 'pinned' }
-    : { id: 'branch_pin', label: "Pin '" + branchName + "'", icon: 'pin' });
+    ? { id: 'branch_pin', label: t('menu.unpin', { branchName }), icon: 'pinned' }
+    : { id: 'branch_pin', label: t('menu.pin', { branchName }), icon: 'pin' });
 
   for (const item of buildRefFilterMenuItems('branch_', localRefKey(branchName), branchName, !branch.isCurrent)) {
     items.push(item);
   }
 
   items.push({ type: 'separator' });
-  items.push({ id: 'branch_copy_name', label: 'Copy Branch Name' });
+  items.push({ id: 'branch_copy_name', label: t('menu.copyBranchName') });
 
   return decorateMenuItems(items);
 }
@@ -587,34 +588,34 @@ function buildPullRequestUrl(remoteUrl, branch) {
   let match = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
   if (match) return 'https://github.com/' + match[1] + '/pull/new/' + encodeURIComponent(branch);
   match = remoteUrl.match(/gitlab\.com[:/](.+?)(?:\.git)?$/);
-  if (match) return 'https://gitlab.com/' + match[1] + '/-/merge_requests/new?merge_request[source_branch]=' + encodeURIComponent(branch);
+  if (match) return 'https://gitlab.com/' + match[1] + '/-/merge_requests/new?merge_request[source_branch]=' + encodeURIComponent(branch);  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
   match = remoteUrl.match(/bitbucket\.org[:/](.+?)(?:\.git)?$/);
-  if (match) return 'https://bitbucket.org/' + match[1] + '/pull-requests/new?source=' + encodeURIComponent(branch);
+  if (match) return 'https://bitbucket.org/' + match[1] + '/pull-requests/new?source=' + encodeURIComponent(branch);  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
   return null;
 }
 
 function buildRemotesContextMenuItems(remoteName) {
   const mode = ui.remoteSortMode || 'alpha';
   const items = [
-    { id: 'remote_add', label: 'Add New Remote...' },
+    { id: 'remote_add', label: t('menu.addNewRemote') },
   ];
   if (remoteName) {
     items.push(
       { type: 'separator' },
-      { id: 'remote_prune', label: "Prune '" + remoteName + "'" },
-      { id: 'remote_push_tags', label: "Push All Tags to '" + remoteName + "'..." },
-      { id: 'remote_rename', label: "Rename '" + remoteName + "'..." },
-      { id: 'remote_set_url', label: "Change URL of '" + remoteName + "'..." },
-      { id: 'remote_copy_url', label: 'Copy URL', icon: 'copy' },
-      { id: 'remote_remove', label: "Remove '" + remoteName + "'...", icon: 'warning' },
+      { id: 'remote_prune', label: t('menu.prune2', { remoteName })},
+      { id: 'remote_push_tags', label: t('menu.pushAllTags', { remoteName })},
+      { id: 'remote_rename', label: t('menu.rename3', { remoteName })},
+      { id: 'remote_set_url', label: t('menu.changeUrl', { remoteName })},
+      { id: 'remote_copy_url', label: t('menu.copyUrl'), icon: 'copy' },
+      { id: 'remote_remove', label: t('menu.remove3', { remoteName }), icon: 'warning' },
     );
   }
   items.push(
     { type: 'separator' },
-    { id: 'remote_sort_title', label: 'Sort Branches:', enabled: false },
-    { id: 'remote_sort_alpha', label: 'Alphabetically', checked: mode === 'alpha' },
-    { id: 'remote_sort_alpha_desc', label: 'Alphabetically backward', checked: mode === 'alpha_desc' },
-    { id: 'remote_sort_recent', label: 'Recently used', checked: mode === 'recent' },
+    { id: 'remote_sort_title', label: t('menu.sortBranches'), enabled: false },
+    { id: 'remote_sort_alpha', label: t('menu.alphabetically'), checked: mode === 'alpha' },
+    { id: 'remote_sort_alpha_desc', label: t('menu.alphabeticallyBackward'), checked: mode === 'alpha_desc' },
+    { id: 'remote_sort_recent', label: t('menu.recentlyUsed'), checked: mode === 'recent' },
   );
   return decorateMenuItems(items);
 }
@@ -625,7 +626,7 @@ function buildPushRemoteMenuItems() {
   const upstreamRemote = upstream ? upstream.split('/')[0] : '';
   const branchLabel = currentBranch ? currentBranch.name : (state.branch || 'HEAD');
   const items = [
-    { id: 'push_remote_title', label: "Push '" + branchLabel + "' to:", enabled: false },
+    { id: 'push_remote_title', label: t('menu.push4', { branchLabel }), enabled: false },
   ];
   for (const r of state.remotes) {
     items.push({
@@ -645,14 +646,14 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
 
   const items = [];
   if (localExists) {
-    items.push({ id: 'remotebranch_checkout_local', label: "Checkout '" + localName + "'" });
+    items.push({ id: 'remotebranch_checkout_local', label: t('menu.checkout3', { localName })});
   } else {
-    items.push({ id: 'remotebranch_checkout_tracking', label: "Checkout as '" + localName + "'" });
+    items.push({ id: 'remotebranch_checkout_tracking', label: t('menu.checkoutAs', { localName })});
   }
   items.push(
-    { id: 'remotebranch_new_branch', label: 'New Branch from Here...' },
+    { id: 'remotebranch_new_branch', label: t('menu.newBranchFromHere') },
     { type: 'separator' },
-    { id: 'remotebranch_delete_remote', label: "Delete '" + remoteBranchName + "' on Remote...", icon: 'warning' },
+    { id: 'remotebranch_delete_remote', label: t('menu.deleteRemote3', { remoteBranchName }), icon: 'warning' },
   );
 
   // 리모트 추적 브랜치는 동명 로컬 브랜치와 따로 지정한다. 핀은 일부러 둘을 묶어 두지만,
@@ -664,7 +665,7 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
 
   items.push(
     { type: 'separator' },
-    { id: 'remotebranch_copy_name', label: 'Copy Branch Name', icon: 'copy' },
+    { id: 'remotebranch_copy_name', label: t('menu.copyBranchName'), icon: 'copy' },
   );
 
   return decorateMenuItems(items);
@@ -704,19 +705,19 @@ async function handleContextMenuAction(actionId) {
     const clip = await hecaton.clipboard.read().catch(() => null);
     const patchText = clip && clip.text ? clip.text : '';
     if (!patchText.trim() || !/^(diff --git |From [0-9a-f]{40} |--- )/m.test(patchText)) {
-      showError('Clipboard does not contain a patch.\nCopy a patch (git diff / format-patch output) first.');
+      showError(t('menu.clipboardDoesNotContainPatchCopy'));
       return;
     }
-    const patchOp = startSpinner('Applying patch...', WORKTREE_SCOPES);
+    const patchOp = startSpinner(t('menu.applyingPatch'), WORKTREE_SCOPES);
     const err = await gitApplyPatchFromText(state.cwd, patchText);
-    await afterGitOp(err, 'Apply patch', {}, patchOp);
+    await afterGitOp(err, t('menu.applyPatch'), {}, patchOp);
     return;
   }
 
   if (actionId === 'tab_change_repo') {
     // 기존 워처 정지 (폴링 RPC가 pick_folder 중 큐를 채우는 것 방지)
     if (ui.stopGitWatcher) ui.stopGitWatcher();
-    const result = await hecaton.picker.folder({ title: 'Select Git Repository', default_path: state.cwd || '' });
+    const result = await hecaton.picker.folder({ title: t('menu.selectGitRepository'), default_path: state.cwd || '' });
     if (result && result.path) {
       await openRepositoryAt(result.path);
     } else {
@@ -730,11 +731,11 @@ async function handleContextMenuAction(actionId) {
     const untrackedCount = state.untracked.length;
     hecaton.dialog.show({
       type: 'message',
-      title: 'Clean Untracked Files',
-      message: 'Remove ' + (untrackedCount > 0 ? untrackedCount + ' untracked file(s)/folder(s)' : 'all untracked files and folders') + '?\n\nIgnored files are kept. This cannot be undone.',
+      title: t('menu.cleanUntrackedFiles'),
+      message: t('menu.removeUntrackedConfirm', { target: untrackedCount > 0 ? untrackedCount + t('menu.untrackedSuffix') : t('menu.allUntrackedFilesFolders') }),
       buttons: [
-        { id: 'clean', label: 'Remove', default: true, style: 'danger' },
-        { id: 'cancel', label: 'Cancel' },
+        { id: 'clean', label: t('menu.remove'), default: true, style: 'danger' },
+        { id: 'cancel', label: t('menu.cancel') },
       ],
     });
     state.pendingDialogAction = 'clean-confirm';
@@ -746,17 +747,17 @@ async function handleContextMenuAction(actionId) {
     const unstagedCount = state.unstaged.length;
     const untrackedCount = state.untracked.length;
     const summary = [
-      stagedCount + ' staged',
-      unstagedCount + ' unstaged',
-      untrackedCount + ' untracked',
+stagedCount + t('menu.staged'),
+unstagedCount + t('menu.unstaged'),
+untrackedCount + t('menu.untracked'),
     ].join(', ');
     hecaton.dialog.show({
       type: 'message',
-      title: 'Discard All Changes',
-      message: 'Discard all local changes (' + summary + ')?\n\nTracked files and submodules will be restored to HEAD. Untracked files/folders, including nested Git repositories, will be removed. Ignored files are kept after the first commit; in a repository with no commits, they are removed too. This cannot be undone.',
+      title: t('menu.discardAllChanges2'),
+      message: t('menu.discardAllLocalChangesTrackedFiles', { summary }),
       buttons: [
-        { id: 'discard_all', label: 'Discard All', default: true, style: 'danger' },
-        { id: 'cancel', label: 'Cancel' },
+        { id: 'discard_all', label: t('menu.discardAll'), default: true, style: 'danger' },
+        { id: 'cancel', label: t('menu.cancel') },
       ],
     });
     state.pendingDialogAction = 'discard-all-confirm';
@@ -764,11 +765,11 @@ async function handleContextMenuAction(actionId) {
   }
 
   if (actionId === 'tab_init') {
-    const initOp = startSpinner('Initializing repository...');
+    const initOp = startSpinner(t('menu.initializingRepository'));
     const err = await gitInit(state.cwd);
     if (err) {
       stopSpinner(initOp);
-      showError('Init failed:\n' + err);
+      showError(t('menu.initFailed') + err);
       return;
     }
     stopSpinner(initOp);
@@ -779,10 +780,10 @@ async function handleContextMenuAction(actionId) {
   if (actionId === 'tab_clone') {
     hecaton.dialog.show({
       type: 'input',
-      title: 'Clone Repository',
-      message: 'Enter repository URL:',
+      title: t('menu.cloneRepository2'),
+      message: t('menu.enterRepositoryUrl'),
       defaultValue: '',
-      buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
+      buttons: [{ id: 'ok', label: t('menu.next'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
     });
     state.pendingDialogAction = 'clone-url';
     return;
@@ -794,12 +795,12 @@ async function handleContextMenuAction(actionId) {
     const currentBranch = state.branches.find(b => b.isCurrent) || state.branches.find(b => b.name === state.branch);
     const branchName = currentBranch ? currentBranch.name : state.branch;
     if (!branchName) {
-      showError('No branch to push');
+      showError(t('menu.noBranchPush'));
       return;
     }
-    const pushOp = startSpinner('Pushing to ' + remote + '...', [REMOTE]);
+    const pushOp = startSpinner(t('menu.pushing2') + remote + '...', [REMOTE]);
     gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-      await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, pushOp);
+      await afterGitOp(err, t('menu.push'), { metadataOnly: true, forceMeta: true }, pushOp);
     });
     return;
   }
@@ -811,26 +812,26 @@ async function handleContextMenuAction(actionId) {
       case 'remote_add':
         hecaton.dialog.show({
           type: 'input',
-          title: 'Add Remote',
-          message: 'Enter remote name:',
+          title: t('menu.addRemote'),
+          message: t('menu.enterRemoteName'),
           defaultValue: 'origin',
-          buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: t('menu.next'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-remote-name';
         break;
       case 'remote_prune': {
         if (!targetRemote) break;
-        const pruneOp = startSpinner('Pruning...', [REMOTE, REFS]);
-        gitRemotePruneAsync(state.cwd, targetRemote).then(async err => { await afterGitOp(err, 'Prune', { metadataOnly: true }, pruneOp); });
+        const pruneOp = startSpinner(t('menu.pruning'), [REMOTE, REFS]);
+        gitRemotePruneAsync(state.cwd, targetRemote).then(async err => { await afterGitOp(err, t('menu.prune'), { metadataOnly: true }, pruneOp); });
         break;
       }
       case 'remote_push_tags': {
         if (!targetRemote) break;
         hecaton.dialog.show({
           type: 'message',
-          title: 'Push Tags',
-          message: "Push all local tags to '" + targetRemote + "'?",
-          buttons: [{ id: 'proceed', label: 'Push Tags', default: true }, { id: 'cancel', label: 'Cancel' }],
+          title: t('menu.pushTags'),
+          message: t('menu.pushAllLocalTags', { targetRemote }),
+          buttons: [{ id: 'proceed', label: t('menu.pushTags'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'push-tags-confirm';
         state.pendingDialogTarget = targetRemote;
@@ -840,10 +841,10 @@ async function handleContextMenuAction(actionId) {
         if (!targetRemote) break;
         hecaton.dialog.show({
           type: 'input',
-          title: 'Rename Remote',
-          message: "Enter new name for '" + targetRemote + "':",
+          title: t('menu.renameRemote'),
+          message: t('menu.enterNewName2', { targetRemote }),
           defaultValue: targetRemote,
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'rename-remote';
         state.pendingDialogTarget = targetRemote;
@@ -854,10 +855,10 @@ async function handleContextMenuAction(actionId) {
         const currentUrl = await gitGetRemoteUrl(state.cwd, targetRemote);
         hecaton.dialog.show({
           type: 'input',
-          title: 'Change Remote URL',
-          message: "Enter new URL for '" + targetRemote + "':",
+          title: t('menu.changeRemoteUrl'),
+          message: t('menu.enterNewUrl', { targetRemote }),
           defaultValue: currentUrl,
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'set-remote-url';
         state.pendingDialogTarget = targetRemote;
@@ -869,7 +870,7 @@ async function handleContextMenuAction(actionId) {
         if (url) {
           copyToClipboard(url);
         } else {
-          showError("No URL set for remote '" + targetRemote + "'");
+          showError(t('menu.noUrlSetRemote') + targetRemote + "'");
         }
         break;
       }
@@ -877,9 +878,9 @@ async function handleContextMenuAction(actionId) {
         if (!targetRemote) break;
         hecaton.dialog.show({
           type: 'message',
-          title: 'Remove Remote',
-          message: "Remove remote '" + targetRemote + "'?\n\nAll remote-tracking branches for it will be deleted locally.",
-          buttons: [{ id: 'remove', label: 'Remove', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          title: t('menu.removeRemote'),
+          message: t('menu.removeRemoteAllRemoteTrackingBranches', { targetRemote }),
+          buttons: [{ id: 'remove', label: t('menu.remove'), default: true, style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'remove-remote-confirm';
         state.pendingDialogTarget = targetRemote;
@@ -914,10 +915,10 @@ async function handleContextMenuAction(actionId) {
       case 'worktree_new':
         hecaton.dialog.show({
           type: 'input',
-          title: 'New Worktree',
-          message: 'Enter path for the new worktree:',
+          title: t('menu.newWorktree2'),
+          message: t('menu.enterPathNewWorktree'),
           defaultValue: state.cwd ? state.cwd + '-wt' : '',
-          buttons: [{ id: 'ok', label: 'Next', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: t('menu.next'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-worktree-path';
         break;
@@ -925,27 +926,27 @@ async function handleContextMenuAction(actionId) {
         if (!wtPath) break;
         hecaton.dialog.show({
           type: 'message',
-          title: 'Remove Worktree',
-          message: "Remove worktree '" + wtPath + "'?\n\nForce Remove discards uncommitted changes in that worktree.",
+          title: t('menu.removeWorktree'),
+          message: t('menu.removeWorktreeForceRemoveDiscardsUncommitted', { wtPath }),
           buttons: [
-            { id: 'remove', label: 'Remove', default: true, style: 'danger' },
-            { id: 'force', label: 'Force Remove', style: 'danger' },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'remove', label: t('menu.remove'), default: true, style: 'danger' },
+            { id: 'force', label: t('menu.forceRemove'), style: 'danger' },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
         state.pendingDialogAction = 'remove-worktree-confirm';
         state.pendingDialogTarget = wtPath;
         break;
       case 'worktree_prune': {
-        const wtPruneOp = startSpinner('Pruning worktrees...', [REFS]);
+        const wtPruneOp = startSpinner(t('menu.pruningWorktrees'), [REFS]);
         const err = await gitWorktreePruneAsync(state.cwd);
-        await afterGitOp(err, 'Worktree prune', { metadataOnly: true }, wtPruneOp);
+        await afterGitOp(err, t('menu.worktreePrune'), { metadataOnly: true }, wtPruneOp);
         break;
       }
       case 'worktree_show_in_explorer':
         if (wtPath) {
           showInExplorer(wtPath).then(err => {
-            if (err) showError('Show in Explorer failed:\n' + err);
+            if (err) showError(t('menu.showExplorerFailed') + err);
           });
         }
         break;
@@ -966,16 +967,16 @@ async function handleContextMenuAction(actionId) {
     const tagRemote = state.remotes[0] || 'origin';
     if (!tagName) return;
     if (actionId.startsWith('tag_push:')) {
-      const tagPushOp = startSpinner('Pushing tag...', [REMOTE]);
-      gitPushTagAsync(state.cwd, tagRemote, tagName).then(async err => { await afterGitOp(err, 'Push tag', { metadataOnly: true }, tagPushOp); });
+      const tagPushOp = startSpinner(t('menu.pushingTag'), [REMOTE]);
+      gitPushTagAsync(state.cwd, tagRemote, tagName).then(async err => { await afterGitOp(err, t('menu.pushTag'), { metadataOnly: true }, tagPushOp); });
       return;
     }
     if (actionId.startsWith('tag_delete_remote:')) {
       hecaton.dialog.show({
         type: 'message',
-        title: 'Delete Remote Tag',
-        message: "Delete tag '" + tagName + "' on '" + tagRemote + "'?",
-        buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+        title: t('menu.deleteRemoteTag'),
+        message: t('menu.deleteTag3', { tagName, tagRemote }),
+        buttons: [{ id: 'delete', label: t('menu.delete2'), default: true, style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
       });
       state.pendingDialogAction = 'delete-remote-tag-confirm';
       state.pendingDialogTarget = { remote: tagRemote, tag: tagName };
@@ -983,9 +984,9 @@ async function handleContextMenuAction(actionId) {
     }
     hecaton.dialog.show({
       type: 'message',
-      title: 'Delete Tag',
-      message: "Delete local tag '" + tagName + "'?",
-      buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+      title: t('menu.deleteTag'),
+      message: t('menu.deleteLocalTag', { tagName }),
+      buttons: [{ id: 'delete', label: t('menu.delete2'), default: true, style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
     });
     state.pendingDialogAction = 'delete-tag-confirm';
     state.pendingDialogTarget = tagName;
@@ -1015,13 +1016,13 @@ async function handleContextMenuAction(actionId) {
         const kind = actionId === 'dir_ignore_name' ? 'name' : 'path';
         const patterns = ignoreDirPatterns(dirs, kind);
         if (patterns.length === 0) break;
-        const dirIgnoreOp = startSpinner('Ignoring...', [WORKTREE]);
+        const dirIgnoreOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
         let err = null;
         for (const pattern of patterns) {
           const oneErr = await gitIgnorePattern(state.cwd, pattern);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore', {}, dirIgnoreOp);
+        await afterGitOp(err, t('menu.ignore'), {}, dirIgnoreOp);
         break;
       }
       case 'dir_copy_path': {
@@ -1034,7 +1035,7 @@ async function handleContextMenuAction(actionId) {
       }
       case 'dir_show_in_explorer': {
         showInExplorer(ui.contextMenuFilePath).then(err => {
-          if (err) showError('Show in Explorer failed:\n' + err);
+          if (err) showError(t('menu.showExplorerFailed') + err);
         });
         break;
       }
@@ -1068,16 +1069,16 @@ async function handleContextMenuAction(actionId) {
     switch (actionId) {
       case 'file_open': {
         const err = await openExternal(fullPath);
-        if (err) showError('Open failed:\n' + err);
+        if (err) showError(t('menu.openFailed') + err);
         break;
       }
       case 'file_external_diff_head': {
         const raw = await gitFilePatch(state.cwd, { ...fileItem, type: 'unstaged' });
         if (raw) {
           copyToClipboard(raw);
-          showError('Patch copied to clipboard');
+          showError(t('menu.patchCopiedClipboard'));
         } else {
-          showError('No diff with HEAD');
+          showError(t('menu.noDiffWithHead'));
         }
         break;
       }
@@ -1085,15 +1086,15 @@ async function handleContextMenuAction(actionId) {
         const raw = await gitFilePatch(state.cwd, { ...fileItem, type: 'staged' });
         if (raw) {
           copyToClipboard(raw);
-          showError('Index diff copied to clipboard');
+          showError(t('menu.indexDiffCopiedClipboard'));
         } else {
-          showError('No diff with index');
+          showError(t('menu.noDiffWithIndex'));
         }
         break;
       }
       case 'file_show_in_explorer': {
         showInExplorer(fullPath).then(err => {
-          if (err) showError('Show in Explorer failed:\n' + err);
+          if (err) showError(t('menu.showExplorerFailed') + err);
         });
         break;
       }
@@ -1101,9 +1102,9 @@ async function handleContextMenuAction(actionId) {
         const raw = await gitBlameFile(state.cwd, fileItem.file);
         if (raw) {
           copyToClipboard(raw);
-          showError('Blame copied to clipboard');
+          showError(t('menu.blameCopiedClipboard'));
         } else {
-          showError('Blame not available for this file');
+          showError(t('menu.blameNotAvailableThisFile'));
         }
         break;
       }
@@ -1111,9 +1112,9 @@ async function handleContextMenuAction(actionId) {
         const raw = await gitFileHistory(state.cwd, fileItem.file);
         if (raw) {
           copyToClipboard(raw);
-          showError('History copied to clipboard');
+          showError(t('menu.historyCopiedClipboard'));
         } else {
-          showError('No history for this file');
+          showError(t('menu.noHistoryThisFile'));
         }
         break;
       }
@@ -1121,7 +1122,7 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
           if (files.length > 0) {
-            const stageOp = startSpinner('Staging...', [INDEX]);
+            const stageOp = startSpinner(t('menu.staging'), [INDEX]);
             const err = await gitStageMultiple(state.cwd, files);
             if (err) {
               stopSpinner(stageOp);
@@ -1139,7 +1140,7 @@ async function handleContextMenuAction(actionId) {
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
           if (files.length > 0) {
-            const unstageOp = startSpinner('Unstaging...', [INDEX]);
+            const unstageOp = startSpinner(t('menu.unstaging'), [INDEX]);
             const err = await gitUnstageMultiple(state.cwd, files);
             if (err) {
               stopSpinner(unstageOp);
@@ -1157,11 +1158,11 @@ async function handleContextMenuAction(actionId) {
         const count = fileItems.length;
         hecaton.dialog.show({
           type: 'message',
-          title: 'Discard Changes',
-          message: 'Discard changes in ' + count + ' file(s)?\n\nThis cannot be undone.',
+          title: t('menu.discardChanges2'),
+          message: t('menu.discardChangesFileSThisCannot', { count }),
           buttons: [
-            { id: 'discard', label: 'Discard', default: true, style: 'danger' },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'discard', label: t('menu.discard'), default: true, style: 'danger' },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
         state.pendingDialogAction = 'discard-confirm';
@@ -1173,19 +1174,19 @@ async function handleContextMenuAction(actionId) {
         const keepLocal = actionId === 'file_remove_keep';
         const removeTargets = fileItems.filter(item => item && item.type !== 'untracked');
         if (removeTargets.length === 0) {
-          showError('No tracked file to remove');
+          showError(t('menu.noTrackedFileRemove'));
           break;
         }
         const count = removeTargets.length;
         hecaton.dialog.show({
           type: 'message',
-          title: keepLocal ? 'Remove from Version Control' : 'Delete from Version Control',
+          title: keepLocal ? t('menu.removeFromVersionControl') : t('menu.deleteFromVersionControl'),
           message: keepLocal
-            ? 'Stop tracking ' + count + ' file(s)?\n\nThe local file(s) will be kept but removed from version control.'
-            : 'Delete ' + count + ' file(s) and remove from version control?\n\nThe local file(s) will be deleted. This cannot be undone.',
+            ? t('menu.stopTrackingConfirm', { count })
+            : t('menu.deleteAndUntrackConfirm', { count }),
           buttons: [
-            { id: 'remove', label: keepLocal ? 'Remove' : 'Delete', default: true, style: 'danger' },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'remove', label: keepLocal ? t('menu.remove') : t('menu.delete2'), default: true, style: 'danger' },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
         state.pendingDialogAction = 'remove-from-repo-confirm';
@@ -1194,7 +1195,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_accept_ours': {
-        const oursOp = startSpinner('Accepting ours...', [INDEX, WORKTREE]);
+        const oursOp = startSpinner(t('menu.acceptingOurs'), [INDEX, WORKTREE]);
         (async () => {
           const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
           for (const f of files) {
@@ -1203,12 +1204,12 @@ async function handleContextMenuAction(actionId) {
             const stageErr = await gitStageAsync(state.cwd, f);
             if (stageErr) { stopSpinner(oursOp); showError(stageErr); render(); return; }
           }
-          await afterGitOp(null, 'Accept ours', {}, oursOp);
+          await afterGitOp(null, t('menu.acceptOurs'), {}, oursOp);
         })();
         break;
       }
       case 'file_accept_theirs': {
-        const theirsOp = startSpinner('Accepting theirs...', [INDEX, WORKTREE]);
+        const theirsOp = startSpinner(t('menu.acceptingTheirs'), [INDEX, WORKTREE]);
         (async () => {
           const files = fileItems.filter(item => item && item.status === 'U').map(item => item.file);
           for (const f of files) {
@@ -1217,14 +1218,14 @@ async function handleContextMenuAction(actionId) {
             const stageErr = await gitStageAsync(state.cwd, f);
             if (stageErr) { stopSpinner(theirsOp); showError(stageErr); render(); return; }
           }
-          await afterGitOp(null, 'Accept theirs', {}, theirsOp);
+          await afterGitOp(null, t('menu.acceptTheirs'), {}, theirsOp);
         })();
         break;
       }
       case 'file_stage_all': {
         const allFiles = [...state.unstaged.map(f => f.file), ...state.untracked.map(f => f.file)];
         if (allFiles.length === 0) break;
-        const stageAllOp = startSpinner('Staging all...', [INDEX]);
+        const stageAllOp = startSpinner(t('menu.stagingAll'), [INDEX]);
         const err = await gitStageAll(state.cwd);
         if (err) {
           stopSpinner(stageAllOp);
@@ -1238,7 +1239,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'file_ignore_name': {
-        const ignoreNameOp = startSpinner('Ignoring...', [WORKTREE]);
+        const ignoreNameOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -1246,7 +1247,7 @@ async function handleContextMenuAction(actionId) {
           const oneErr = await gitIgnorePattern(state.cwd, pattern);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore', {}, ignoreNameOp);
+        await afterGitOp(err, t('menu.ignore'), {}, ignoreNameOp);
         break;
       }
       case 'file_ignore_ext': {
@@ -1257,20 +1258,20 @@ async function handleContextMenuAction(actionId) {
           if (ext) exts.add(ext);
         }
         if (exts.size === 0) {
-          showError('No extension to ignore');
+          showError(t('menu.noExtensionIgnore'));
           break;
         }
-        const ignoreExtOp = startSpinner('Ignoring...', [WORKTREE]);
+        const ignoreExtOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
         let err = null;
         for (const ext of exts) {
           const oneErr = await gitIgnorePattern(state.cwd, '*' + ext);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore', {}, ignoreExtOp);
+        await afterGitOp(err, t('menu.ignore'), {}, ignoreExtOp);
         break;
       }
       case 'file_ignore_path': {
-        const ignorePathOp = startSpinner('Ignoring...', [WORKTREE]);
+        const ignorePathOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
         let err = null;
         for (const item of fileItems) {
           if (!item) continue;
@@ -1278,11 +1279,11 @@ async function handleContextMenuAction(actionId) {
           const oneErr = await gitIgnorePattern(state.cwd, '/' + relPath);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Ignore', {}, ignorePathOp);
+        await afterGitOp(err, t('menu.ignore'), {}, ignorePathOp);
         break;
       }
       case 'file_stash_one': {
-        const stashOneOp = startSpinner('Stashing...', STASH_SCOPES);
+        const stashOneOp = startSpinner(t('menu.stashing'), STASH_SCOPES);
         const files = fileItems.filter(item => item && item.file).map(item => item.file);
         let err;
         if (files.length === 1) {
@@ -1290,9 +1291,9 @@ async function handleContextMenuAction(actionId) {
         } else if (files.length > 1) {
           err = await gitStashFiles(state.cwd, files);
         } else {
-          err = 'No files selected';
+          err = t('menu.noFilesSelected');
         }
-        await afterGitOp(err, 'Stash file', {}, stashOneOp);
+        await afterGitOp(err, t('menu.stashFile'), {}, stashOneOp);
         break;
       }
       case 'file_save_patch': {
@@ -1304,9 +1305,9 @@ async function handleContextMenuAction(actionId) {
         }
         if (patches.length > 0) {
           copyToClipboard(patches.join('\n\n'));
-          showError('Patch copied to clipboard');
+          showError(t('menu.patchCopiedClipboard'));
         } else {
-          showError('No patch for this file');
+          showError(t('menu.noPatchThisFile'));
         }
         break;
       }
@@ -1342,22 +1343,22 @@ async function handleContextMenuAction(actionId) {
 
     switch (actionId) {
       case 'remotebranch_checkout_local': {
-        const rbCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
-        gitCheckoutRefAsync(state.cwd, localName).then(async err => { await afterGitOp(err, 'Checkout', {}, rbCoOp); });
+        const rbCoOp = startSpinner(t('menu.checkingOut'), CHECKOUT_SCOPES);
+        gitCheckoutRefAsync(state.cwd, localName).then(async err => { await afterGitOp(err, t('menu.checkout'), {}, rbCoOp); });
         break;
       }
       case 'remotebranch_checkout_tracking': {
-        const trackCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
-        await runCreateBranch(localName, remoteBranchName, 'Checkout', trackCoOp);
+        const trackCoOp = startSpinner(t('menu.checkingOut'), CHECKOUT_SCOPES);
+        await runCreateBranch(localName, remoteBranchName, t('menu.checkout'), trackCoOp);
         break;
       }
       case 'remotebranch_new_branch':
         hecaton.dialog.show({
           type: 'input',
-          title: 'New Branch',
-          message: 'Enter branch name:',
+          title: t('menu.newBranch2'),
+          message: t('menu.enterBranchName'),
           defaultValue: localName,
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-branch';
         state.pendingDialogTarget = remoteBranchName;
@@ -1366,9 +1367,9 @@ async function handleContextMenuAction(actionId) {
         const remoteName = slashIdx >= 0 ? remoteBranchName.substring(0, slashIdx) : (state.remotes[0] || 'origin');
         hecaton.dialog.show({
           type: 'message',
-          title: 'Delete Remote Branch',
-          message: "Delete '" + remoteBranchName + "' on the remote?\n\nThis pushes a deletion to '" + remoteName + "'. The local branch is not touched.\nThis cannot be undone from this client.",
-          buttons: [{ id: 'delete', label: 'Delete on Remote', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          title: t('menu.deleteRemoteBranch'),
+          message: t('menu.deleteRemoteThisPushesDeletionLocal', { remoteBranchName, remoteName }),
+          buttons: [{ id: 'delete', label: t('menu.deleteRemote'), default: true, style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'delete-remote-branch-confirm';
         state.pendingDialogTarget = { remote: remoteName, branch: localName };
@@ -1407,9 +1408,9 @@ async function handleContextMenuAction(actionId) {
 
     if (actionId.startsWith('branch_track:')) {
       const remoteBranch = actionId.substring('branch_track:'.length);
-      const upstreamOp = startSpinner('Setting upstream...', [CONFIG]);
+      const upstreamOp = startSpinner(t('menu.settingUpstream'), [CONFIG]);
       const err = await gitSetUpstream(state.cwd, branchName, remoteBranch);
-      await afterGitOp(err, 'Set upstream', {}, upstreamOp);
+      await afterGitOp(err, t('menu.setUpstream'), {}, upstreamOp);
       return;
     }
 
@@ -1424,32 +1425,32 @@ async function handleContextMenuAction(actionId) {
 
     switch (actionId) {
       case 'branch_checkout': {
-        const brCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
-        gitCheckoutRefAsync(state.cwd, branchName).then(async err => { await afterGitOp(err, 'Checkout', {}, brCoOp); });
+        const brCoOp = startSpinner(t('menu.checkingOut'), CHECKOUT_SCOPES);
+        gitCheckoutRefAsync(state.cwd, branchName).then(async err => { await afterGitOp(err, t('menu.checkout'), {}, brCoOp); });
         break;
       }
       case 'branch_ff': {
         // 현재 브랜치면 워킹트리까지 옮기고, 아니면 refspec fetch 로 ref 만 옮긴다 —
         // 어느 쪽이든 리모트를 거치므로 REMOTE 도 함께 붙잡는다.
-        const ffOp = startSpinner('Fast-forwarding...', PULL_SCOPES);
+        const ffOp = startSpinner(t('menu.fastForwarding'), PULL_SCOPES);
         // 현재 브랜치는 merge --ff-only로 작업 트리까지 함께 옮긴다. 다른 브랜치는
         // 체크아웃돼 있지 않으므로 refspec fetch로 ref만 옮긴다 — merge를 쓰면 엉뚱하게
         // HEAD가 갱신된다.
         const ffPromise = branch && branch.isCurrent
           ? gitMergeFastForwardAsync(state.cwd, upstream)
           : gitFetchIntoBranchAsync(state.cwd, remote, splitUpstreamRef(upstream, state.remotes).branch, branchName);
-        ffPromise.then(async err => { await afterGitOp(err, 'Fast-forward', {}, ffOp); });
+        ffPromise.then(async err => { await afterGitOp(err, t('menu.fastForward'), {}, ffOp); });
         break;
       }
       case 'branch_pull':
         // 체크아웃하지 않은 브랜치면 pull이 HEAD로 들어가 버린다 — 대신할 명령을 고르게 한다.
         if (!branch || !branch.isCurrent) { showPullOtherBranchDialog(branchName, upstream, false); break; }
-        const brPullOp = startSpinner('Pulling...', PULL_SCOPES);
-        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Pull', {}, brPullOp); });
+        const brPullOp = startSpinner(t('menu.pulling'), PULL_SCOPES);
+        gitPullFromRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, t('menu.pull'), {}, brPullOp); });
         break;
       case 'branch_pull_rebase':
         if (!branch || !branch.isCurrent) { showPullOtherBranchDialog(branchName, upstream, true); break; }
-        const brPullRebaseOp = startSpinner('Pulling with rebase...', PULL_SCOPES);
+        const brPullRebaseOp = startSpinner(t('menu.pullingWithRebase'), PULL_SCOPES);
         gitPullRebaseAsync(state.cwd, remote, branchName).then(async err => {
           if (err && isRebaseConflictError(err)) {
             await refreshAsync();
@@ -1462,15 +1463,15 @@ async function handleContextMenuAction(actionId) {
             render();
             return;
           }
-          await afterGitOp(err, 'Pull (rebase)', {}, brPullRebaseOp);
+          await afterGitOp(err, t('menu.pullRebase'), {}, brPullRebaseOp);
         });
         break;
       case 'branch_force_push':
         hecaton.dialog.show({
           type: 'message',
-          title: 'Force Push',
-          message: "Force push '" + branchName + "' to '" + remote + "'?\n\nUses --force-with-lease: fails if the remote has commits you haven't fetched.",
-          buttons: [{ id: 'force_push', label: 'Force Push', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          title: t('menu.forcePush'),
+          message: t('menu.forcePushUsesForceWithLease', { branchName, remote }),
+          buttons: [{ id: 'force_push', label: t('menu.forcePush'), default: true, style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'force-push-confirm';
         state.pendingDialogTarget = { remote, branch: branchName };
@@ -1480,37 +1481,37 @@ async function handleContextMenuAction(actionId) {
         const remoteBranchPart = upstream.substring(remote.length + 1);
         hecaton.dialog.show({
           type: 'message',
-          title: 'Delete Remote Branch',
-          message: "Delete '" + upstream + "' on the remote?\n\nThis pushes a deletion to '" + remote + "'. The local branch '" + branchName + "' is not touched.\nThis cannot be undone from this client.",
-          buttons: [{ id: 'delete', label: 'Delete on Remote', default: true, style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          title: t('menu.deleteRemoteBranch'),
+          message: t('menu.deleteRemoteThisPushesDeletionLocal2', { upstream, remote, branchName }),
+          buttons: [{ id: 'delete', label: t('menu.deleteRemote'), default: true, style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'delete-remote-branch-confirm';
         state.pendingDialogTarget = { remote, branch: remoteBranchPart };
         break;
       }
       case 'branch_push': {
-        const branchPushOp = startSpinner('Pushing...', [REMOTE]);
-        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, branchPushOp); });
+        const branchPushOp = startSpinner(t('menu.pushing'), [REMOTE]);
+        gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => { await afterGitOp(err, t('menu.push'), { metadataOnly: true, forceMeta: true }, branchPushOp); });
         break;
       }
       case 'branch_push_pr': {
-        const prPushOp = startSpinner('Pushing...', [REMOTE]);
+        const prPushOp = startSpinner(t('menu.pushing'), [REMOTE]);
         gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
-          if (err) { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, prPushOp); return; }
+          if (err) { await afterGitOp(err, t('menu.push'), { metadataOnly: true, forceMeta: true }, prPushOp); return; }
           const remoteUrl = await gitGetRemoteUrl(state.cwd, remote);
           const prUrl = buildPullRequestUrl(remoteUrl, branchName);
           if (prUrl) await openExternal(prUrl);
-          await afterGitOp(null, 'Push', { metadataOnly: true, forceMeta: true }, prPushOp);
+          await afterGitOp(null, t('menu.push'), { metadataOnly: true, forceMeta: true }, prPushOp);
         });
         break;
       }
       case 'branch_new_branch':
         hecaton.dialog.show({
           type: 'input',
-          title: 'New Branch',
-          message: 'Enter branch name:',
+          title: t('menu.newBranch2'),
+          message: t('menu.enterBranchName'),
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-branch';
         state.pendingDialogTarget = branchName;
@@ -1518,10 +1519,10 @@ async function handleContextMenuAction(actionId) {
       case 'branch_new_tag':
         hecaton.dialog.show({
           type: 'input',
-          title: 'New Tag',
-          message: 'Enter tag name:',
+          title: t('menu.newTag2'),
+          message: t('menu.enterTagName'),
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-tag';
         state.pendingDialogTarget = branchName;
@@ -1529,10 +1530,10 @@ async function handleContextMenuAction(actionId) {
       case 'branch_rename':
         hecaton.dialog.show({
           type: 'input',
-          title: 'Rename Branch',
-          message: 'Enter new name:',
+          title: t('menu.renameBranch'),
+          message: t('menu.enterNewName'),
           defaultValue: branchName,
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'rename-branch';
         state.pendingDialogTarget = branchName;
@@ -1540,9 +1541,9 @@ async function handleContextMenuAction(actionId) {
       case 'branch_delete':
         hecaton.dialog.show({
           type: 'message',
-          title: 'Delete Branch',
-          message: "Delete branch '" + branchName + "'?",
-          buttons: [{ id: 'delete', label: 'Delete', default: true, style: 'danger' }, { id: 'force', label: 'Force Delete', style: 'danger' }, { id: 'cancel', label: 'Cancel' }],
+          title: t('menu.deleteBranch'),
+          message: t('menu.deleteBranch3', { branchName }),
+          buttons: [{ id: 'delete', label: t('menu.delete2'), default: true, style: 'danger' }, { id: 'force', label: t('menu.forceDelete'), style: 'danger' }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'delete-branch';
         state.pendingDialogTarget = branchName;
@@ -1550,9 +1551,9 @@ async function handleContextMenuAction(actionId) {
       case 'branch_untrack': {
         // 시작 표시 없이 afterGitOp 만 부르면, 끝낼 작업이 없어 겹쳐 돌던 다른 작업을
         // 대신 끝내게 된다(예전에는 스피너 참조만 하나 깎여 티가 나지 않았다).
-        const untrackOp = startSpinner('Unsetting upstream...', [CONFIG]);
+        const untrackOp = startSpinner(t('menu.unsettingUpstream'), [CONFIG]);
         const err = await gitUnsetUpstream(state.cwd, branchName);
-        await afterGitOp(err, 'Unset upstream', {}, untrackOp);
+        await afterGitOp(err, t('menu.unsetUpstream2'), {}, untrackOp);
         break;
       }
       case 'branch_pin':
@@ -1580,7 +1581,7 @@ async function handleContextMenuAction(actionId) {
         copyToClipboard(branchName);
         break;
       case 'branch_rebase_onto': {
-        const brRebaseOp = startSpinner('Checking rebase...', CHECKOUT_SCOPES);
+        const brRebaseOp = startSpinner(t('menu.checkingRebase'), CHECKOUT_SCOPES);
         // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
         if (await gitIsRebaseNoop(state.cwd, branchName)) {
           stopSpinner(brRebaseOp);
@@ -1592,22 +1593,22 @@ async function handleContextMenuAction(actionId) {
         if (conflictCheck.willConflict) {
           stopSpinner(brRebaseOp);
           const fileList = conflictCheck.files.length > 0
-            ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
+            ? t('menu.conflictingFiles') + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = branchName;
           hecaton.dialog.show({
             type: 'message',
-            title: 'Rebase',
-            message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
+            title: t('menu.rebase'),
+            message: t('menu.rebaseWillCauseConflictsDoYou', { fileList }),
             buttons: [
-              { id: 'rebase_proceed', label: 'Rebase', default: true },
-              { id: 'cancel', label: 'Cancel' },
+              { id: 'rebase_proceed', label: t('menu.rebase'), default: true },
+              { id: 'cancel', label: t('menu.cancel') },
             ],
           });
           render();
           break;
         }
-        updateSpinner('Rebasing...', brRebaseOp);
+        updateSpinner(t('menu.rebasing'), brRebaseOp);
         gitRebaseAsync(state.cwd, branchName).then(async err => {
           await refreshAsync();
           stopSpinner(brRebaseOp);
@@ -1627,7 +1628,7 @@ async function handleContextMenuAction(actionId) {
         break;
       }
       case 'branch_merge_into': {
-        const brMergeOp = startSpinner('Merging...', CHECKOUT_SCOPES);
+        const brMergeOp = startSpinner(t('menu.merging'), CHECKOUT_SCOPES);
         gitMergeAsync(state.cwd, branchName).then(async err => {
           await afterGitOp(err, 'Merge', {}, brMergeOp);
         });
@@ -1649,12 +1650,12 @@ async function handleContextMenuAction(actionId) {
         const displayRef = ref + (stashMessage ? '  ' + stashMessage : '');
         hecaton.dialog.show({
           type: 'message',
-          title: 'Apply Stash',
-          message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
-          checkboxes: [{ id: 'delete_after', label: 'Delete stash after applying\nStash will not be deleted if a conflict occurs', checked: false }],
+          title: t('menu.applyStash'),
+          message: t('menu.applyChangesStashYourWorkingDirectory', { displayRef }),
+          checkboxes: [{ id: 'delete_after', label: t('menu.deleteStashAfterApplyingStashWill'), checked: false }],
           buttons: [
-            { id: 'apply', label: 'Apply', default: true },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'apply', label: t('menu.apply'), default: true },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
         state.pendingDialogAction = 'stash-apply-confirm';
@@ -1664,11 +1665,11 @@ async function handleContextMenuAction(actionId) {
       case 'stash_drop': {
         hecaton.dialog.show({
           type: 'message',
-          title: 'Delete Stash',
-          message: 'Delete ' + ref + (stashMessage ? ' (' + stashMessage + ')' : '') + '?\n\nThis cannot be undone.',
+          title: t('menu.deleteStash'),
+          message: t('menu.deleteStashConfirm', { target: ref + (stashMessage ? ' (' + stashMessage + ')' : '') }),
           buttons: [
-            { id: 'drop', label: 'Delete', default: true, style: 'danger' },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'drop', label: t('menu.delete2'), default: true, style: 'danger' },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
         state.pendingDialogAction = 'stash-drop-confirm';
@@ -1678,10 +1679,10 @@ async function handleContextMenuAction(actionId) {
       case 'stash_rename':
         hecaton.dialog.show({
           type: 'input',
-          title: 'Rename Stash',
-          message: 'Enter new name for stash:',
+          title: t('menu.renameStash'),
+          message: t('menu.enterNewNameStash'),
           defaultValue: stashMessage,
-          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'rename-stash';
         state.pendingDialogTarget = ref;
@@ -1746,9 +1747,9 @@ async function handleContextMenuAction(actionId) {
   if (actionId.startsWith('checkout_branch:')) {
     const branchName = actionId.substring('checkout_branch:'.length);
     // 진행 표시 없이 afterGitOp 만 부르면 끝낼 작업이 없어 다른 작업을 대신 끝낸다.
-    const coOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
+    const coOp = startSpinner(t('menu.checkingOut'), CHECKOUT_SCOPES);
     const err = await gitCheckoutRef(state.cwd, branchName);
-    await afterGitOp(err, 'Checkout', {}, coOp);
+    await afterGitOp(err, t('menu.checkout'), {}, coOp);
     return;
   }
 
@@ -1756,10 +1757,10 @@ async function handleContextMenuAction(actionId) {
     case 'new_branch':
       hecaton.dialog.show({
         type: 'input',
-        title: 'New Branch',
-        message: 'Enter branch name:',
+        title: t('menu.newBranch2'),
+        message: t('menu.enterBranchName'),
         defaultValue: '',
-        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
       });
       state.pendingDialogAction = 'new-branch';
       state.pendingDialogTarget = hash;
@@ -1767,21 +1768,21 @@ async function handleContextMenuAction(actionId) {
     case 'new_tag':
       hecaton.dialog.show({
         type: 'input',
-        title: 'New Tag',
-        message: 'Enter tag name:',
+        title: t('menu.newTag2'),
+        message: t('menu.enterTagName'),
         defaultValue: '',
-        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
       });
       state.pendingDialogAction = 'new-tag';
       state.pendingDialogTarget = hash;
       break;
     case 'merge': {
-      const mergeOp = startSpinner('Merging...', CHECKOUT_SCOPES);
+      const mergeOp = startSpinner(t('menu.merging'), CHECKOUT_SCOPES);
       gitMergeAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Merge', {}, mergeOp); });
       break;
     }
     case 'rebase': {
-      const rebaseOp = startSpinner('Checking rebase...', CHECKOUT_SCOPES);
+      const rebaseOp = startSpinner(t('menu.checkingRebase'), CHECKOUT_SCOPES);
       // 옮길 커밋이 없으면(대상이 이미 조상) git 은 조용히 끝난다 — 먼저 안내한다.
       if (await gitIsRebaseNoop(state.cwd, hash)) {
         stopSpinner(rebaseOp);
@@ -1793,11 +1794,11 @@ async function handleContextMenuAction(actionId) {
         state.pendingRebaseRef = hash;
         hecaton.dialog.show({
           type: 'message',
-          title: 'Rebase',
-          message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
+          title: t('menu.rebase'),
+          message: t('menu.youHaveUncommittedLocalChangesWould'),
           buttons: [
-            { id: 'stash_rebase', label: 'Stash & Rebase', default: true },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'stash_rebase', label: t('menu.stashRebase'), default: true },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
       } else {
@@ -1806,22 +1807,22 @@ async function handleContextMenuAction(actionId) {
         if (conflictCheck.willConflict) {
           stopSpinner(rebaseOp);
           const fileList = conflictCheck.files.length > 0
-            ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
+            ? t('menu.conflictingFiles') + conflictCheck.files.slice(0, 10).join('\n')
             : '';
           state.pendingRebaseRef = hash;
           hecaton.dialog.show({
             type: 'message',
-            title: 'Rebase',
-            message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
+            title: t('menu.rebase'),
+            message: t('menu.rebaseWillCauseConflictsDoYou', { fileList }),
             buttons: [
-              { id: 'rebase_proceed', label: 'Rebase', default: true },
-              { id: 'cancel', label: 'Cancel' },
+              { id: 'rebase_proceed', label: t('menu.rebase'), default: true },
+              { id: 'cancel', label: t('menu.cancel') },
             ],
           });
           render();
           break;
         }
-        updateSpinner('Rebasing...', rebaseOp);
+        updateSpinner(t('menu.rebasing'), rebaseOp);
         gitRebaseAsync(state.cwd, hash).then(async err => {
           await refreshAsync();
           stopSpinner(rebaseOp);
@@ -1830,11 +1831,11 @@ async function handleContextMenuAction(actionId) {
             state.pendingRebaseRef = hash;
             hecaton.dialog.show({
               type: 'message',
-              title: 'Rebase',
-              message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+              title: t('menu.rebase'),
+              message: t('menu.staleRebaseStateWasFoundAbort'),
               buttons: [
-                { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
-                { id: 'cancel', label: 'Cancel' },
+                { id: 'abort_retry_rebase', label: t('menu.abortRetry'), default: true },
+                { id: 'cancel', label: t('menu.cancel') },
               ],
             });
           } else if (err && isRebaseConflictError(err)) {
@@ -1856,15 +1857,12 @@ async function handleContextMenuAction(actionId) {
       hecaton.dialog.show({
         type: 'message',
         title: 'Reset',
-        message: "Reset '" + (state.branch || 'HEAD') + "' to " + hash.substring(0, 8) + "?\n\n"
-          + 'Soft: keep changes staged\n'
-          + 'Mixed: keep changes in working tree\n'
-          + 'Hard: discard all changes (cannot be undone)',
+        message: t('menu.resetSoftKeepChangesStagedMixed', { value: (state.branch || 'HEAD'), substring: hash.substring(0, 8) }),
         buttons: [
-          { id: 'reset_soft', label: 'Soft' },
-          { id: 'reset_mixed', label: 'Mixed', default: true },
-          { id: 'reset_hard', label: 'Hard', style: 'danger' },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'reset_soft', label: t('menu.soft') },
+          { id: 'reset_mixed', label: t('menu.mixed'), default: true },
+          { id: 'reset_hard', label: t('menu.hard'), style: 'danger' },
+          { id: 'cancel', label: t('menu.cancel') },
         ],
       });
       state.pendingDialogAction = 'reset-confirm';
@@ -1874,11 +1872,11 @@ async function handleContextMenuAction(actionId) {
     case 'checkout': {
       hecaton.dialog.show({
         type: 'message',
-        title: 'Checkout Commit',
-        message: 'Checkout ' + hash.substring(0, 8) + "?\n\nThis will put you in 'detached HEAD' state.",
+        title: t('menu.checkoutCommit2'),
+        message: t('menu.checkoutThisWillPutYouDetached', { substring: hash.substring(0, 8) }),
         buttons: [
-          { id: 'checkout', label: 'Checkout', default: true },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'checkout', label: t('menu.checkout'), default: true },
+          { id: 'cancel', label: t('menu.cancel') },
         ],
       });
       state.pendingDialogAction = 'checkout-commit-confirm';
@@ -1888,12 +1886,12 @@ async function handleContextMenuAction(actionId) {
     case 'cherry_pick': {
       hecaton.dialog.show({
         type: 'message',
-        title: 'Cherry-pick Commit',
-        message: 'Cherry-pick ' + hash.substring(0, 8) + ' into ' + (state.branch || 'HEAD') + '?\n\nChoose how to apply it:',
+        title: t('menu.cherryPickCommit2'),
+        message: t('menu.cherryPickIntoChooseHowApply', { substring: hash.substring(0, 8), value: (state.branch || 'HEAD') }),
         buttons: [
-          { id: 'cherry_pick_commit', label: 'Cherry-pick & Commit', default: true },
-          { id: 'cherry_pick_stage', label: 'Stage Only' },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'cherry_pick_commit', label: t('menu.cherryPickCommit3'), default: true },
+          { id: 'cherry_pick_stage', label: t('menu.stageOnly') },
+          { id: 'cancel', label: t('menu.cancel') },
         ],
       });
       state.pendingDialogAction = 'cherry-pick-confirm';
@@ -1901,7 +1899,7 @@ async function handleContextMenuAction(actionId) {
       break;
     }
     case 'revert': {
-      const revertOp = startSpinner('Reverting...', CHECKOUT_SCOPES);
+      const revertOp = startSpinner(t('menu.reverting'), CHECKOUT_SCOPES);
       gitRevertAsync(state.cwd, hash).then(async err => { await afterGitOp(err, 'Revert', {}, revertOp); });
       break;
     }
@@ -1909,7 +1907,7 @@ async function handleContextMenuAction(actionId) {
       const headHash = (await gitExec(['rev-parse', 'HEAD'], state.cwd)).trim();
       const fullHash = (await gitExec(['rev-parse', hash], state.cwd)).trim();
       if (!headHash || headHash !== fullHash) {
-        showError('Only the last commit (HEAD) can be amended.\nUse Interactive Rebase > Edit Commit for older commits.');
+        showError(t('menu.onlyLastCommitHeadCanAmended'));
         break;
       }
       const message = await gitCommitMessage(state.cwd, 'HEAD');
@@ -1926,10 +1924,10 @@ async function handleContextMenuAction(actionId) {
       const message = await gitCommitMessage(state.cwd, hash);
       hecaton.dialog.show({
         type: 'input',
-        title: 'Edit Commit Message',
-        message: 'Edit message for ' + hash.substring(0, 8) + ':',
+        title: t('menu.editCommitMessage'),
+        message: t('menu.editMessage2', { substring: hash.substring(0, 8) }),
         defaultValue: message,
-        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
       });
       state.pendingDialogAction = 'reword-commit';
       state.pendingDialogTarget = hash;
@@ -1938,18 +1936,18 @@ async function handleContextMenuAction(actionId) {
     case 'squash_commit':
     case 'fixup_commit': {
       if (hasLocalChanges()) {
-        showError('Cannot rewrite history with uncommitted changes.\nCommit or stash them first.');
+        showError(t('menu.cannotRewriteHistoryWithUncommittedChanges'));
         break;
       }
       const isFixup = actionId === 'fixup_commit';
       hecaton.dialog.show({
         type: 'message',
         title: isFixup ? 'Fixup' : 'Squash',
-        message: (isFixup ? 'Fixup ' : 'Squash ') + hash.substring(0, 8) + ' into its parent?\n\n'
-          + (isFixup ? 'The commit message will be discarded.' : 'The commit messages will be combined.'),
+        message: (isFixup ? 'Fixup ' : 'Squash ') + hash.substring(0, 8) + t('menu.intoItsParent')
+          + (isFixup ? t('menu.commitMessageWillDiscarded') : t('menu.commitMessagesWillCombined')),
         buttons: [
           { id: 'proceed', label: isFixup ? 'Fixup' : 'Squash', default: true },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'cancel', label: t('menu.cancel') },
         ],
       });
       state.pendingDialogAction = isFixup ? 'fixup-commit' : 'squash-commit';
@@ -1958,17 +1956,16 @@ async function handleContextMenuAction(actionId) {
     }
     case 'edit_commit': {
       if (hasLocalChanges()) {
-        showError('Cannot rewrite history with uncommitted changes.\nCommit or stash them first.');
+        showError(t('menu.cannotRewriteHistoryWithUncommittedChanges'));
         break;
       }
       hecaton.dialog.show({
         type: 'message',
-        title: 'Edit Commit',
-        message: 'Rebase will stop at ' + hash.substring(0, 8) + ' so you can amend it.\n\n'
-          + 'Stage your changes, amend, then continue the rebase from the [b] menu.',
+        title: t('menu.editCommit'),
+        message: t('menu.rebaseWillStopAtSoYou', { substring: hash.substring(0, 8) }),
         buttons: [
-          { id: 'proceed', label: 'Start', default: true },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'proceed', label: t('menu.start'), default: true },
+          { id: 'cancel', label: t('menu.cancel') },
         ],
       });
       state.pendingDialogAction = 'edit-commit';
@@ -1977,16 +1974,16 @@ async function handleContextMenuAction(actionId) {
     }
     case 'drop_commit': {
       if (hasLocalChanges()) {
-        showError('Cannot rewrite history with uncommitted changes.\nCommit or stash them first.');
+        showError(t('menu.cannotRewriteHistoryWithUncommittedChanges'));
         break;
       }
       hecaton.dialog.show({
         type: 'message',
-        title: 'Drop Commit',
-        message: 'Drop ' + hash.substring(0, 8) + (logItem.subject ? ' (' + logItem.subject + ')' : '') + ' from history?\n\nDescendant commits will be rebased on top of its parent.',
+        title: t('menu.dropCommit2'),
+        message: 'Drop ' + hash.substring(0, 8) + (logItem.subject ? ' (' + logItem.subject + ')' : '') + t('menu.fromHistoryDescendantCommitsWillRebased'),
         buttons: [
           { id: 'drop', label: 'Drop', default: true, style: 'danger' },
-          { id: 'cancel', label: 'Cancel' },
+          { id: 'cancel', label: t('menu.cancel') },
         ],
       });
       state.pendingDialogAction = 'drop-commit';
@@ -1997,9 +1994,9 @@ async function handleContextMenuAction(actionId) {
       const patch = await gitFormatPatch(state.cwd, hash);
       if (patch) {
         copyToClipboard(patch);
-        showError('Patch copied to clipboard');
+        showError(t('menu.patchCopiedClipboard'));
       } else {
-        showError('Failed to generate patch');
+        showError(t('menu.failedGeneratePatch'));
       }
       break;
     }
@@ -2098,7 +2095,7 @@ async function handleDialogResult(params) {
 
     if (action === 'unlock-index-confirm') {
       if (buttonId === 'unlock') {
-        const unlockOp = startSpinner('Unlocking...', [INDEX]);
+        const unlockOp = startSpinner(t('menu.unlocking'), [INDEX]);
         const err = await removeIndexLock();
         stopSpinner(unlockOp);
         if (err) {
@@ -2121,23 +2118,23 @@ async function handleDialogResult(params) {
       const remoteBranch = parts.branch || target;
 
       if (buttonId === 'ff') {
-        const otherFfOp = startSpinner('Fast-forwarding...', PULL_SCOPES);
+        const otherFfOp = startSpinner(t('menu.fastForwarding'), PULL_SCOPES);
         const err = await gitFetchIntoBranchAsync(state.cwd, remote, remoteBranch, target);
-        await afterGitOp(err, 'Fast-forward', {}, otherFfOp);
+        await afterGitOp(err, t('menu.fastForward'), {}, otherFfOp);
         return;
       }
       // Checkout & Pull — 체크아웃부터 실패하면(로컬 수정 등) pull은 시도하지 않는다.
       // 두 명령이 한 동작이므로 두 번째는 startSpinner 가 아니라 updateSpinner 다.
       // 다시 start 하면 진행 중인 작업이 하나 더 등록되는데 끝내는 쪽은 afterGitOp 의
       // stopSpinner 하나뿐이라, 끝나지 않는 작업이 남아 이후 쓰기가 전부 막힌다.
-      const coPullOp = startSpinner('Checking out...', PULL_SCOPES);
+      const coPullOp = startSpinner(t('menu.checkingOut'), PULL_SCOPES);
       const coErr = await gitCheckoutRefAsync(state.cwd, target);
-      if (coErr) { await afterGitOp(coErr, 'Checkout', {}, coPullOp); return; }
-      updateSpinner(rebase ? 'Pulling with rebase...' : 'Pulling...', coPullOp);
+      if (coErr) { await afterGitOp(coErr, t('menu.checkout'), {}, coPullOp); return; }
+      updateSpinner(rebase ? t('menu.pullingWithRebase') : t('menu.pulling'), coPullOp);
       const pullErr = rebase
         ? await gitPullRebaseAsync(state.cwd, remote, remoteBranch)
         : await gitPullFromRemoteAsync(state.cwd, remote, remoteBranch);
-      await afterGitOp(pullErr, rebase ? 'Pull (rebase)' : 'Pull', {}, coPullOp);
+      await afterGitOp(pullErr, rebase ? t('menu.pullRebase') : t('menu.pull'), {}, coPullOp);
       return;
     }
 
@@ -2147,7 +2144,7 @@ async function handleDialogResult(params) {
         // 이 갈래만 afterGitOp 을 쓰지 않는다 — 실패가 곧 "force 로 다시 물어볼 일"이라
         // 오류 창을 바로 띄우면 안 되기 때문이다. 대신 갱신을 직접 기다린 뒤 작업을
         // 내리므로 뒷정리 구간이 아예 없다(force 갈래는 평소대로 afterGitOp).
-        const delOp = startSpinner('Deleting branch...', [REFS]);
+        const delOp = startSpinner(t('menu.deletingBranch'), [REFS]);
         const err = await gitDeleteBranch(state.cwd, target, false);
         // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
         // 지정한 적 없는 브랜치가 핀·필터 상태로 되살아난다.
@@ -2160,18 +2157,18 @@ async function handleDialogResult(params) {
           if (isBranchNotFullyMergedError(err)) {
             showForceDeleteBranchDialog(target, err);
           } else {
-            showError('Delete branch failed:\n' + err);
+            showError(t('menu.deleteBranchFailed') + err);
           }
         } else {
           render();
         }
       } else if (buttonId === 'force') {
-        const forceDelOp = startSpinner('Deleting branch...', [REFS]);
+        const forceDelOp = startSpinner(t('menu.deletingBranch'), [REFS]);
         const err = await gitDeleteBranch(state.cwd, target, true);
         // 사라진 브랜치의 핀/필터 지정은 남기지 않는다 — 같은 이름이 다시 생기면
         // 지정한 적 없는 브랜치가 핀·필터 상태로 되살아난다.
         if (!err) { unpinBranch(target); forgetRef(localRefKey(target)); }
-        await afterGitOp(err, 'Delete branch', {}, forceDelOp);
+        await afterGitOp(err, t('menu.deleteBranch2'), {}, forceDelOp);
       }
       return;
     }
@@ -2183,36 +2180,36 @@ async function handleDialogResult(params) {
       if (resetMode) {
         // soft/mixed 는 워킹트리를 건드리지 않지만 hard 는 갈아엎는다 — 셋을 갈라
         // 적으면 같은 버튼이 모드에 따라 다르게 막혀 읽기 어렵다. 가장 넓은 쪽으로 맞춘다.
-        const resetModeOp = startSpinner('Resetting (' + resetMode + ')...', CHECKOUT_SCOPES);
+        const resetModeOp = startSpinner(t('menu.resetting2') + resetMode + ')...', CHECKOUT_SCOPES);
         gitResetModeAsync(state.cwd, target, resetMode).then(async err => { await afterGitOp(err, 'Reset', {}, resetModeOp); });
       }
       return;
     }
     if (action === 'stash-drop-confirm') {
       if (buttonId === 'drop') {
-        const stashDropOp = startSpinner('Deleting stash...', [STASH]);
+        const stashDropOp = startSpinner(t('menu.deletingStash'), [STASH]);
         const err = await gitStashDrop(state.cwd, target);
-        await afterGitOp(err, 'Stash delete', {}, stashDropOp);
+        await afterGitOp(err, t('menu.stashDelete'), {}, stashDropOp);
       }
       return;
     }
     if (action === 'stash-apply-confirm') {
       if (buttonId === 'apply') {
         const deleteAfter = params.checkboxes && params.checkboxes.delete_after;
-        const applyStashOp = startSpinner('Applying stash...', STASH_SCOPES);
+        const applyStashOp = startSpinner(t('menu.applyingStash'), STASH_SCOPES);
         const err = await gitStashApply(state.cwd, target);
         if (!err && deleteAfter) {
           const dropErr = await gitStashDrop(state.cwd, target);
-          await afterGitOp(dropErr, 'Stash apply & delete', {}, applyStashOp);
+          await afterGitOp(dropErr, t('menu.stashApplyDelete'), {}, applyStashOp);
         } else {
-          await afterGitOp(err, 'Stash apply', {}, applyStashOp);
+          await afterGitOp(err, t('menu.stashApply'), {}, applyStashOp);
         }
       }
       return;
     }
     if (action === 'discard-confirm') {
       if (buttonId === 'discard') {
-        const discardOp = startSpinner('Discarding...', WORKTREE_SCOPES);
+        const discardOp = startSpinner(t('menu.discarding'), WORKTREE_SCOPES);
         const files = state.pendingDiscardFiles || [];
         state.pendingDiscardFiles = null;
         let err = null;
@@ -2221,7 +2218,7 @@ async function handleDialogResult(params) {
           const oneErr = await gitDiscardFile(state.cwd, item);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, 'Discard', {}, discardOp);
+        await afterGitOp(err, t('menu.discard'), {}, discardOp);
       } else {
         state.pendingDiscardFiles = null;
       }
@@ -2233,21 +2230,21 @@ async function handleDialogResult(params) {
       state.pendingRemoveFiles = null;
       state.pendingRemoveKeepLocal = false;
       if (buttonId === 'remove') {
-        const removeOp = startSpinner(keepLocal ? 'Removing...' : 'Deleting...', WORKTREE_SCOPES);
+        const removeOp = startSpinner(keepLocal ? t('menu.removing') : t('menu.deleting'), WORKTREE_SCOPES);
         let err = null;
         for (const file of files) {
           if (!file) continue;
           const oneErr = await gitRemoveFromRepo(state.cwd, file, keepLocal);
           if (!err && oneErr) err = oneErr;
         }
-        await afterGitOp(err, keepLocal ? 'Remove from version control' : 'Delete', {}, removeOp);
+        await afterGitOp(err, keepLocal ? t('menu.removeFromVersionControl2') : t('menu.delete2'), {}, removeOp);
       }
       return;
     }
     if (action === 'checkout-commit-confirm') {
       if (buttonId === 'checkout') {
-        const commitCoOp = startSpinner('Checking out...', CHECKOUT_SCOPES);
-        gitCheckoutRefAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Checkout', {}, commitCoOp); });
+        const commitCoOp = startSpinner(t('menu.checkingOut'), CHECKOUT_SCOPES);
+        gitCheckoutRefAsync(state.cwd, target).then(async err => { await afterGitOp(err, t('menu.checkout'), {}, commitCoOp); });
       }
       return;
     }
@@ -2263,7 +2260,7 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const newMessage = params.value.replace(/\r\n/g, '\n');
         if (!newMessage.trim()) {
-          showError('Commit message cannot be empty');
+          showError(t('menu.commitMessageCannotEmpty'));
           return;
         }
         await runHistoryRewrite('Reword', () => gitRewordCommitAsync(state.cwd, target, newMessage));
@@ -2279,13 +2276,13 @@ async function handleDialogResult(params) {
     }
     if (action === 'edit-commit') {
       if (buttonId === 'proceed') {
-        await runHistoryRewrite('Edit commit', () => gitEditCommitAsync(state.cwd, target));
+        await runHistoryRewrite(t('menu.editCommit2'), () => gitEditCommitAsync(state.cwd, target));
       }
       return;
     }
     if (action === 'drop-commit') {
       if (buttonId === 'drop') {
-        await runHistoryRewrite('Drop commit', () => gitDropCommitAsync(state.cwd, target));
+        await runHistoryRewrite(t('menu.dropCommit3'), () => gitDropCommitAsync(state.cwd, target));
       }
       return;
     }
@@ -2294,15 +2291,15 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const tagName = params.value.trim();
         if (!tagName) {
-          showError('Name cannot be empty');
+          showError(t('menu.nameCannotEmpty'));
           return;
         }
         hecaton.dialog.show({
           type: 'input',
-          title: 'New Tag',
-          message: "Message for '" + tagName + "' (leave empty for a lightweight tag):",
+          title: t('menu.newTag2'),
+          message: t('menu.messageLeaveEmptyLightweightTag', { tagName }),
           defaultValue: '',
-          buttons: [{ id: 'ok', label: 'Create', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: t('menu.create'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-tag-message';
         state.pendingDialogTarget = { ref: target, name: tagName };
@@ -2312,18 +2309,18 @@ async function handleDialogResult(params) {
     if (action === 'new-tag-message') {
       if (buttonId === 'ok' && params.value != null && target && target.name) {
         const tagMessage = params.value.trim();
-        const tagOp = startSpinner('Tag...', [REFS]);
+        const tagOp = startSpinner(t('menu.tag'), [REFS]);
         const err = tagMessage
           ? await gitCreateTagAnnotated(state.cwd, target.name, tagMessage, target.ref)
           : await gitCreateTag(state.cwd, target.name, target.ref);
-        await afterGitOp(err, 'Tag', {}, tagOp);
+        await afterGitOp(err, t('menu.tag2'), {}, tagOp);
       }
       return;
     }
     if (action === 'force-push-confirm') {
       if (buttonId === 'force_push' && target) {
-        const forcePushOp = startSpinner('Force pushing...', [REMOTE]);
-        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, 'Force push', { metadataOnly: true, forceMeta: true }, forcePushOp); });
+        const forcePushOp = startSpinner(t('menu.forcePushing'), [REMOTE]);
+        gitForcePushAsync(state.cwd, target.remote, target.branch).then(async err => { await afterGitOp(err, t('menu.forcePush2'), { metadataOnly: true, forceMeta: true }, forcePushOp); });
       }
       return;
     }
@@ -2331,37 +2328,37 @@ async function handleDialogResult(params) {
     // user picked which remote branch to update.
     if (action === 'push-name-mismatch') {
       if (target && (buttonId === 'push_local' || buttonId === 'push_upstream')) {
-        const mismatchPushOp = startSpinner('Pushing...', [REMOTE]);
+        const mismatchPushOp = startSpinner(t('menu.pushing'), [REMOTE]);
         const pushPromise = buttonId === 'push_local'
           ? gitPushToRemoteAsync(state.cwd, target.remote, target.local)
           : gitPushHeadToBranchAsync(state.cwd, target.remote, target.upstreamBranch);
-        pushPromise.then(async err => { await afterGitOp(err, 'Push', { metadataOnly: true, forceMeta: true }, mismatchPushOp); });
+        pushPromise.then(async err => { await afterGitOp(err, t('menu.push'), { metadataOnly: true, forceMeta: true }, mismatchPushOp); });
       }
       return;
     }
     if (action === 'delete-remote-branch-confirm') {
       if (buttonId === 'delete' && target) {
-        const delRemoteOp = startSpinner('Deleting remote branch...', [REMOTE]);
+        const delRemoteOp = startSpinner(t('menu.deletingRemoteBranch'), [REMOTE]);
         gitPushDeleteBranchAsync(state.cwd, target.remote, target.branch).then(async err => {
           // 사라진 리모트 브랜치의 필터/숨김 지정은 남기지 않는다(로컬 삭제와 같은 이유).
           if (!err) forgetRef(remoteRefKey(target.remote + '/' + target.branch));
-          await afterGitOp(err, 'Delete remote branch', { metadataOnly: true }, delRemoteOp);
+          await afterGitOp(err, t('menu.deleteRemoteBranch2'), { metadataOnly: true }, delRemoteOp);
         });
       }
       return;
     }
     if (action === 'push-tags-confirm') {
       if (buttonId === 'proceed' && target) {
-        const pushTagsOp = startSpinner('Pushing tags...', [REMOTE]);
-        gitPushTagsAsync(state.cwd, target).then(async err => { await afterGitOp(err, 'Push tags', { metadataOnly: true }, pushTagsOp); });
+        const pushTagsOp = startSpinner(t('menu.pushingTags'), [REMOTE]);
+        gitPushTagsAsync(state.cwd, target).then(async err => { await afterGitOp(err, t('menu.pushTags2'), { metadataOnly: true }, pushTagsOp); });
       }
       return;
     }
     if (action === 'remove-remote-confirm') {
       if (buttonId === 'remove' && target) {
-        const rmRemoteOp = startSpinner('Removing remote...', [CONFIG]);
+        const rmRemoteOp = startSpinner(t('menu.removingRemote'), [CONFIG]);
         const err = await gitRemoteRemove(state.cwd, target);
-        await afterGitOp(err, 'Remove remote', {}, rmRemoteOp);
+        await afterGitOp(err, t('menu.removeRemote2'), {}, rmRemoteOp);
       }
       return;
     }
@@ -2369,13 +2366,13 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const newName = params.value.trim();
         if (!newName) {
-          showError('Name cannot be empty');
+          showError(t('menu.nameCannotEmpty'));
           return;
         }
         // remote rename 은 config 뿐 아니라 remote-tracking ref 도 함께 옮긴다
-        const renameRemoteOp = startSpinner('Renaming remote...', [CONFIG, REMOTE]);
+        const renameRemoteOp = startSpinner(t('menu.renamingRemote'), [CONFIG, REMOTE]);
         const err = await gitRemoteRename(state.cwd, target, newName);
-        await afterGitOp(err, 'Rename remote', {}, renameRemoteOp);
+        await afterGitOp(err, t('menu.renameRemote2'), {}, renameRemoteOp);
       }
       return;
     }
@@ -2383,27 +2380,27 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const newUrl = params.value.trim();
         if (!newUrl) {
-          showError('URL cannot be empty');
+          showError(t('menu.urlCannotEmpty'));
           return;
         }
-        const setUrlOp = startSpinner('Updating remote URL...', [CONFIG]);
+        const setUrlOp = startSpinner(t('menu.updatingRemoteUrl'), [CONFIG]);
         const err = await gitRemoteSetUrl(state.cwd, target, newUrl);
-        await afterGitOp(err, 'Set remote URL', {}, setUrlOp);
+        await afterGitOp(err, t('menu.setRemoteUrl'), {}, setUrlOp);
       }
       return;
     }
     if (action === 'delete-tag-confirm') {
       if (buttonId === 'delete' && target) {
-        const delTagOp = startSpinner('Deleting tag...', [REFS]);
+        const delTagOp = startSpinner(t('menu.deletingTag'), [REFS]);
         const err = await gitDeleteTag(state.cwd, target);
-        await afterGitOp(err, 'Delete tag', {}, delTagOp);
+        await afterGitOp(err, t('menu.deleteTag2'), {}, delTagOp);
       }
       return;
     }
     if (action === 'delete-remote-tag-confirm') {
       if (buttonId === 'delete' && target) {
-        const delRemoteTagOp = startSpinner('Deleting remote tag...', [REMOTE]);
-        gitPushDeleteTagAsync(state.cwd, target.remote, target.tag).then(async err => { await afterGitOp(err, 'Delete remote tag', { metadataOnly: true }, delRemoteTagOp); });
+        const delRemoteTagOp = startSpinner(t('menu.deletingRemoteTag'), [REMOTE]);
+        gitPushDeleteTagAsync(state.cwd, target.remote, target.tag).then(async err => { await afterGitOp(err, t('menu.deleteRemoteTag2'), { metadataOnly: true }, delRemoteTagOp); });
       }
       return;
     }
@@ -2412,15 +2409,15 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const wtPath = params.value.trim();
         if (!wtPath) {
-          showError('Path cannot be empty');
+          showError(t('menu.pathCannotEmpty'));
           return;
         }
         hecaton.dialog.show({
           type: 'input',
-          title: 'New Worktree',
-          message: 'Enter branch for the worktree:\n(existing branch is checked out, new branch is created)',
+          title: t('menu.newWorktree2'),
+          message: t('menu.enterBranchWorktreeExistingBranchChecked'),
           defaultValue: baseName(wtPath),
-          buttons: [{ id: 'ok', label: 'Create', default: true }, { id: 'cancel', label: 'Cancel' }],
+          buttons: [{ id: 'ok', label: t('menu.create'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
         });
         state.pendingDialogAction = 'new-worktree-branch';
         state.pendingDialogTarget = wtPath;
@@ -2431,37 +2428,37 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const branchName = params.value.trim();
         if (!branchName) {
-          showError('Branch cannot be empty');
+          showError(t('menu.branchCannotEmpty'));
           return;
         }
-        const wtAddOp = startSpinner('Creating worktree...', [REFS, CONFIG]);
+        const wtAddOp = startSpinner(t('menu.creatingWorktree'), [REFS, CONFIG]);
         const exists = await gitBranchExists(state.cwd, branchName);
         const err = await gitWorktreeAdd(state.cwd, target, branchName, !exists);
-        await afterGitOp(err, 'Worktree add', { metadataOnly: true }, wtAddOp);
+        await afterGitOp(err, t('menu.worktreeAdd'), { metadataOnly: true }, wtAddOp);
       }
       return;
     }
     if (action === 'remove-worktree-confirm') {
       if ((buttonId === 'remove' || buttonId === 'force') && target) {
-        const wtRmOp = startSpinner('Removing worktree...', [REFS, CONFIG]);
+        const wtRmOp = startSpinner(t('menu.removingWorktree'), [REFS, CONFIG]);
         const err = await gitWorktreeRemove(state.cwd, target, buttonId === 'force');
-        await afterGitOp(err, 'Worktree remove', { metadataOnly: true }, wtRmOp);
+        await afterGitOp(err, t('menu.worktreeRemove'), { metadataOnly: true }, wtRmOp);
       }
       return;
     }
     if (action === 'clean-confirm') {
       if (buttonId === 'clean') {
-        const cleanOp = startSpinner('Cleaning...', WORKTREE_SCOPES);
+        const cleanOp = startSpinner(t('menu.cleaning'), WORKTREE_SCOPES);
         const err = await gitCleanUntrackedAsync(state.cwd);
-        await afterGitOp(err, 'Clean', { statusOnly: true }, cleanOp);
+        await afterGitOp(err, t('menu.clean'), { statusOnly: true }, cleanOp);
       }
       return;
     }
     if (action === 'discard-all-confirm') {
       if (buttonId === 'discard_all') {
-        const discardAllOp = startSpinner('Discarding all changes...', WORKTREE_SCOPES);
+        const discardAllOp = startSpinner(t('menu.discardingAllChanges'), WORKTREE_SCOPES);
         const err = await gitDiscardAllChangesAsync(state.cwd);
-        await afterGitOp(err, 'Discard all changes', { statusOnly: true }, discardAllOp);
+        await afterGitOp(err, t('menu.discardAllChanges3'), { statusOnly: true }, discardAllOp);
       }
       return;
     }
@@ -2470,22 +2467,22 @@ async function handleDialogResult(params) {
       if (buttonId === 'ok' && params.value != null) {
         const cloneUrl = params.value.trim();
         if (!cloneUrl) {
-          showError('URL cannot be empty');
+          showError(t('menu.urlCannotEmpty'));
           return;
         }
         if (ui.stopGitWatcher) ui.stopGitWatcher();
-        const result = await hecaton.picker.folder({ title: 'Select Destination Folder', default_path: state.cwd || '' });
+        const result = await hecaton.picker.folder({ title: t('menu.selectDestinationFolder'), default_path: state.cwd || '' });
         if (!result || !result.path) {
           if (ui.setupGitWatcher) ui.setupGitWatcher();
           return;
         }
         const repoName = cloneUrl.replace(/\/+$/, '').split('/').pop().replace(/\.git$/, '') || 'repo';
-        const cloneOp = startSpinner('Cloning ' + repoName + '...');
+        const cloneOp = startSpinner(t('menu.cloning') + repoName + '...');
         const err = await gitCloneAsync(result.path, cloneUrl, repoName);
         stopSpinner(cloneOp);
         if (err) {
           if (ui.setupGitWatcher) ui.setupGitWatcher();
-          showError('Clone failed:\n' + err);
+          showError(t('menu.cloneFailed') + err);
           return;
         }
         const sep = result.path.includes('\\') ? '\\' : '/';
@@ -2498,15 +2495,15 @@ async function handleDialogResult(params) {
     if (action === 'new-remote-name' && buttonId === 'ok' && params.value != null) {
       const remoteName = params.value.trim();
       if (!remoteName) {
-        showError('Remote name cannot be empty');
+        showError(t('menu.remoteNameCannotEmpty'));
         return;
       }
       hecaton.dialog.show({
         type: 'input',
-        title: 'Add Remote',
-        message: 'Enter URL for \'' + remoteName + '\':',
+        title: t('menu.addRemote'),
+        message: t('menu.enterUrl', { remoteName }),
         defaultValue: '',
-        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: 'Cancel' }],
+        buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
       });
       state.pendingDialogAction = 'new-remote-url';
       state.pendingDialogTarget = remoteName;
@@ -2517,25 +2514,25 @@ async function handleDialogResult(params) {
     if (action === 'new-remote-url' && buttonId === 'ok' && params.value != null) {
       const remoteUrl = params.value.trim();
       if (!remoteUrl) {
-        showError('Remote URL cannot be empty');
+        showError(t('menu.remoteUrlCannotEmpty'));
         return;
       }
-      const addRemoteOp = startSpinner('Adding remote...', [CONFIG]);
+      const addRemoteOp = startSpinner(t('menu.addingRemote'), [CONFIG]);
       const err = await gitRemoteAdd(state.cwd, target, remoteUrl);
-      await afterGitOp(err, 'Remote', {}, addRemoteOp);
+      await afterGitOp(err, t('menu.remote'), {}, addRemoteOp);
       return;
     }
 
     if (buttonId === 'ok' && params.value != null) {
       const name = params.value.trim();
       if (!name) {
-        showError('Name cannot be empty');
+        showError(t('menu.nameCannotEmpty'));
         return;
       }
-      const opName = action === 'rename-branch' ? 'Rename branch'
-        : action === 'rename-stash' ? 'Rename stash'
-        : action === 'new-branch' ? 'Branch'
-        : 'Tag';
+      const opName = action === 'rename-branch' ? t('menu.renameBranch2')
+        : action === 'rename-stash' ? t('menu.renameStash2')
+        : action === 'new-branch' ? t('menu.branch')
+        : t('menu.tag2');
       // 리네임은 ref(와 딸린 config 섹션)만 옮긴다 — 인덱스도 워킹트리도 그대로이므로
       // 도는 동안 스테이징을 막을 이유가 없다. 브랜치 생성은 runCreateBranch 에서
       // 체크아웃까지 이어질 수 있어 밝히지 않는다(= 전부 붙잡은 것으로 본다).
@@ -2582,9 +2579,9 @@ async function handleDialogResult(params) {
     // 들어온 문이 다르다는 이유로 보호가 사라진다 — 인덱스·워킹트리·ref 를 통째로
     // 옮기는 명령이므로 그 사이 스테이징이나 커밋이 끼어들면 안 된다.
     const opLabel = operationLabel(opType);
-    const menuOpLabel = buttonId === 'continue' ? opLabel + ' continue...'
-      : buttonId === 'abort' ? 'Aborting ' + opLabel.toLowerCase() + '...'
-      : opLabel + ' skip...';
+    const menuOpLabel = buttonId === 'continue' ?opLabel + t('menu.continue')
+      : buttonId === 'abort' ? t('menu.aborting') + opLabel.toLowerCase() + '...'
+      :opLabel + t('menu.skip');
     const menuOp = startSpinner(menuOpLabel, CHECKOUT_SCOPES);
     let err;
     if (buttonId === 'continue') {
@@ -2630,15 +2627,15 @@ async function handleDialogResult(params) {
     const val = params.value.trim();
     if (val) {
       // .git/config.lock 을 잡는다 — 같은 CONFIG 를 쓰는 작업과 겹치면 실패한다.
-      const setOp = startSpinner('Setting committer...', [CONFIG]);
+      const setOp = startSpinner(t('menu.settingCommitter'), [CONFIG]);
       const err = await gitSetConfig(state.cwd, configKey, val);
       if (err) {
         stopSpinner(setOp);
-        showError('Set ' + field + ' failed:\n' + err);
+        showError(t('menu.setPrefix') + field + t('menu.failedSuffix') + err);
       } else {
         // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
         invalidateCommitterCache();
-        refreshInBackground({}, { message: 'Setting committer...', settle: true, scopes: setOp.scopes });
+        refreshInBackground({}, { message: t('menu.settingCommitter'), settle: true, scopes: setOp.scopes });
         stopSpinner(setOp);
       }
     }
@@ -2651,11 +2648,11 @@ async function handleDialogResult(params) {
   if (state.pendingStash && buttonId === 'stash_confirm') {
     state.pendingStash = false;
     if (!guardDeferredAction('git-stash')) { render(); return; }
-    const stashOp = startSpinner('Stashing...', STASH_SCOPES);
+    const stashOp = startSpinner(t('menu.stashing'), STASH_SCOPES);
     gitStashSaveAsync(state.cwd).then(async stashErr => {
       if (stashErr) {
         stopSpinner(stashOp);
-        showError('Stash failed:\n' + stashErr);
+        showError(t('menu.stashFailed') + stashErr);
       } else {
         await refreshAsync();
         stopSpinner(stashOp);
@@ -2681,34 +2678,33 @@ async function handleDialogResult(params) {
     (async () => {
       // stash → 브랜치 생성(체크아웃) → stash 복원. 세 단계가 인덱스·워킹트리·ref·
       // 스태시를 차례로 옮기므로 처음부터 넷 다 붙잡은 채로 간다.
-      const seqOp = startSpinner(label + ' (1/3) Stashing', STASH_REWRITE_SCOPES);
+      const seqOp = startSpinner(label + t('menu.13Stashing'), STASH_REWRITE_SCOPES);
       const stashErr = await gitStashSaveAsync(state.cwd);
       if (stashErr) {
         stopSpinner(seqOp);
-        showError('Stash failed:\n' + stashErr);
+        showError(t('menu.stashFailed') + stashErr);
         return;
       }
-      updateSpinner(label + ' (2/3) Creating branch', seqOp);
+      updateSpinner(label + t('menu.23CreatingBranch'), seqOp);
       const createErr = await gitCreateBranch(state.cwd, req.name, req.startPoint);
       if (createErr) {
         // 브랜치가 만들어지지 않았으니 원래 자리에서 그대로 되돌려 놓는다.
-        updateSpinner(label + ' (3/3) Restoring stash', seqOp);
+        updateSpinner(label + t('menu.33RestoringStash'), seqOp);
         await gitStashPopAsync(state.cwd);
         await refreshAsync();
         stopSpinner(seqOp);
         if (state.rightView === 'log') refreshLog();
-        showError(req.opName + ' failed:\n' + createErr);
+        showError(req.opName + t('menu.failed') + createErr);
         return;
       }
-      updateSpinner(label + ' (3/3) Restoring stash', seqOp);
+      updateSpinner(label + t('menu.33RestoringStash'), seqOp);
       const popErr = await gitStashPopAsync(state.cwd);
       await refreshAsync();
       stopSpinner(seqOp);
       if (state.rightView === 'log') refreshLog();
       if (popErr) {
         // 브랜치는 만들어졌고 변경분은 stash 에 남아 있다 — 유실이 아니라는 점을 알린다.
-        showError("Branch '" + req.name + "' was created, but restoring your changes failed:\n"
-          + popErr + '\n\nYour changes are still saved in the stash.');
+        showError(t('menu.branchCreatedRestoreFailed', { name: req.name, error: popErr }));
       } else {
         render();
       }
@@ -2720,7 +2716,7 @@ async function handleDialogResult(params) {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
     if (!guardDeferredAction('reset')) { render(); return; }
-    const resetOp = startSpinner('Resetting...', CHECKOUT_SCOPES);
+    const resetOp = startSpinner(t('menu.resetting'), CHECKOUT_SCOPES);
     gitResetAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Reset', {}, resetOp); });
     return;
   }
@@ -2728,7 +2724,7 @@ async function handleDialogResult(params) {
     const ref = state.pendingRebaseRef;
     state.pendingRebaseRef = null;
     if (!guardDeferredAction('rebase')) { render(); return; }
-    const rebaseOp = startSpinner('Rebasing...', CHECKOUT_SCOPES);
+    const rebaseOp = startSpinner(t('menu.rebasing'), CHECKOUT_SCOPES);
     gitRebaseAsync(state.cwd, ref).then(async err => {
       await refreshAsync();
       stopSpinner(rebaseOp);
@@ -2737,11 +2733,11 @@ async function handleDialogResult(params) {
         state.pendingRebaseRef = ref;
         hecaton.dialog.show({
           type: 'message',
-          title: 'Rebase',
-          message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+          title: t('menu.rebase'),
+          message: t('menu.staleRebaseStateWasFoundAbort'),
           buttons: [
-            { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
-            { id: 'cancel', label: 'Cancel' },
+            { id: 'abort_retry_rebase', label: t('menu.abortRetry'), default: true },
+            { id: 'cancel', label: t('menu.cancel') },
           ],
         });
       } else if (err && isRebaseConflictError(err)) {
@@ -2765,9 +2761,9 @@ async function handleDialogResult(params) {
     // 막으면 빠져나올 방법이 없어진다. 자원 겹침만 본다.
     if (!guardDeferredAction('rebase', { allowDuringOperation: true })) { render(); return; }
     (async () => {
-      const retryOp = startSpinner('Aborting stale rebase...', CHECKOUT_SCOPES);
+      const retryOp = startSpinner(t('menu.abortingStaleRebase'), CHECKOUT_SCOPES);
       await gitRebaseAbort(state.cwd);
-      updateSpinner('Retrying rebase...', retryOp);
+      updateSpinner(t('menu.retryingRebase'), retryOp);
       const retryErr = await gitRebaseAsync(state.cwd, ref);
       await refreshAsync();
       stopSpinner(retryOp);
@@ -2779,7 +2775,7 @@ async function handleDialogResult(params) {
         }
         render();
       } else if (retryErr) {
-        showError('Rebase failed:\n' + retryErr);
+        showError(t('menu.rebaseFailed') + retryErr);
       } else {
         render();
       }
@@ -2793,17 +2789,17 @@ async function handleDialogResult(params) {
     if (!guardDeferredAction('rebase', { allowDuringOperation: true })) { render(); return; }
     (async () => {
       // stash → rebase → stash 복원. 인덱스·워킹트리·ref·스태시를 차례로 옮긴다.
-      const srOp = startSpinner('Stash & Rebase... (1/3) Stashing', STASH_REWRITE_SCOPES);
+      const srOp = startSpinner(t('menu.stashRebase13Stashing'), STASH_REWRITE_SCOPES);
       const stashErr = await gitStashSaveAsync(state.cwd);
       if (stashErr) {
         stopSpinner(srOp);
-        showError('Stash failed:\n' + stashErr);
+        showError(t('menu.stashFailed') + stashErr);
         return;
       }
-      updateSpinner('Stash & Rebase... (2/3) Rebasing', srOp);
+      updateSpinner(t('menu.stashRebase23Rebasing'), srOp);
       let rebaseErr = await gitRebaseAsync(state.cwd, ref);
       if (rebaseErr && isStaleRebaseError(rebaseErr)) {
-        updateSpinner('Stash & Rebase... (2/3) Aborting stale rebase & retrying', srOp);
+        updateSpinner(t('menu.stashRebase23AbortingStale'), srOp);
         await gitRebaseAbort(state.cwd);
         rebaseErr = await gitRebaseAsync(state.cwd, ref);
       }
@@ -2819,21 +2815,21 @@ async function handleDialogResult(params) {
         return;
       }
       if (rebaseErr) {
-        updateSpinner('Stash & Rebase... (3/3) Restoring stash', srOp);
+        updateSpinner(t('menu.stashRebase33RestoringStash'), srOp);
         await gitStashPopAsync(state.cwd);
         await refreshAsync();
         stopSpinner(srOp);
         if (state.rightView === 'log') refreshLog();
-        showError('Rebase failed:\n' + rebaseErr);
+        showError(t('menu.rebaseFailed') + rebaseErr);
         return;
       }
-      updateSpinner('Stash & Rebase... (3/3) Restoring stash', srOp);
+      updateSpinner(t('menu.stashRebase33RestoringStash'), srOp);
       const popErr = await gitStashPopAsync(state.cwd);
       await refreshAsync();
       stopSpinner(srOp);
       if (state.rightView === 'log') refreshLog();
       if (popErr) {
-        showError('Rebase succeeded, but stash pop failed:\n' + popErr);
+        showError(t('menu.rebaseSucceededButStashPopFailed') + popErr);
       } else {
         render();
       }
@@ -2845,13 +2841,13 @@ async function handleDialogResult(params) {
 
 async function runCherryPickFromDialog(ref, commitImmediately) {
   if (commitImmediately) {
-    const cpOp = startSpinner('Cherry-picking...', CHECKOUT_SCOPES);
-    gitCherryPickAsync(state.cwd, ref).then(async err => { await afterGitOp(err, 'Cherry-pick', {}, cpOp); });
+    const cpOp = startSpinner(t('menu.cherryPicking'), CHECKOUT_SCOPES);
+    gitCherryPickAsync(state.cwd, ref).then(async err => { await afterGitOp(err, t('menu.cherryPick'), {}, cpOp); });
     return;
   }
 
   // --no-commit 은 HEAD 를 옮기지 않는다 — 인덱스와 워킹트리에만 얹는다.
-  const cpNoCommitOp = startSpinner('Cherry-picking without commit...', WORKTREE_SCOPES);
+  const cpNoCommitOp = startSpinner(t('menu.cherryPickingWithoutCommit'), WORKTREE_SCOPES);
   try {
     const message = await gitCommitMessage(state.cwd, ref);
     const err = await gitCherryPickNoCommitAsync(state.cwd, ref);
@@ -2865,7 +2861,7 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
       return;
     }
     if (err) {
-      showError('Cherry-pick failed:\n' + err);
+      showError(t('menu.cherryPickFailed') + err);
       return;
     }
 
@@ -2880,7 +2876,7 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
     render();
   } catch (e) {
     stopSpinner(cpNoCommitOp);
-    showError('Cherry-pick failed:\n' + ((e && e.message) || e || 'Operation failed'));
+    showError(t('menu.cherryPickFailed') + ((e && e.message) || e || t('menu.operationFailed')));
   }
 }
 
@@ -2947,7 +2943,7 @@ async function runHistoryRewrite(opName, fn) {
   try {
     err = await fn();
   } catch (e) {
-    err = (e && e.message) || 'Operation failed';
+    err = (e && e.message) || t('menu.operationFailed');
   }
   await refreshAsync();
   stopSpinner(rewriteOp);
@@ -2959,7 +2955,7 @@ async function runHistoryRewrite(opName, fn) {
     }
     render();
   } else if (err) {
-    showError(opName + ' failed:\n' + err);
+    showError(opName + t('menu.failed') + err);
   } else {
     render();
   }
@@ -2989,7 +2985,7 @@ async function afterGitOp(err, opName, refreshOpts = {}, op = null) {
   // 두 표시 사이에서 제목이 한 번 맨 상태로 떨어졌다 돌아온다.
   refreshInBackground(refreshOpts, followup);
   stopSpinner(op);
-  if (err) showError(opName + ' failed:\n' + err);
+  if (err) showError(opName + t('menu.failed') + err);
 }
 
 function showError(msg) {
@@ -2998,7 +2994,7 @@ function showError(msg) {
   if (!state.spinnerActive) state.error = null;
   hecaton.dialog.show({
     type: 'message',
-    title: 'Error',
+    title: t('menu.error'),
     message: msg,
     buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
@@ -3023,14 +3019,11 @@ function showRebaseNoopDialog(ref) {
   state.pendingRebaseRef = ref;
   hecaton.dialog.show({
     type: 'message',
-    title: 'Rebase',
-    message: "'" + short + "' is already an ancestor of '" + branch + "'.\n"
-      + 'There are no commits to move, so rebase would do nothing.\n\n'
-      + 'Reset moves ' + branch + ' back to ' + short + '.\n'
-      + 'The commits ahead leave the branch (recoverable via reflog).',
+    title: t('menu.rebase'),
+    message: t('menu.alreadyAncestorThereNoCommitsMove', { short, branch, branch2: branch, short2: short }),
     buttons: [
       { id: 'rebase_reset_hard', label: 'Reset', default: true, style: 'success' },
-      { id: 'cancel', label: 'Cancel' },
+      { id: 'cancel', label: t('menu.cancel') },
     ],
   });
   render();
@@ -3056,11 +3049,10 @@ function showStashCreateBranchDialog(name, startPoint, opName, err) {
   hecaton.dialog.show({
     type: 'message',
     title: opName,
-    message: 'Your local changes would be overwritten by checking out this branch.\n'
-      + 'Would you like to stash them, create the branch, and then reapply?\n\n' + err,
+    message: t('menu.yourLocalChangesWouldOverwrittenBy2', { err }),
     buttons: [
-      { id: 'stash_create_branch', label: 'Stash & Create', default: true },
-      { id: 'cancel', label: 'Cancel' },
+      { id: 'stash_create_branch', label: t('menu.stashCreate'), default: true },
+      { id: 'cancel', label: t('menu.cancel') },
     ],
   });
   render();
@@ -3094,31 +3086,26 @@ function showPullOtherBranchDialog(branchName, upstream, rebase) {
   // 다른 워크트리가 잡고 있으면 두 선택지 모두 git이 거절한다 — 고르게 하지 않고 알려만 준다.
   const holder = state.worktrees.find(w => !w.isCurrent && w.branch === branchName);
   if (holder) {
-    showError("'" + branchName + "' is checked out in another worktree:\n" + holder.path
-      + '\n\nUpdate it from that worktree — git refuses to move a branch that is checked out elsewhere.');
+    showError(t('menu.checkedOutInAnotherWorktree', { branchName, path: holder.path }));
     return;
   }
 
   let situation;
-  if (behind === 0 && ahead === 0) situation = "'" + branchName + "' already matches '" + upstream + "'.";
+  if (behind === 0 && ahead === 0) situation = "'" + branchName + t('menu.alreadyMatches') + upstream + "'.";
   else if (ahead > 0 && behind > 0) {
-    situation = "'" + branchName + "' has diverged from '" + upstream + "' (↑" + ahead + ' ↓' + behind + ')'
-      + '\nFast-Forward will be refused — only Checkout & Pull can merge the two sides.';
-  } else if (behind > 0) situation = "'" + branchName + "' is ↓" + behind + " behind '" + upstream + "' and can be fast-forwarded.";
-  else situation = "'" + branchName + "' is ↑" + ahead + " ahead of '" + upstream + "' — nothing to receive.";
+    situation = t('menu.divergedFromUpstream', { branchName, upstream, ahead, behind });
+  } else if (behind > 0) situation = t('menu.behindUpstream', { branchName, behind, upstream });
+  else situation = t('menu.aheadOfUpstream', { branchName, ahead, upstream });
 
-  const pullLabel = rebase ? 'Checkout & Pull (Rebase)' : 'Checkout & Pull';
+  const pullLabel = rebase ? t('menu.checkoutPullRebase') : t('menu.checkoutPull');
   hecaton.dialog.show({
     type: 'message',
-    title: rebase ? "Pull '" + branchName + "' with Rebase" : "Pull '" + branchName + "'",
-    message: "git pull always merges into the checked-out branch, so it would update '" + current
-      + "' instead of '" + branchName + "'.\n\n" + situation
-      + '\n\nFast-Forward moves the branch without touching your working tree.\n'
-      + pullLabel + " switches to '" + branchName + "' first, then pulls.",
+    title: rebase ? t('menu.pullPrefix') + branchName + t('menu.withRebaseSuffix'): t('menu.pullPrefix') + branchName + "'",
+    message: t('menu.gitPullAlwaysMergesIntoChecked', { current, branchName, situation, pullLabel, branchName2: branchName }),
     buttons: [
-      { id: 'ff', label: 'Fast-Forward', default: !(ahead > 0 && behind > 0) },
+      { id: 'ff', label: t('menu.fastForward2'), default: !(ahead > 0 && behind > 0) },
       { id: 'checkout_pull', label: pullLabel, default: ahead > 0 && behind > 0 },
-      { id: 'cancel', label: 'Cancel' },
+      { id: 'cancel', label: t('menu.cancel') },
     ],
   });
   state.pendingDialogAction = rebase ? 'pull-other-branch-rebase' : 'pull-other-branch';
@@ -3128,11 +3115,11 @@ function showPullOtherBranchDialog(branchName, upstream, rebase) {
 function showForceDeleteBranchDialog(branchName, err) {
   hecaton.dialog.show({
     type: 'message',
-    title: 'Delete Branch',
-    message: "Branch '" + branchName + "' is not fully merged into the current branch.\n\nForce delete it anyway?\n\n" + err,
+    title: t('menu.deleteBranch'),
+    message: t('menu.branchNotFullyMergedIntoCurrent', { branchName, err }),
     buttons: [
-      { id: 'force', label: 'Force Delete', default: true },
-      { id: 'cancel', label: 'Cancel' },
+      { id: 'force', label: t('menu.forceDelete'), default: true },
+      { id: 'cancel', label: t('menu.cancel') },
     ],
   });
   state.pendingDialogAction = 'delete-branch';
@@ -3156,16 +3143,16 @@ async function openExternal(fullPath) {
     }
     const r = await hecaton.process.exec({ program, args, timeout_ms: 5000 });
     if (r && r.ok) return null;
-    return (r && r.error) || 'Failed to open file';
+    return (r && r.error) || t('menu.failedOpenFile');
   } catch (e) {
-    return e.message || 'Failed to open file';
+    return e.message || t('menu.failedOpenFile');
   }
 }
 
 async function showInExplorer(fullPath) {
   const result = await hecaton.fs.reveal({ path: fullPath }).catch(() => null);
   if (!result || !result.ok) {
-    return (result && result.error) || 'Failed to show file';
+    return (result && result.error) || t('menu.failedShowFile');
   }
   return null;
 }

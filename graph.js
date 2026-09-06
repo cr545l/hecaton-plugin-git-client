@@ -1,3 +1,4 @@
+const { t } = require('./i18n');
 const STYLE_NORMAL = 0;
 const STYLE_RECOVERY = 1;
 
@@ -316,8 +317,8 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     }
     if (commit.isRecovery) {
       decoration = decoration
-        ? decoration.replace(/\)$/, ', recovery)')
-        : ' (recovery)';
+        ? decoration.replace(/\)$/, t('graph.recovery'))
+        : t('graph.recovery2');
     }
     row.decoration = decoration;
     rows.push(row);

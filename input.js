@@ -1,3 +1,4 @@
+const { t } = require('./i18n');
 const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
 const hostScroll = require('./scroll');
@@ -64,7 +65,7 @@ async function handleCommitterAction(action) {
     // git config 는 .git/config.lock 을 잡는다 — 같은 CONFIG 를 쓰는 다른 작업
     // (브랜치 추적 설정, 리모트 편집)과 겹치면 "could not lock config file"로 실패한다.
     // 판정표에는 [CONFIG]로 적어 두고 실행이 신고하지 않으면 그 판정이 헛돈다.
-    const resetOp = startSpinner('Resetting committer...', [CONFIG]);
+    const resetOp = startSpinner(t('input.resettingCommitter'), [CONFIG]);
     const err = await gitUnsetConfigLocal(state.cwd, key);
     if (err) {
       stopSpinner(resetOp);
@@ -73,7 +74,7 @@ async function handleCommitterAction(action) {
     } else {
       // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
       invalidateCommitterCache();
-      refreshInBackground({}, { message: 'Resetting committer...', settle: true, scopes: resetOp.scopes });
+      refreshInBackground({}, { message: t('input.resettingCommitter'), settle: true, scopes: resetOp.scopes });
       stopSpinner(resetOp);
     }
     return true;
@@ -84,12 +85,12 @@ async function handleCommitterAction(action) {
     state.pendingCommitterEdit = isName ? 'name' : 'email';
     hecaton.dialog.show({
       type: 'input',
-      title: isName ? 'Committer Name' : 'Committer Email',
-      message: isName ? 'Enter name for local git commits:' : 'Enter email for local git commits:',
+      title: isName ? t('input.committerName') : t('input.committerEmail'),
+      message: isName ? t('input.enterNameLocalGitCommits') : t('input.enterEmailLocalGitCommits'),
       defaultValue: isName ? (state.committerName || '') : (state.committerEmail || ''),
       buttons: [
         { id: 'ok', label: 'OK', default: true },
-        { id: 'cancel', label: 'Cancel' },
+        { id: 'cancel', label: t('menu.cancel') },
       ],
     });
     return true;
@@ -103,7 +104,7 @@ function showErrorDialog(msg) {
   if (!state.spinnerActive) state.error = null;
   hecaton.dialog.show({
     type: 'message',
-    title: 'Error',
+    title: t('menu.error'),
     message: msg,
     buttons: [{ id: 'ok', label: 'OK', default: true }],
   });
@@ -127,14 +128,12 @@ function shortRefLabel(name) {
 function showPushNameMismatchDialog(info) {
   hecaton.dialog.show({
     type: 'message',
-    title: 'Push',
-    message: "Local branch '" + info.local + "' tracks '" + info.upstream + "', which has a different name.\n\n"
-      + "Push as '" + info.local + "': updates '" + info.remote + '/' + info.local + "' and retargets the upstream.\n"
-      + "Push to '" + info.upstreamBranch + "': updates the tracked branch and keeps the current upstream.",
+    title: t('menu.push'),
+    message: t('input.localBranchTracksWhichHasDifferent', { local: info.local, upstream: info.upstream, local2: info.local, remote: info.remote, local3: info.local, upstreamBranch: info.upstreamBranch }),
     buttons: [
-      { id: 'push_local', label: "Push as '" + shortRefLabel(info.local) + "'", default: true },
-      { id: 'push_upstream', label: "Push to '" + shortRefLabel(info.upstreamBranch) + "'" },
-      { id: 'cancel', label: 'Cancel' },
+      { id: 'push_local', label: t('input.pushAs', { shortRefLabel: shortRefLabel(info.local) }), default: true },
+      { id: 'push_upstream', label: t('input.push', { shortRefLabel: shortRefLabel(info.upstreamBranch) })},
+      { id: 'cancel', label: t('menu.cancel') },
     ],
   });
   state.pendingDialogAction = 'push-name-mismatch';
@@ -158,11 +157,11 @@ function pushCurrentBranch() {
     showPushNameMismatchDialog(mismatch);
     return;
   }
-  const pushOp = startSpinner('Pushing...', [REMOTE]);
+  const pushOp = startSpinner(t('menu.pushing'), [REMOTE]);
   const pushPromise = currentBranch && !currentBranch.upstream
     ? (state.remotes.length > 0
         ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
-        : Promise.resolve('No remote configured for push'))
+        : Promise.resolve(t('input.noRemoteConfiguredPush')))
     : gitPushAsync(state.cwd);
   pushPromise.then(async err => {
     if (err) {
@@ -172,7 +171,7 @@ function pushCurrentBranch() {
     } else {
       // 후속 갱신까지가 "Push" 한 동작이다 — 라벨을 이어 주고, 스피너를 넘겨준 뒤 내린다
       // (afterGitOp과 같은 이유: 사이에 참조가 0이 되면 제목이 한 번 깜빡인다).
-      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: 'Pushing...', settle: true, scopes: pushOp.scopes });
+      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: t('menu.pushing'), settle: true, scopes: pushOp.scopes });
       stopSpinner(pushOp);
     }
   });
@@ -188,14 +187,14 @@ function requestPush() {
 }
 
 function runFetch() {
-  const fetchOp = startSpinner('Fetching...', [REMOTE]);
+  const fetchOp = startSpinner(t('input.fetching'), [REMOTE]);
   gitFetchAsync(state.cwd).then(async err => {
     if (err) {
       stopSpinner(fetchOp);
       showErrorDialog(err);
       render();
     } else {
-      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: 'Fetching...', settle: true, scopes: fetchOp.scopes });
+      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: t('input.fetching'), settle: true, scopes: fetchOp.scopes });
       stopSpinner(fetchOp);
     }
   });
@@ -206,14 +205,14 @@ function requestFetch() {
 }
 
 function runPull() {
-  const pullOp = startSpinner('Pulling...', PULL_SCOPES);
+  const pullOp = startSpinner(t('menu.pulling'), PULL_SCOPES);
   gitPullAsync(state.cwd).then(async err => {
     if (err) {
       stopSpinner(pullOp);
       showErrorDialog(err);
       render();
     } else {
-      refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: 'Pulling...', settle: true, scopes: pullOp.scopes });
+      refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: t('menu.pulling'), settle: true, scopes: pullOp.scopes });
       stopSpinner(pullOp);
     }
   });
@@ -285,7 +284,7 @@ function setConflictSelection(chunkIndex, pick) {
 }
 
 function buildResolvedConflictContent() {
-  if (!state.conflictView) return { ok: false, message: 'No conflict view is active' };
+  if (!state.conflictView) return { ok: false, message: t('input.noConflictViewActive') };
   const outLines = [];
   for (let i = 0; i < state.conflictView.chunks.length; i++) {
     const chunk = state.conflictView.chunks[i];
@@ -295,7 +294,7 @@ function buildResolvedConflictContent() {
     }
     const selection = ui.mergeChunkSelections[i];
     if (selection !== 'ours' && selection !== 'theirs' && selection !== 'both') {
-      return { ok: false, message: 'Select a side for every conflict chunk before applying' };
+      return { ok: false, message: t('input.selectSideEveryConflictChunkBefore') };
     }
     // both 는 화면에 놓인 순서대로 — 왼쪽(ours) 다음 오른쪽(theirs)이다.
     if (selection === 'both') outLines.push(...chunk.ours, ...chunk.theirs);
@@ -362,7 +361,7 @@ function enterAmendCommitMode() {
 // 읽으면 그때는 이미 다른 파일이 골라져 있다(requestStageSelection 참고).
 async function runStageSelection(isStage, files) {
   if (!files || files.length === 0) return;
-  const op = startSpinner(isStage ? 'Staging...' : 'Unstaging...', [INDEX]);
+  const op = startSpinner(isStage ? t('menu.staging') : t('menu.unstaging'), [INDEX]);
   const err = isStage
     ? await gitStageMultiple(state.cwd, files)
     : await gitUnstageMultiple(state.cwd, files);
@@ -398,7 +397,7 @@ async function runStageAll(isStage) {
     .map(item => item.file);
   if (files.length === 0) return;
   state.selectedFiles.clear();
-  const op = startSpinner(isStage ? 'Staging all...' : 'Unstaging all...', [INDEX]);
+  const op = startSpinner(isStage ? t('menu.stagingAll') : t('input.unstagingAll'), [INDEX]);
   const err = isStage ? await gitStageAll(state.cwd) : await gitUnstageAll(state.cwd);
   finishStageOp(isStage, files, err, op);
 }
@@ -430,16 +429,16 @@ async function applyHunkAction(hunkIdx) {
   if (!item || (item.type !== 'staged' && item.type !== 'unstaged')) return;
   const patch = buildHunkPatchText(state.diffLines, hunkIdx);
   if (!patch) {
-    showErrorDialog('Failed to build hunk patch');
+    showErrorDialog(t('input.failedBuildHunkPatch'));
     render();
     return;
   }
   const isStagedView = item.type === 'staged';
-  const hunkOp = startSpinner(isStagedView ? 'Unstaging hunk...' : 'Staging hunk...', [INDEX]);
+  const hunkOp = startSpinner(isStagedView ? t('input.unstagingHunk') : t('input.stagingHunk'), [INDEX]);
   const err = await gitApplyPatchText(state.cwd, patch, { cached: true, reverse: isStagedView });
   if (err) {
     stopSpinner(hunkOp);
-    showErrorDialog((isStagedView ? 'Unstage hunk' : 'Stage hunk') + ' failed:\n' + err);
+    showErrorDialog((isStagedView ? t('input.unstageHunk') : t('input.stageHunk')) + t('menu.failed') + err);
     render();
     return;
   }
@@ -460,7 +459,7 @@ async function applyConflictSelections() {
     return;
   }
 
-  const resolveOp = startSpinner('Applying resolution...', WORKTREE_SCOPES);
+  const resolveOp = startSpinner(t('input.applyingResolution'), WORKTREE_SCOPES);
   const writeErr = await gitWriteConflictResolution(state.cwd, sel.file, resolved.content);
   if (writeErr) {
     stopSpinner(resolveOp);
@@ -489,17 +488,17 @@ function openOperationMenu() {
   if (!state.operationState) return;
   const op = state.operationState;
   const isRebase = op.type === 'rebase-merge' || op.type === 'rebase-apply';
-  const typeLabel = isRebase ? 'Rebase' : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? 'Cherry-pick' : 'Revert';
+  const typeLabel = isRebase ? t('action.rebase') : op.type === 'merge' ? 'Merge' : op.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert';
   const buttons = [
-    { id: 'continue', label: 'Continue', default: true },
-    { id: 'abort', label: 'Abort' },
+    { id: 'continue', label: t('input.continue'), default: true },
+    { id: 'abort', label: t('input.abort') },
   ];
-  if (op.type !== 'merge') buttons.push({ id: 'skip', label: 'Skip' });
-  buttons.push({ id: 'cancel', label: 'Cancel' });
+  if (op.type !== 'merge') buttons.push({ id: 'skip', label: t('input.skip') });
+  buttons.push({ id: 'cancel', label: t('menu.cancel') });
   hecaton.dialog.show({
     type: 'message',
     title: typeLabel,
-    message: 'Choose action:',
+    message: t('input.chooseAction'),
     buttons,
   });
   state.pendingRebaseMenu = true;
@@ -744,7 +743,7 @@ async function handleKey(key) {
         if (!guardAction('rebase')) break;
         const logItem = selectedLogRef();
         if (!logItem || !logItem.ref) {
-          showErrorDialog('Select a commit in log view to rebase onto');
+          showErrorDialog(t('input.selectCommitLogViewRebaseOnto'));
           render();
           break;
         }
@@ -752,36 +751,36 @@ async function handleKey(key) {
           state.pendingRebaseRef = logItem.ref;
           hecaton.dialog.show({
             type: 'message',
-            title: 'Rebase',
-            message: 'You have uncommitted local changes.\nWould you like to stash them, rebase, and then reapply?',
+            title: t('action.rebase'),
+            message: t('menu.youHaveUncommittedLocalChangesWould'),
             buttons: [
-              { id: 'stash_rebase', label: 'Stash & Rebase', default: true },
-              { id: 'cancel', label: 'Cancel' },
+              { id: 'stash_rebase', label: t('menu.stashRebase'), default: true },
+              { id: 'cancel', label: t('menu.cancel') },
             ],
           });
         } else {
           // Pre-check for conflicts before rebasing
-          const logRebaseOp = startSpinner('Checking rebase...', CHECKOUT_SCOPES);
+          const logRebaseOp = startSpinner(t('menu.checkingRebase'), CHECKOUT_SCOPES);
           const conflictCheck = await gitCheckRebaseConflicts(state.cwd, logItem.ref);
           if (conflictCheck.willConflict) {
             stopSpinner(logRebaseOp);
             const fileList = conflictCheck.files.length > 0
-              ? '\n\nConflicting files:\n' + conflictCheck.files.slice(0, 10).join('\n')
+              ? t('menu.conflictingFiles') + conflictCheck.files.slice(0, 10).join('\n')
               : '';
             state.pendingRebaseRef = logItem.ref;
             hecaton.dialog.show({
               type: 'message',
-              title: 'Rebase',
-              message: '\u26A0 Rebase will cause conflicts.' + fileList + '\n\nDo you want to continue?',
+              title: t('action.rebase'),
+              message: t('input.rebaseWillCauseConflictsDoYou', { fileList }),
               buttons: [
-                { id: 'rebase_proceed', label: 'Rebase', default: true },
-                { id: 'cancel', label: 'Cancel' },
+                { id: 'rebase_proceed', label: t('action.rebase'), default: true },
+                { id: 'cancel', label: t('menu.cancel') },
               ],
             });
             render();
             break;
           }
-          updateSpinner('Rebasing...', logRebaseOp);
+          updateSpinner(t('menu.rebasing'), logRebaseOp);
           gitRebaseAsync(state.cwd, logItem.ref).then(async err => {
             await refreshAsync();
             stopSpinner(logRebaseOp);
@@ -790,11 +789,11 @@ async function handleKey(key) {
               state.pendingRebaseRef = logItem.ref;
               hecaton.dialog.show({
                 type: 'message',
-                title: 'Rebase',
-                message: 'A stale rebase state was found.\nAbort the previous rebase and retry?',
+                title: t('action.rebase'),
+                message: t('menu.staleRebaseStateWasFoundAbort'),
                 buttons: [
-                  { id: 'abort_retry_rebase', label: 'Abort & Retry', default: true },
-                  { id: 'cancel', label: 'Cancel' },
+                  { id: 'abort_retry_rebase', label: t('menu.abortRetry'), default: true },
+                  { id: 'cancel', label: t('menu.cancel') },
                 ],
               });
             } else if (err && isRebaseConflictError(err)) {
@@ -930,13 +929,13 @@ function handleCommitInput(key) {
     state.mode = 'normal';
     if (isRebaseOp) {
       // Fork-style: write message to rebase message file, then rebase --continue
-      const contOp = startSpinner('Rebase continue...', CHECKOUT_SCOPES);
+      const contOp = startSpinner(t('input.rebaseContinue'), CHECKOUT_SCOPES);
       (async () => {
         try {
           const writeErr = await gitWriteRebaseMessage(state.cwd, state.commitMsg, state.operationState.type);
           if (writeErr) {
             stopSpinner(contOp);
-            showErrorDialog('Failed to write rebase message:\n' + writeErr);
+            showErrorDialog(t('input.failedWriteRebaseMessage') + writeErr);
             render();
             return;
           }
@@ -958,12 +957,12 @@ function handleCommitInput(key) {
           }
         } catch (e) {
           stopSpinner(contOp);
-          showErrorDialog(e.message || 'Rebase continue failed');
+          showErrorDialog(e.message || t('git.rebaseContinueFailed'));
           render();
         }
       })();
     } else {
-      const commitOp = startSpinner(isAmendCommit ? 'Amending...' : 'Committing...', COMMIT_SCOPES);
+      const commitOp = startSpinner(isAmendCommit ? t('input.amending') : t('input.committing'), COMMIT_SCOPES);
       const commitPromise = isAmendCommit
         ? gitCommitAmendAsync(state.cwd, state.commitMsg)
         : gitCommitAsync(state.cwd, state.commitMsg);
@@ -981,7 +980,7 @@ function handleCommitInput(key) {
         // 새 쓰기를 받으면 이미 커밋된 파일을 상대로 Unstage 를 쏘게 된다.
         refreshInBackground({}, {
           refreshLog: true, refreshFresh: true,
-          message: isAmendCommit ? 'Amending...' : 'Committing...',
+          message: isAmendCommit ? t('input.amending') : t('input.committing'),
           settle: true, scopes: commitOp.scopes,
         });
         stopSpinner(commitOp);
@@ -1097,7 +1096,7 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'c') {
     state.mode = 'normal';
-    const menuContOp = startSpinner('Rebase continue...', CHECKOUT_SCOPES);
+    const menuContOp = startSpinner(t('input.rebaseContinue'), CHECKOUT_SCOPES);
     gitRebaseContinueAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
@@ -1109,7 +1108,7 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'a') {
     state.mode = 'normal';
-    const menuAbortOp = startSpinner('Aborting rebase...', CHECKOUT_SCOPES);
+    const menuAbortOp = startSpinner(t('input.abortingRebase'), CHECKOUT_SCOPES);
     gitRebaseAbortAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
@@ -1121,7 +1120,7 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 's') {
     state.mode = 'normal';
-    const menuSkipOp = startSpinner('Rebase skip...', CHECKOUT_SCOPES);
+    const menuSkipOp = startSpinner(t('input.rebaseSkip'), CHECKOUT_SCOPES);
     gitRebaseSkipAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
@@ -1164,7 +1163,7 @@ async function handleNameInput(key) {
   if (key === '\r' || key === '\n') {
     const name = state.inputBuffer.trim();
     if (name.length === 0) {
-      showErrorDialog('Name cannot be empty');
+      showErrorDialog(t('menu.nameCannotEmpty'));
       render();
       return;
     }
@@ -1174,8 +1173,8 @@ async function handleNameInput(key) {
       state.mode = 'normal';
       state.inputBuffer = '';
       state.inputTarget = '';
-      const branchOp = startSpinner('Branch...', CHECKOUT_SCOPES);
-      await runCreateBranch(name, startPoint, 'Branch', branchOp);
+      const branchOp = startSpinner(t('input.branch'), CHECKOUT_SCOPES);
+      await runCreateBranch(name, startPoint, t('menu.branch'), branchOp);
       return;
     }
     let err;
@@ -1193,15 +1192,15 @@ async function handleNameInput(key) {
       err = await gitCreateTag(state.cwd, name, state.inputTarget);
     }
     const opName = state.mode === 'rename-stash'
-      ? 'Rename stash'
+      ? t('menu.renameStash2')
       : state.mode === 'new-remote-url'
-        ? 'Remote'
-        : 'Tag';
+        ? t('menu.remote')
+        : t('menu.tag2');
     state.mode = 'normal';
     state.inputBuffer = '';
     state.inputTarget = '';
     if (err) {
-      showErrorDialog(opName + ' failed:\n' + err);
+      showErrorDialog(opName + t('menu.failed') + err);
       render();
     } else {
       refreshAsync().then(() => {
@@ -1854,11 +1853,11 @@ async function handleMouseData(data) {
               state.pendingStash = true;
               hecaton.dialog.show({
                 type: 'message',
-                title: 'Stash',
-                message: 'Stash changes?',
+                title: t('input.stash'),
+                message: t('input.stashChanges'),
                 buttons: [
-                  { id: 'stash_confirm', label: 'Stash', default: true },
-                  { id: 'cancel', label: 'Cancel' },
+                  { id: 'stash_confirm', label: t('input.stash'), default: true },
+                  { id: 'cancel', label: t('menu.cancel') },
                 ],
               });
               handled = true;
@@ -1871,7 +1870,7 @@ async function handleMouseData(data) {
                 : opType === 'cherry-pick' ? () => gitCherryPickAbort(state.cwd)
                 : opType === 'revert' ? () => gitRevertAbort(state.cwd)
                 : () => gitRebaseAbortAsync(state.cwd);
-              const abortOp = startSpinner('Aborting ' + opLabel + '...', CHECKOUT_SCOPES);
+              const abortOp = startSpinner(t('menu.aborting') + opLabel + '...', CHECKOUT_SCOPES);
               Promise.resolve(abortFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
@@ -1887,7 +1886,7 @@ async function handleMouseData(data) {
               const skipFn = opType === 'cherry-pick' ? () => gitCherryPickSkip(state.cwd)
                 : opType === 'revert' ? () => gitRevertSkip(state.cwd)
                 : () => gitRebaseSkipAsync(state.cwd);
-              const skipOp = startSpinner('Skipping...', CHECKOUT_SCOPES);
+              const skipOp = startSpinner(t('input.skipping'), CHECKOUT_SCOPES);
               Promise.resolve(skipFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
@@ -2112,12 +2111,12 @@ async function handleMouseData(data) {
                 const displayRef = entry.ref + (stashMessage ? '  ' + stashMessage : '');
                 hecaton.dialog.show({
                   type: 'message',
-                  title: 'Apply Stash',
-                  message: 'Apply changes of the stash to your working directory.\n\nStash to Apply:  ' + displayRef,
-                  checkboxes: [{ id: 'delete_after', label: 'Delete stash after applying\nStash will not be deleted if a conflict occurs', checked: false }],
+                  title: t('menu.applyStash'),
+                  message: t('input.applyChangesStashYourWorkingDirectory', { displayRef }),
+                  checkboxes: [{ id: 'delete_after', label: t('menu.deleteStashAfterApplyingStashWill'), checked: false }],
                   buttons: [
-                    { id: 'apply', label: 'Apply', default: true },
-                    { id: 'cancel', label: 'Cancel' },
+                    { id: 'apply', label: t('menu.apply'), default: true },
+                    { id: 'cancel', label: t('menu.cancel') },
                   ],
                 });
                 state.pendingDialogAction = 'stash-apply-confirm';
@@ -2308,11 +2307,11 @@ async function handleMouseData(data) {
                   if (!guardAction('unlockIndex')) break;
                   hecaton.dialog.show({
                     type: 'message',
-                    title: 'Unlock Git Index',
-                    message: 'Delete index.lock?\n\nOnly continue after confirming no Git command is still running. Deleting an active lock can damage the Git index.',
+                    title: t('input.unlockGitIndex'),
+                    message: t('input.deleteIndexLockOnlyContinueAfter'),
                     buttons: [
-                      { id: 'unlock', label: 'Delete Lock', style: 'danger' },
-                      { id: 'cancel', label: 'Cancel', default: true },
+                      { id: 'unlock', label: t('input.deleteLock'), style: 'danger' },
+                      { id: 'cancel', label: t('menu.cancel'), default: true },
                     ],
                   });
                   state.pendingDialogAction = 'unlock-index-confirm';
@@ -2412,7 +2411,7 @@ async function handleMouseData(data) {
                 if (bodyRowIdx === zone.lineIdx && relCol >= zone.colStart && relCol <= zone.colEnd) {
                   hecaton.clipboard.write({ text: zone.text }).catch(() => null);
                   // 복사는 쓰기 작업이 아니다 — spinner 대신 비차단 토스트로 알린다.
-                  showToast('Copied: ' + zone.text);
+                  showToast(t('input.copied') + zone.text);
                   state.focusPanel = 'diff';
                   copyHandled = true;
                   break;
@@ -2472,7 +2471,7 @@ async function handleMouseData(data) {
 }
 
 function cleanup() {
-  process.stdout.write(ansi.mouseShape('default') + CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);
+  process.stdout.write(ansi.mouseShape('default') + CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
 }
 
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }

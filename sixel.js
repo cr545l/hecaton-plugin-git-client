@@ -22,19 +22,19 @@ function dashSkip(dash, pos) {
   return (((pos % period) + period) % period) >= dash;
 }
 
-function pxVLine(buf, w, h, x, y0, y1, c, t, dash) {
-  const half = t >> 1;
+function pxVLine(buf, w, h, x, y0, y1, c, thickness, dash) {
+  const half = thickness >> 1;
   for (let y = y0; y <= y1; y++) {
     if (dashSkip(dash, y)) continue;
-    for (let dx = -half; dx < t - half; dx++) pxSet(buf, w, h, x + dx, y, c);
+    for (let dx = -half; dx < thickness - half; dx++) pxSet(buf, w, h, x + dx, y, c);
   }
 }
 
-function pxHLine(buf, w, h, x0, x1, y, c, t, dash) {
-  const half = t >> 1;
+function pxHLine(buf, w, h, x0, x1, y, c, thickness, dash) {
+  const half = thickness >> 1;
   for (let x = x0; x <= x1; x++) {
     if (dashSkip(dash, x)) continue;
-    for (let dy = -half; dy < t - half; dy++) pxSet(buf, w, h, x, y + dy, c);
+    for (let dy = -half; dy < thickness - half; dy++) pxSet(buf, w, h, x, y + dy, c);
   }
 }
 
@@ -63,9 +63,9 @@ function pxRing(buf, w, h, cx, cy, rOuter, rInner, c) {
   }
 }
 
-function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t, dash) {
-  const half = t >> 1;
-  // 제어점 둘레는 호 길이의 상한이다. 가는 선(t=1)은 걸음이 1px 를 넘으면 곡선에
+function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, thickness, dash) {
+  const half = thickness >> 1;
+  // 제어점 둘레는 호 길이의 상한이다. 가는 선(thickness=1)은 걸음이 1px 를 넘으면 곡선에
   // 구멍이 생기므로 걸음 수를 그 길이에 맞춘다.
   const steps = Math.max(20,
     Math.abs(x1 - x0) + Math.abs(y1 - y0) + Math.abs(x2 - x1) + Math.abs(y2 - y1));
@@ -82,8 +82,8 @@ function pxBezier(buf, w, h, x0, y0, x1, y1, x2, y2, c, t, dash) {
     prevY = py;
     // 곡선은 좌표축이 아니라 지나온 거리로 점선을 끊는다.
     if (dashSkip(dash, Math.round(travelled))) continue;
-    for (let bx = -half; bx < t - half; bx++)
-      for (let by = -half; by < t - half; by++)
+    for (let bx = -half; bx < thickness - half; bx++)
+      for (let by = -half; by < thickness - half; by++)
         pxSet(buf, w, h, px + bx, py + by, c);
   }
 }

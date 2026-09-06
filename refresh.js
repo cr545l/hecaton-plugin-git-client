@@ -1,13 +1,14 @@
+const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir } = require('./state');
 const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
-  { label: 'Pending', days: 0 },
-  { label: '7 days',  days: 7 },
-  { label: '14 days', days: 14 },
-  { label: '30 days', days: 30 },
-  { label: '60 days', days: 60 },
-  { label: '90 days', days: 90 },
+  { label: t('refresh.pending'), days: 0 },
+  { label: t('refresh.7Days'),  days: 7 },
+  { label: t('refresh.14Days'), days: 14 },
+  { label: t('refresh.30Days'), days: 30 },
+  { label: t('refresh.60Days'), days: 60 },
+  { label: t('refresh.90Days'), days: 90 },
 ];
 const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
@@ -307,7 +308,7 @@ function refreshInBackground(options = {}, followup = {}) {
   if (followup.message) {
     state.refreshMessage = followup.message;
   } else if (!state.refreshing || !state.refreshMessage) {
-    state.refreshMessage = 'Refreshing...';
+    state.refreshMessage = t('refresh.refreshing');
   }
   state.refreshing = true;
   // followup.settle 은 "이 갱신이 끝나야 방금 한 쓰기 작업이 화면에 반영된다"는 표시다.
@@ -332,7 +333,7 @@ function refreshInBackground(options = {}, followup = {}) {
       if (followup.refreshFresh && state.rightView === 'fresh') refreshFresh();
     })
     .catch(err => {
-      state.error = (err && (err.message || String(err))) || 'Refresh failed';
+      state.error = (err && (err.message || String(err))) || t('refresh.refreshFailed');
     })
     .finally(() => {
       _backgroundRefreshCount = Math.max(0, _backgroundRefreshCount - 1);
@@ -836,8 +837,8 @@ async function computeRefsTreeSignature(gitDir) {
   out.sort();
   // ref가 상한을 넘는 저장소는 부분 지문만 남는다. 지문 자체는 안정적이므로
   // 오탐은 없고, 잘린 구간의 변경만 놓친다(= 종전 동작 수준).
-  if (budget.truncated) out.push('~truncated');
-  return 'refs\n' + out.join('\n');
+  if (budget.truncated) out.push(t('refresh.truncated'));
+  return "refs\n" + out.join('\n');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
 }
 
 // linked worktree에서는 HEAD/logs/HEAD만 per-worktree git dir에 있고
@@ -950,12 +951,12 @@ async function removeIndexLock() {
   try {
     await hecaton.fs.delete({ path: indexLockPath() });
   } catch (e) {
-    deleteError = (e && e.message) || String(e || 'Delete failed');
+    deleteError = (e && e.message) || String(e || t('git.deleteFailed'));
   }
   await detectIndexLock();
   if (state.indexLocked) {
-    return 'Could not delete index.lock'
-      + (deleteError ? ':\n' + deleteError : '. The file may still be in use by another Git process.');
+    return t('refresh.couldNotDeleteIndexLock')
+      + (deleteError ? ':\n' + deleteError : t('refresh.fileMayStillUseByAnother'));
   }
   return null;
 }
@@ -1020,7 +1021,7 @@ async function refreshAsync(options = {}) {
     });
     if (statusSnapshot) {
       state.isGitRepo = true;
-      if (options.loadBranch) state.branch = statusSnapshot.branch || 'HEAD (detached)';
+      if (options.loadBranch) state.branch = statusSnapshot.branch || t('git.headDetached');
       if (!state.spinnerActive) state.error = null;
       applyStatusSnapshot(statusSnapshot, includeIgnored);
       return;
@@ -1052,24 +1053,24 @@ async function refreshAsync(options = {}) {
           const branchName = await readBranchNameFast().catch(() => '');
           state.branch = branchName || 'HEAD';
         }
-        if (!state.spinnerActive) state.error = 'Repository detected; Git is still warming up...';
+        if (!state.spinnerActive) state.error = t('refresh.repositoryDetectedGitStillWarmingUp');
         return;
       }
       state.isGitRepo = false;
       const parts = [];
       if (gitProcessSucceeded(preCheck) && insideWorkTree !== 'true') {
-        parts.push('Not a git repository');
+        parts.push(t('action.notGitRepository'));
       } else if (!preCheck) {
-        parts.push('exec_process returned null');
+        parts.push(t('git.execProcessReturnedNull'));
       } else {
         parts.push(preCheck.error || 'git failed');
       }
-      parts.push('cwd: ' + state.cwd);
+      parts.push('cwd: ' + state.cwd);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
       if (preCheck) {
-        if (preCheck.error) parts.push('error: ' + preCheck.error);
-        if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());
-        if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);
-        parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');
+        if (preCheck.error) parts.push('error: ' + preCheck.error);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+        if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+        if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+        parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
       }
       state.error = parts.join(' | ');
       state.branch = ''; state.worktrees = []; state.isLinkedWorktree = false; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.ignoredLoaded = false; state.ignoredLoading = false; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
@@ -1145,11 +1146,11 @@ async function refreshAsync(options = {}) {
     const [statusSnapshot, branchRaw] = await Promise.all([statusPromise, branchPromise]);
     if (options.loadBranch) {
       const branchName = (branchRaw || '').trim();
-      state.branch = branchName || 'HEAD (detached)';
+      state.branch = branchName || t('git.headDetached');
     }
     if (!statusSnapshot) {
       state.ignoredLoading = false;
-      if (!state.spinnerActive) state.error = 'Repository detected; status scan is still warming up...';
+      if (!state.spinnerActive) state.error = t('refresh.repositoryDetectedStatusScanStillWarming');
       return;
     }
     if (!state.spinnerActive) state.error = null;
@@ -1168,7 +1169,7 @@ async function refreshAsync(options = {}) {
   // upstream:track / trackshort까지 함께 받아 브랜치별 ahead/behind를 얻는다. 같은
   // for-each-ref 한 번에 딸려 오므로 spawn이 늘지 않는다 — Pinned 목록이 현재 브랜치처럼
   // push/pull 대기 수를 보여주는 데 쓴다.
-  const refsFormat = '%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)';
+  const refsFormat = "%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)";
   const sepLocal = (process.platform === 'win32') ? '\\' : '/';
   const gitDirPromise = (state.gitDir && state.gitCommonDir)
     ? Promise.resolve(state.gitDir)
@@ -1285,12 +1286,12 @@ async function refreshAsync(options = {}) {
   // refs 조회가 실패했으면 이전 브랜치 상태를 그대로 둔다. 빈 파싱 결과로 덮어쓰면
   // 브랜치/원격 목록이 통째로 사라지고 현재 브랜치까지 detached로 잘못 표시된다.
   if (refsOk) {
-    state.branch = currentBranch || (metadataOnly && state.branch ? state.branch : 'HEAD (detached)');
+    state.branch = currentBranch || (metadataOnly && state.branch ? state.branch : t('git.headDetached'));
   } else {
     // git 호출이 실패해도 .git/HEAD는 읽을 수 있다 — 브랜치명만이라도 최신으로 맞춘다.
     const headName = await readBranchNameFast().catch(() => '');
     if (headName) state.branch = headName;
-    else if (!state.branch) state.branch = 'HEAD (detached)';
+    else if (!state.branch) state.branch = t('git.headDetached');
   }
   if (!metadataOnly) {
     applyStatusSnapshot(statusSnapshot, includeIgnored);
@@ -1410,7 +1411,7 @@ async function refreshAsync(options = {}) {
     // Append conflict file list if there are unmerged files
     const conflictFiles = state.unstaged.filter(f => f.status === 'U').map(f => f.file);
     if (conflictFiles.length > 0 && state.rebaseMessage && !state.rebaseMessage.includes('# Conflicts:')) {
-      state.rebaseMessage += '\n\n# Conflicts:\n' + conflictFiles.map(f => '#\t' + f).join('\n');
+      state.rebaseMessage += "\n\n# Conflicts:\n" + conflictFiles.map(f => '#\t' + f).join('\n');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
     }
   }
 
@@ -1449,7 +1450,7 @@ async function refreshAsync(options = {}) {
     const remote = cur && !cur.upstream ? currentBranchRemote() : '';
     if (remote) {
       aheadBehindRaw = await gitExec(
-        ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],
+        ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
         state.cwd,
       );
       if (_metaCache && _metaCacheCwd === state.cwd) {
@@ -1597,7 +1598,7 @@ function refKeysOfDecoration(deco, localNames, remoteNames) {
     if (token.startsWith('HEAD -> ')) token = token.substring('HEAD -> '.length).trim();
     if (!token) continue;
     if (token === 'HEAD') { keys.push('HEAD'); continue; }
-    if (token.startsWith('tag: ')) { keys.push('refs/tags/' + token.substring('tag: '.length).trim()); continue; }
+    if (token.startsWith('tag: ')) { keys.push('refs/tags/' + token.substring('tag: '.length).trim()); continue; }  // i18n-ok: git decoration 접두사 길이
     if (localNames.has(token)) { keys.push('refs/heads/' + token); continue; }
     if (token.endsWith('/HEAD')) continue;
     if (remoteNames.has(token)) { keys.push('refs/remotes/' + token); continue; }
@@ -2014,16 +2015,16 @@ function updateLogDetail(options = {}) {
   const lines = [];
   const separator = '\u2500'.repeat(40);
 
-  lines.push('commit ' + item.hash);
+  lines.push('commit ' + item.hash);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   if (item.authorName || item.authorDate) {
     const emailPart = item.authorEmail ? ' <' + item.authorEmail + '>' : '';
     const dateStr = item.authorDate ? formatDateTime(item.authorDate) : '';
-    lines.push('Author: ' + (item.authorName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
+    lines.push('Author: ' + (item.authorName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   }
   if (item.committerName || item.committerDate) {
     const emailPart = item.committerEmail ? ' <' + item.committerEmail + '>' : '';
     const dateStr = item.committerDate ? formatDateTime(item.committerDate) : '';
-    lines.push('Commit: ' + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
+    lines.push('Commit: ' + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
   }
 
   lines.push(separator);
@@ -2032,12 +2033,12 @@ function updateLogDetail(options = {}) {
   const recoveryLines = [];
   if (item.isRecovery) {
     recoveryLines.push('');
-    recoveryLines.push('Recovery: reflog-only commit');
+    recoveryLines.push(t('refresh.recoveryReflogOnlyCommit'));
     if (item.recoveryRef && item.recoveryRef.selector) {
-      recoveryLines.push('Reflog: ' + item.recoveryRef.selector);
+      recoveryLines.push('Reflog: ' + item.recoveryRef.selector);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
     }
     if (item.recoveryRef && item.recoveryRef.subject) {
-      recoveryLines.push('Event: ' + item.recoveryRef.subject);
+      recoveryLines.push('Event: ' + item.recoveryRef.subject);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
     }
   }
 
@@ -2235,7 +2236,7 @@ function refreshFresh() {
   const tw = FRESH_TIME_WINDOWS[state.freshTimeWindow] || FRESH_TIME_WINDOWS[1];
   if (tw.days > 0) {
     const seq = ++_freshSeq;
-    gitExec(['log', '--max-count=' + FRESH_LOG_MAX_COUNT, '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {
+    gitExec(['log', '--max-count=' + FRESH_LOG_MAX_COUNT, '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
       if (_freshSeq !== seq) return;
       let currentCommit = null;
       for (const line of raw.split('\n')) {

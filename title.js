@@ -1,3 +1,4 @@
+const { t } = require('./i18n');
 const { state } = require('./state');
 
 // 점자 스피너 프레임의 원본 정의. spinner.js가 이 파일을 require하므로
@@ -22,8 +23,8 @@ function getLocalChangeCount() {
 function formatProgressStatus() {
   let msg = '';
   if (state.spinnerActive && state.error) msg = state.error;
-  else if (state.refreshing) msg = state.refreshMessage || 'Refreshing...';
-  else if (state.logLoadingMore) msg = 'Loading more commits...';
+  else if (state.refreshing) msg = state.refreshMessage || t('title.refreshing');
+  else if (state.logLoadingMore) msg = t('title.loadingMoreCommits');
   // 지금 도는 작업 때문에 막혀 예약해 둔 동작 — 무엇이 이어질지를 진행 표시 뒤에
   // 덧붙인다("⠹ Committing... → Push"). 눌린 것이 무시되지 않았다는 신호이므로,
   // 진행 표시가 없는 찰나(작업이 끝나고 예약이 실행되기 직전)에도 남겨 둔다.
@@ -32,8 +33,8 @@ function formatProgressStatus() {
   const frame = BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length];
   // 쓰기 작업 중 차단된 입력의 피드백도 처리상태의 일부로 타이틀에서 잠깐 보여준다.
   const busy = state.spinnerActive && state.busyFlashUntil && Date.now() < state.busyFlashUntil
-    ? ' — busy, action ignored' : '';
-  return frame + ' ' + (msg || 'Queued') + busy + (queued ? ' → ' + queued : '');
+    ? t('title.busyActionIgnored') : '';
+  return frame + ' ' + (msg || t('title.queued')) + busy + (queued ? ' → ' + queued : '');
 }
 
 function formatWindowTitle() {
@@ -44,11 +45,11 @@ function formatWindowTitle() {
   // 변경점 표시(*N)는 처리상태보다도 앞. 타이틀이 잘리는 자리(탭/작업표시줄)에서
   // 가장 먼저 사라지지 않아야 하는 정보이고, 스피너는 어차피 움직여서 눈에 띈다.
   const totalChanges = getLocalChangeCount();
-  if (totalChanges > 0) parts.push(`*${totalChanges}`);
+  if (totalChanges > 0) parts.push(`*${totalChanges}`);  // i18n-ok: 기호+숫자 표기
   if (progress) parts.push(progress);
   parts.push(state.branch);
-  if (state.behind > 0) parts.push(`↓${state.behind}`);
-  if (state.ahead > 0) parts.push(`↑${state.ahead}`);
+  if (state.behind > 0) parts.push(`↓${state.behind}`);  // i18n-ok: 기호+숫자 표기
+  if (state.ahead > 0) parts.push(`↑${state.ahead}`);  // i18n-ok: 기호+숫자 표기
   return parts.join(' | ');
 }
 
