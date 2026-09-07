@@ -70,6 +70,28 @@ const _hostOffsets = new Map();
 // Also stays empty on hosts/harnesses that expose scroll.* but reject it.
 const _confirmed = new Set();
 
+// ── 스크롤바를 누가 그리는가 (API 1.10) ──
+// scrollbar:'auto' + scrollbar_gutter:'stable' 을 얹어 등록하면 호스트가 스크롤바를
+// 직접 그린다 — 관성과 같은 프레임에 픽셀 단위로 움직이므로 플러그인이 sixel 로
+// 따라 그리는 것보다 언제나 부드럽고, 드래그·hover 도 호스트가 맡는다.
+// 지원 여부는 등록 응답의 scrollbar_cols 에코로만 알 수 있어서 이렇게 간다:
+//   모름  → gutter 한 칸을 region 에 얹고 물어본다(호스트가 그리면 그 칸이 스크롤바다)
+//   지원  → 그 영역의 sixel 스크롤바를 그리지 않는다
+//   미지원 → gutter 를 도로 빼고 재등록한다. 그 칸은 region 밖이라야 sixel 스크롤바가
+//           스크롤에 딸려 올라가지 않는다(sixel 은 셀이 아니라 픽셀 오버레이다).
+// id -> true(호스트가 그림) | false(직접 그려야 함). 없으면 아직 모름.
+const _hostScrollbar = new Map();
+
+// 아직 모르거나 호스트가 그리면 한 칸을 내주고, 미지원이 확인되면 도로 뺀다.
+function gutterCols(id) {
+  return _hostScrollbar.get(id) === false ? 0 : 1;
+}
+
+// 이 영역의 스크롤바를 호스트가 그리는가 — true 면 플러그인은 그리지 않는다.
+function hasHostScrollbar(id) {
+  return _hostScrollbar.get(id) === true;
+}
+
 function isActive() {
   if (_supported === undefined) {
     const s = globalThis.hecaton && hecaton.scroll;
@@ -84,7 +106,11 @@ function init(deps) {
   if (!isActive()) return;
   hecaton.on('scroll.update', (p) => {
     if (!p || typeof p.id !== 'string' || !(p.id in BANK_SLOTS)) return;
-    const top = Math.max(0, p.topRow | 0);
+    // 페이로드 키는 신규 스네이크(top_row)가 정본이고 camelCase(topRow)는 구 별칭이다.
+    // 한쪽만 보면 다른 쪽 호스트에서 undefined|0 === 0 이 되어, 스크롤할 때마다
+    // 목록이 맨 위로 튄다 — 둘 다 받는다.
+    const raw = p.top_row !== undefined ? p.top_row : p.topRow;
+    const top = Math.max(0, raw | 0);
     _hostOffsets.set(p.id, top);
     applyOffset(p.id, top);
     if (p.id === 'logList' && _deps.maybeLoadMoreLog) _deps.maybeLoadMoreLog();
@@ -116,8 +142,12 @@ function syncRegions(defs) {
   const seen = new Set();
   for (const d of defs) {
     seen.add(d.id);
+    // d.width 는 글자가 들어가는 폭이다. 스크롤바 한 칸(gutter)은 여기서 얹는다 —
+    // 얹느냐 마느냐가 지오메트리를 바꾸므로 시그니처에도 함께 넣어야, 미지원이
+    // 확인됐을 때 도로 뺀 폭으로 재등록이 걸린다.
+    const gutter = gutterCols(d.id);
     const sig = d.row + ',' + d.col + ',' + d.width + ',' + d.height + ','
-      + d.contentRows + ',' + d.contentCols + ',' + d.overscanRow;
+      + d.contentRows + ',' + d.contentCols + ',' + d.overscanRow + ',' + gutter;
     if (_sentRegions.get(d.id) !== sig) {
       _sentRegions.set(d.id, sig);
       // Geometry changed (resize/font/layout): the previous confirmation no
@@ -130,21 +160,29 @@ function syncRegions(defs) {
         id: d.id,
         row: d.row,
         col: d.col,
-        width: d.width,
+        width: d.width + gutter,
         height: d.height,
         content_rows: d.contentRows,
         content_cols: d.contentCols,
         overscan_row: d.overscanRow,
         overscan_before: BANK_BEFORE,
         overscan_after: BANK_AFTER,
+        // 스크롤바는 호스트가 그리는 편이 언제나 부드럽다. 모르는 필드는 무시되므로
+        // 구버전 호스트에 보내도 해가 없고, 응답의 에코로 지원 여부를 가린다.
+        scrollbar: 'auto',
+        scrollbar_gutter: 'stable',
       }).then((res) => {
         if (res && !res.error) {
           const wasConfirmed = _confirmed.has(d.id);
           _confirmed.add(d.id);
-          // First confirmation of this geometry: re-render so the now-safe
-          // bank rows / anchored sixel actually get drawn. Without this the
-          // graph stays hidden until some other event triggers a render.
-          if (!wasConfirmed && _deps && _deps.render) _deps.render();
+          // 스크롤바를 호스트가 맡았는지 — 에코된 scrollbar_cols 로만 알 수 있다.
+          // 미지원으로 판정되면 다음 sync 에서 gutter 를 뺀 폭으로 재등록되고,
+          // 그 칸은 region 밖이 되어 예전처럼 sixel 스크롤바를 그릴 수 있다.
+          const hostDraws = res.scrollbar_cols === 1;
+          const wasHost = _hostScrollbar.get(d.id);
+          _hostScrollbar.set(d.id, hostDraws);
+          if ((!wasConfirmed || wasHost !== hostDraws) && _deps && _deps.render) _deps.render();
+          return;
         }
       }).catch(() => {});
       // Geometry (re)registration clamps host-side; make sure the host's
@@ -161,6 +199,8 @@ function syncRegions(defs) {
       _sentRegions.delete(id);
       _hostOffsets.delete(id);
       _confirmed.delete(id);
+      // _hostScrollbar 는 남겨 둔다 — 호스트가 스크롤바를 그리는지는 세션 내내 같은
+      // 답이므로, 탭을 오갈 때마다 다시 물어보면 그때마다 재등록이 한 번씩 더 돈다.
       // 제거는 프레임(stdout)과 순서가 보장되지 않는 비동기 RPC다. 제거가 확정되기 전에
       // 호스트가 region을 한 번 더 합성하면 방금 그린 화면 위에 이전 내용이 덮인다
       // (특히 bank 앵커 그래프 sixel — Commits → Local 전환 후 브랜치 트리 잔상).
@@ -201,5 +241,6 @@ function ackString(id, baseRow) {
 }
 
 module.exports = {
-  isActive, isReady, init, applyOffset, syncRegions, bankRow, buildBank, depthOf, ackString, BANK_SLOTS,
+  isActive, isReady, hasHostScrollbar, init, applyOffset, syncRegions,
+  bankRow, buildBank, depthOf, ackString, BANK_SLOTS,
 };

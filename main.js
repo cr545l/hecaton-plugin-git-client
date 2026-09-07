@@ -29,6 +29,7 @@ const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoad
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 const { resolveWorkTreeRoot, findGitDirFromDisk } = require('./git');
 const hostScroll = require('./scroll');
+const tooltip = require('./tooltip');
 const persist = require('./persist');
 const coordinate = require('./coordinate');
 const reap = require('./reap');
@@ -198,6 +199,9 @@ async function main() {
   // Graceful shutdown — 설정 플러시는 best-effort (300ms 내 완료 못 하면 그냥 종료)
   const shutdown = () => {
     stopGitWatcher();
+    // 툴팁은 창이 들고 있는 상태다. 지우지 않고 나가면 플러그인이 사라진 뒤에도 화면에
+    // 남는다. 종료 중에는 RPC 응답이 오지 않을 수 있으므로 던지기만 하고 기다리지 않는다.
+    tooltip.reset();
     Promise.resolve(persist.flushNow()).catch(() => null).finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 300);
   };

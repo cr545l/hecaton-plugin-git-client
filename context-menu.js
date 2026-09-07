@@ -79,6 +79,11 @@ const { guardAction, guardOrQueue, guardDeferredAction, decorateMenuItems, opera
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
 const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
 
+// 호스트 메뉴 항목의 색은 ANSI 팔레트가 아니라 hex 로 받는다(menu.show items의 color).
+// 저장소를 바꾸는 항목들 사이에서 "보기 설정만 바꾸는 항목"을 갈라 내는 데 쓴다 —
+// 화면 타이틀 행의 옵션 토글이 cyan 이므로 메뉴에서도 같은 계열을 쓴다.
+const MENU_OPTION_COLOR = '#56B6C2';
+
 // ── 자주 쓰는 자원 묶음 ──
 // 같은 성격의 작업이 같은 값을 보게 묶어 둔다. 한 곳만 고쳐도 전부 따라오고,
 // 어떤 작업이 무엇을 붙잡는지 이름으로 읽힌다.
@@ -336,9 +341,11 @@ function buildDirContextMenuItems(dirItem, selection) {
 
 // 트리/평면 전환은 워킹트리를 보는 방식이라, 파일·폴더 메뉴와 탭 메뉴 어디서 열든
 // 같은 항목이 같은 자리에 있어야 한다.
+// 저장소를 건드리는 나머지 항목과 달리 이것은 보기 설정만 바꾼다 — 타이틀 행의 옵션
+// 토글과 같은 색을 입혀, 어느 메뉴에서 열든 성격이 색으로 먼저 읽히게 한다.
 function fileTreeMenuItems() {
   return [
-    { id: 'file_tree_view', label: t('menu.showFilesAsTree'), checked: !!ui.fileTreeView },
+    { id: 'file_tree_view', label: t('menu.showFilesAsTree'), checked: !!ui.fileTreeView, color: MENU_OPTION_COLOR },
   ];
 }
 

@@ -6,6 +6,7 @@ const { state, ui, isPinnedBranch, localRefKey, remoteRefKey, isFilteredRef, isH
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
 const hostScroll = require('./scroll');
+const tooltip = require('./tooltip');
 const persist = require('./persist');
 const { panelLoadingLabel } = require('./spinner');
 const actions = require('./actions');
@@ -19,6 +20,21 @@ function buttonStyle(enabled, hovered, enabledStyle, hoverStyle) {
   if (!enabled) return colors.disabled;
   if (hovered) return hoverStyle || (colors.value + ansi.bold + CSI + '4m');
   return enabledStyle || colors.value;
+}
+
+// ── 끌고 있는 브랜치와 놓았을 때의 결과 이름 ──
+// 힌트바와 마우스 옆 툴팁이 같은 문구를 써야 하므로 한 곳에서 만든다.
+// 트리는 브랜치 이름의 첫 '/' 앞을 폴더로 가르므로 잎 이름도 그 경계로 잡는다
+// (feature/a/b 는 트리에 'a/b' 로 보이고, bugfix 로 옮기면 bugfix/a/b 가 된다).
+// newName 이 null 이면 지금 자리에는 놓을 수 없거나 놓아도 이름이 그대로라는 뜻이다.
+function branchDragLabel() {
+  const dragged = ui.branchDragSource;
+  if (!dragged) return null;
+  const slashIdx = dragged.indexOf('/');
+  const leafName = slashIdx >= 0 ? dragged.substring(slashIdx + 1) : dragged;
+  const target = ui.branchDropTarget;
+  const dropName = target ? (target.prefix ? target.prefix + '/' + leafName : leafName) : null;
+  return { dragged, newName: dropName && dropName !== dragged ? dropName : null };
 }
 
 // ── 예약까지 함께 보는 버튼 ──
@@ -400,6 +416,22 @@ function renderBody() {
       return collapsed ? colors.dim : colors.title + ansi.bold;
     };
 
+    // ── 타이틀 우측 버튼의 두 갈래 ──
+    // 폴딩(Status/Files/Detail/Stage)은 패널을 접었다 편다 — 누르면 화면 배치가 바뀐다.
+    // 옵션(Sort/Recovery/Files/Diff)은 배치는 그대로 두고 보는 방식만 바꾼다.
+    // 하는 일이 다르므로 색으로 갈라 둔다. 폴딩은 지금까지처럼 제목색 굵게 한 덩어리로,
+    // 옵션은 "무엇을(라벨) 흐리게 + 지금 어떤 값인지(값) cyan 굵게"로 그려 현재 설정이
+    // 버튼만 보고 읽히게 한다. 두 갈래 사이에는 구분선을 세워 섹션까지 나눈다.
+    const optionStyle = (idx, muted) => {
+      if (idx === ui.hoveredTitleZoneIndex) {
+        const hovered = colors.value + ansi.bold + CSI + '4m';
+        return { label: hovered, value: hovered };
+      }
+      // 꺼져 있는 옵션(Recovery off)은 라벨도 값도 흐리게 — 뭔가 빠진 상태임을 알린다.
+      if (muted) return { label: colors.dim, value: colors.dim };
+      return { label: colors.dim, value: colors.cyan + ansi.bold };
+    };
+
     if (repoSetupMode) {
       let row = ansi.moveTo(startRow, startCol);
       let col = startCol;
@@ -432,31 +464,41 @@ function renderBody() {
     }
 
     // Build right-side panel buttons string first to know its width
-    let rightParts = []; // { label, action, collapsed }
-    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + t('ui.status'), action: 'toggleStatus', collapsed: ui.leftPanelCollapsed });
+    let rightParts = []; // { label, value, action, collapsed, group: 'fold' | 'option' }
+    rightParts.push({ label: (ui.leftPanelCollapsed ? ' + ' : ' - ') + t('ui.status'), action: 'toggleStatus', collapsed: ui.leftPanelCollapsed, group: 'fold' });
     if (state.rightView === 'log' || state.rightView === 'fresh') {
       // 접기 버튼(Status/Detail)을 먼저, 모드 토글(Sort)은 Diff 토글과 같이 맨 뒤에 둔다.
       if (state.rightView === 'fresh') {
-        rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + t('ui.files3'), action: 'toggleHistory', collapsed: ui.rightTopCollapsed });
+        rightParts.push({ label: (ui.rightTopCollapsed ? '  + ' : '  - ') + t('ui.files3'), action: 'toggleHistory', collapsed: ui.rightTopCollapsed, group: 'fold' });
       }
-      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + t('ui.detail'), action: 'toggleDetail', collapsed: ui.rightBottomCollapsed });
+      rightParts.push({ label: (ui.rightBottomCollapsed ? '  + ' : '  - ') + t('ui.detail'), action: 'toggleDetail', collapsed: ui.rightBottomCollapsed, group: 'fold' });
       if (state.rightView === 'log') {
-        rightParts.push({ label: t('ui.sort') + t(ui.logSortMode === 'date' ? 'ui.sortByDate' : 'ui.sortByBranch'), action: 'toggleLogSort', collapsed: false });
+        rightParts.push({
+          label: t('ui.sort'),
+          value: t(ui.logSortMode === 'date' ? 'ui.sortByDate' : 'ui.sortByBranch'),
+          action: 'toggleLogSort',
+          collapsed: false,
+          group: 'option',
+        });
         // 꺼져 있으면 흐리게 — 목록에서 뭔가 빠진 상태라는 걸 버튼만 보고 알 수 있어야 한다.
         rightParts.push({
-          label: t('ui.recovery') + (ui.logShowRecovery ? 'on' : 'off'),
+          label: t('ui.recovery'),
+          value: ui.logShowRecovery ? 'on' : 'off',
           action: 'toggleLogRecovery',
           collapsed: !ui.logShowRecovery,
+          group: 'option',
         });
       }
     } else {
-      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + t('ui.stage'), action: 'toggleFiles', collapsed: ui.middlePanelCollapsed });
+      rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + t('ui.stage'), action: 'toggleFiles', collapsed: ui.middlePanelCollapsed, group: 'fold' });
       // 파일 목록을 트리로 볼지 — Diff 토글과 같은 성격(보는 방식)이라 나란히 둔다.
-      rightParts.push({ label: t('ui.files2') + (ui.fileTreeView ? 'tree' : 'flat'), action: 'toggleFileTree', collapsed: false });
-      rightParts.push({ label: t('ui.diff') + (state.diffView === 'side' ? 'side' : 'unified'), action: 'toggleDiff', collapsed: false });
+      rightParts.push({ label: t('ui.files2'), value: ui.fileTreeView ? 'tree' : 'flat', action: 'toggleFileTree', collapsed: false, group: 'option' });
+      rightParts.push({ label: t('ui.diff'), value: state.diffView === 'side' ? 'side' : 'unified', action: 'toggleDiff', collapsed: false, group: 'option' });
     }
-    let rightTotalW = 0;
-    for (const p of rightParts) rightTotalW += visLen(p.label);
+    // 폴딩 묶음과 옵션 묶음 사이에 세울 구분선(' │')의 폭까지 미리 세어야 오른쪽 끝에 맞는다.
+    const rightGroupBreaks = rightParts.filter((p, i) => i > 0 && p.group !== rightParts[i - 1].group).length;
+    let rightTotalW = rightGroupBreaks * 2;
+    for (const p of rightParts) rightTotalW += visLen(p.label) + visLen(p.value || '');
 
     // === Left side: Local / Commits tabs ===
     let row1 = ansi.moveTo(startRow, startCol);
@@ -578,11 +620,26 @@ function renderBody() {
     row1 += ' '.repeat(gap);
     col1 += gap;
 
+    let prevGroup = null;
     for (const p of rightParts) {
+      // 폴딩 묶음이 끝나고 옵션 묶음이 시작하는 자리에 구분선을 세운다. 아래 가로선에도
+      // 같은 자리에 tick 이 찍혀(titleDividerOffsets) 두 묶음이 다른 섹션으로 읽힌다.
+      if (prevGroup && p.group !== prevGroup) {
+        titleDividerOffsets.push(col1 + 1 - startCol);
+        row1 += colors.border + ' ' + V + ansi.reset;
+        col1 += 2;
+      }
+      prevGroup = p.group;
       const si = zoneIdx++;
-      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(p.label) - 1, action: p.action });
-      row1 += zoneStyle(si, p.collapsed) + p.label + ansi.reset;
-      col1 += visLen(p.label);
+      const w = visLen(p.label) + visLen(p.value || '');
+      ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + w - 1, action: p.action });
+      if (p.group === 'option') {
+        const st = optionStyle(si, p.collapsed);
+        row1 += st.label + p.label + ansi.reset + st.value + p.value + ansi.reset;
+      } else {
+        row1 += zoneStyle(si, p.collapsed) + p.label + ansi.reset;
+      }
+      col1 += w;
     }
 
     return row1;
@@ -839,7 +896,19 @@ function renderBody() {
   const leftMaxWidth = Math.max(0, width - rightWidth - (rightWidth > 0 ? 1 : 0));
 
   let hintContent;
-  if (state.mode === 'rebase-menu') {
+  const branchDrag = branchDragLabel();
+  if (branchDrag) {
+    // 끌고 있는 동안에는 손을 떼면 무슨 이름이 될지를 먼저 보여 준다 — 놓을 자리의
+    // 배경색만으로는 어느 그룹인지는 알아도 결과 이름까지는 읽히지 않는다.
+    // 같은 문구가 마우스 옆 툴팁에도 뜬다(아래 buf.push 참고) — 시선은 마우스에 있고,
+    // 힌트바는 화면 맨 아래라 끌고 있다는 것 자체가 눈에 들어오지 않기 때문이다.
+    if (branchDrag.newName) {
+      hintContent = ' ' + colors.dim + branchDrag.dragged + ansi.reset + colors.value + ' → ' + ansi.reset
+        + colors.cyan + ansi.bold + branchDrag.newName + ansi.reset + '  ' + colors.dim + t('ui.dropToRenameBranch') + ansi.reset;
+    } else {
+      hintContent = ' ' + colors.cyan + ansi.bold + branchDrag.dragged + ansi.reset + '  ' + colors.dim + t('ui.dragBranchToFolder') + ansi.reset;
+    }
+  } else if (state.mode === 'rebase-menu') {
     hintContent =colors.yellow + t('ui.rebaseHintLabel') + ansi.reset + colors.value + t('ui.hintContinue') + ansi.reset + '  ' + colors.value + t('ui.hintAbort') + ansi.reset + '  ' + colors.value + t('ui.hintSkip') + ansi.reset;
   } else if (state.mode === 'commit') {
     const commitOpRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
@@ -1031,6 +1100,10 @@ function renderBody() {
 
     function addScrollbar(scrollOffset, maxScroll, viewportRows, screenRow, screenCol, target) {
       if (maxScroll <= 0 || viewportRows <= 0) return;
+      // 호스트가 그 영역의 스크롤바를 맡았으면 여기서는 그리지 않는다. 오버레이를 만들지
+      // 않으면 드래그 존과 hover 판정도 함께 사라지므로(둘 다 이 목록에서 나온다)
+      // 스크롤바를 두 번 그리거나 호스트 것 위에서 끌게 되는 일이 없다.
+      if (hostScroll.hasHostScrollbar(target)) return;
       const pixBuf = renderScrollbarPixels(ui.cellW, ui.cellH, viewportRows, scrollOffset, maxScroll);
       if (pixBuf) {
         const isActive = ui.dragging === 'scrollbar' && ui.scrollbarDragInfo && ui.scrollbarDragInfo.target === target;
@@ -1139,6 +1212,40 @@ function renderBody() {
         const hCols = rightW - 1;
         const detailBottom = sbBodyTop + contentH - 1;
         addHScrollbar('freshDetail', detailBottom, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.freshDetailMaxScrollX);
+      }
+    }
+  }
+
+  // ── 끌고 있는 것을 마우스 옆에 붙인다 ──
+  // 놓을 자리의 배경색과 힌트바만으로는 "지금 끌고 있다"가 눈에 들어오지 않는다.
+  // 시선은 마우스에 있으므로 결과 이름을 마우스 옆에 띄워 손을 떼기 전에 읽게 한다.
+  //
+  // 호스트 툴팁(window.set_tooltip)이 있으면 그쪽에 맡긴다 — 창 위에 겹쳐 그리므로
+  // 아래 내용을 지우지 않고 화면 끝에서 알아서 접히며 마우스를 따라간다.
+  // 없는 호스트에서는 프레임 위에 직접 그린다. 다 쌓은 뒤에 얹어야 무엇에도 가리지 않는다.
+  {
+    const drag = branchDragLabel();
+    if (!drag) {
+      tooltip.hide();
+    } else {
+      const text = drag.newName ? drag.dragged + ' → ' + drag.newName : drag.dragged;
+      tooltip.show(text);
+      if (!tooltip.isSupported() && ui.branchDragCursor) {
+        const tipW = Math.min(visLen(text) + 2, width);
+        const body = padRight(' ' + truncate(text, Math.max(1, tipW - 2)) + ' ', tipW);
+        // 커서 셀은 비워 둔다 — 거기가 놓을 자리를 가리키는 지점이라 가리면 안 된다.
+        let tipCol = ui.branchDragCursor.col + 2;
+        if (tipCol + tipW - 1 > startCol + width - 1) tipCol = startCol + width - tipW;
+        if (tipCol < startCol) tipCol = startCol;
+        // 맨 아랫줄에서는 위로 뒤집는다. 아래 줄이 없으면 화면 밖으로 나가 아예 안 보인다.
+        let tipRow = ui.branchDragCursor.row + 1;
+        if (tipRow > startRow + height - 1) tipRow = Math.max(startRow, ui.branchDragCursor.row - 1);
+        // 놓을 수 있으면 파란 배경으로 또렷하게, 놓을 수 없는 자리에서는 흐리게 —
+        // 색만 보고도 지금 손을 떼도 되는지 알 수 있어야 한다.
+        const tipStyle = drag.newName
+          ? colors.selectedBg + colors.value + ansi.bold
+          : colors.cursorBg + colors.dim;
+        buf.push(ansi.moveTo(tipRow, tipCol) + tipStyle + body + ansi.reset);
       }
     }
   }
@@ -1445,7 +1552,11 @@ function buildLeftPanel(w, h) {
   let revealLineIdx = -1;
   {
     const collapsed = !!ui.collapsedSections.branches;
-    pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.branches') + ansi.reset, { action: 'toggle-section', section: 'branches' });
+    // 브랜치를 끌고 있는 동안에는 놓을 자리를 배경색으로 알린다. Branches 헤더에 놓으면
+    // 그룹 밖(맨 위)으로 빼는 것이라, 여기도 그룹 헤더와 같은 강조를 받는다.
+    const rootIsDropTarget = !!ui.branchDragSource && ui.branchDropTarget && ui.branchDropTarget.prefix === '';
+    const branchesHeader = colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.branches') + ansi.reset;
+    pushLine(rootIsDropTarget ? rowBg(branchesHeader, colors.cursorBg) : branchesHeader, { action: 'toggle-section', section: 'branches' });
     if (!collapsed) {
       const groups = new Map();
       const topLevel = [];
@@ -1463,7 +1574,10 @@ function buildLeftPanel(w, h) {
       for (const [prefix, items] of groups) {
         const groupKey = 'b:' + prefix;
         const groupCollapsed = !!ui.collapsedGroups[groupKey];
-        pushLine(colors.dim + '   ' + (groupCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset, { action: 'toggle-group', group: groupKey });
+        const isDropTarget = !!ui.branchDragSource && ui.branchDropTarget && ui.branchDropTarget.prefix === prefix;
+        const groupHeader = (isDropTarget ? colors.value + ansi.bold : colors.dim)
+          + '   ' + (groupCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset;
+        pushLine(isDropTarget ? rowBg(groupHeader, colors.cursorBg) : groupHeader, { action: 'toggle-group', group: groupKey });
         if (!groupCollapsed) {
           for (const item of items) {
             const fullName = prefix + '/' + item.shortName;

@@ -2,6 +2,7 @@ const { t } = require('./i18n');
 const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
 const hostScroll = require('./scroll');
+const tooltip = require('./tooltip');
 const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
   gitCommitAsync, gitCommitAmendAsync, gitCommitMessage, gitFetchAsync, gitPullAsync, gitPushAsync, gitPushToRemoteAsync,
   splitUpstreamRef,
@@ -54,6 +55,45 @@ function actionToKey(action) {
 const COMMITTER_ACTIONS = new Set([
   'committer-name', 'committer-email', 'reset-committer-name', 'reset-committer-email',
 ]);
+
+// ── Status 패널 브랜치 트리의 끌어 놓기 ──
+// 트리는 브랜치 이름의 첫 '/' 앞을 폴더처럼 묶어 보여 준다(feature/a/b 는 feature 아래 'a/b').
+// 그래서 옮길 때도 그 경계 그대로 첫 마디만 갈아 끼운다 — 화면에 보이는 잎 이름은 그대로 있고
+// 담긴 폴더만 바뀌어야, 폴더를 옮기는 것처럼 읽힌다.
+function branchLeafName(name) {
+  const slashIdx = (name || '').indexOf('/');
+  return slashIdx >= 0 ? name.substring(slashIdx + 1) : (name || '');
+}
+
+// 놓은 자리(prefix)로 옮겼을 때의 새 이름. 자기 폴더에 도로 놓았으면 바꿀 게 없으니 null.
+function branchRenameTarget(branch, prefix) {
+  if (!branch || prefix == null) return null;
+  const leaf = branchLeafName(branch);
+  const newName = prefix ? prefix + '/' + leaf : leaf;
+  return newName === branch ? null : newName;
+}
+
+function isLocalBranch(name) {
+  return !!name && state.branches.some(b => b.name === name);
+}
+
+// 좌패널의 이 줄에 놓으면 어느 폴더로 가는가. 그룹 헤더(feature/)는 그 폴더,
+// 그 안의 브랜치 줄은 그 브랜치가 담긴 폴더, Branches 헤더는 폴더 밖(맨 위)이다.
+// 리모트·스태시·워크트리 줄은 브랜치 이름을 옮길 자리가 아니므로 놓을 수 없다.
+function branchDropTargetAt(row) {
+  if (row < 0 || row >= ui.leftPanelClickMap.length) return null;
+  const entry = ui.leftPanelClickMap[row];
+  if (!entry) return null;
+  if (entry.action === 'toggle-section' && entry.section === 'branches') return { prefix: '' };
+  if (entry.action === 'toggle-group' && typeof entry.group === 'string' && entry.group.startsWith('b:')) {
+    return { prefix: entry.group.substring(2) };
+  }
+  if (entry.action === 'goto-branch' && isLocalBranch(entry.branch)) {
+    const slashIdx = entry.branch.indexOf('/');
+    return { prefix: slashIdx >= 0 ? entry.branch.substring(0, slashIdx) : '' };
+  }
+  return null;
+}
 
 async function handleCommitterAction(action) {
   // 이 함수는 "내가 처리했는가"를 돌려주므로, 내 소관이 아닌 액션은 게이트도 태우지 않는다.
@@ -1297,6 +1337,34 @@ async function handleMouseData(data) {
         continue;
       }
 
+      // 브랜치 끌어 놓기 — 좌버튼(cb&3 === 0)을 누른 채 움직일 때만 성립한다.
+      // 버튼을 떼고 움직이는 hover(cb=35)까지 끌기로 보면 마우스만 스쳐도 끌린다.
+      if ((cb & 3) === 0) {
+        const dragRow = cy - bodyTop;
+        const inLeftPanel = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
+        if (ui.dragging === 'branch') {
+          const target = inLeftPanel ? branchDropTargetAt(dragRow) : null;
+          const movedTo = (ui.branchDropTarget ? ui.branchDropTarget.prefix : null) !== (target ? target.prefix : null);
+          ui.branchDropTarget = target;
+          ui.branchDragCursor = { row: cy, col: cx };
+          // 호스트 툴팁은 창 위에 겹쳐 그려지고 마우스를 알아서 따라가므로, 놓을 자리가
+          // 바뀔 때만 다시 그리면 된다. 프레임에 직접 그리는 폴백일 때만 마우스를 따라
+          // 매번 다시 그린다 — 그러지 않으면 툴팁이 제자리에 붙박인다.
+          if (movedTo || !tooltip.isSupported()) render();
+          continue;
+        }
+        // 누른 줄에서 다른 줄로 넘어간 순간부터 끌기다 — 제자리 클릭은 그대로 클릭으로 둔다.
+        if (ui.dragging === null && ui.branchDragCandidate && dragRow !== ui.branchDragCandidate.row) {
+          ui.dragging = 'branch';
+          ui.branchDragSource = ui.branchDragCandidate.branch;
+          ui.branchDropTarget = inLeftPanel ? branchDropTargetAt(dragRow) : null;
+          ui.branchDragCursor = { row: cy, col: cx };
+          setMouseShape('pointer');
+          render();
+          continue;
+        }
+      }
+
       let newHover = -1;
       for (let i = 0; i < ui.clickableAreas.length; i++) {
         const area = ui.clickableAreas[i];
@@ -1596,6 +1664,34 @@ async function handleMouseData(data) {
     }
 
     if (isRelease) {
+      if (ui.dragging === 'branch') {
+        const dragged = ui.branchDragSource;
+        const target = ui.branchDropTarget;
+        ui.dragging = null;
+        ui.branchDragSource = null;
+        ui.branchDropTarget = null;
+        ui.branchDragCursor = null;
+        ui.branchDragCandidate = null;
+        setMouseShape('default');
+        // 놓는 즉시 이름을 바꾸지 않는다 — 끌다 손이 미끄러진 것과 옮기려던 것을
+        // 가를 방법이 없으므로, 새 이름을 채운 리네임 창을 띄워 확인을 받는다.
+        // 창에서 이름을 더 손볼 수도 있고, 뒤이은 처리는 메뉴의 리네임과 같은 길로 간다.
+        const newName = dragged && target ? branchRenameTarget(dragged, target.prefix) : null;
+        if (newName && guardAction('branch_rename')) {
+          hecaton.dialog.show({
+            type: 'input',
+            title: t('menu.renameBranch'),
+            message: t('menu.enterNewName'),
+            defaultValue: newName,
+            buttons: [{ id: 'ok', label: t('menu.renameButton'), default: true }, { id: 'cancel', label: t('menu.cancel') }],
+          });
+          state.pendingDialogAction = 'rename-branch';
+          state.pendingDialogTarget = dragged;
+        }
+        render();
+        continue;
+      }
+      ui.branchDragCandidate = null;
       if (ui.dragging !== null) {
         ui.dragging = null;
         setMouseShape('default');
@@ -1755,6 +1851,8 @@ async function handleMouseData(data) {
 
     // Left click
     if (cb === 0) {
+      // 새로 누르는 순간 지난 끌기 후보는 버린다 — 브랜치 줄을 누를 때만 다시 잡는다.
+      ui.branchDragCandidate = null;
       // Title rows click
       if (cy >= L.startRow && cy < bodyTop) {
         let handled = false;
@@ -2061,6 +2159,13 @@ async function handleMouseData(data) {
               if (state.remoteBranches.includes(entry.branch)) {
                 ui.remoteRecentBranchUsage[entry.branch] = Date.now();
               }
+              // 로컬 브랜치는 여기서부터 끌어 옮길 수 있다. 아직 끌기로 올리지는 않는다 —
+              // 다른 줄로 넘어가야 끌기가 되므로(motion 처리 참고) 평범한 클릭은 그대로다.
+              // 리모트 추적 브랜치는 로컬에서 이름을 바꿀 대상이 아니라 잡지 않는다.
+              // 상단 브랜치명 줄(reveal)도 트리의 그 줄이 따로 있으므로 잡지 않는다.
+              ui.branchDragCandidate = (!entry.reveal && isLocalBranch(entry.branch))
+                ? { branch: entry.branch, row: bodyRowIdx2 }
+                : null;
               ui.leftPanelActiveBranch = entry.branch;
               // 상단 브랜치명 줄 클릭 — 목록의 그 줄까지 상위 토글을 펼치고 스크롤한다.
               if (entry.reveal) revealBranch(entry.branch);
@@ -2472,6 +2577,8 @@ async function handleMouseData(data) {
 
 function cleanup() {
   process.stdout.write(ansi.mouseShape('default') + CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  // 툴팁은 창이 들고 있는 상태라 플러그인이 사라져도 남는다 — 반드시 지우고 나간다.
+  tooltip.reset();
 }
 
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }

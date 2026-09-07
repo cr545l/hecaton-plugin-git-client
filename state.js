@@ -211,6 +211,15 @@ const ui = {
   detailCollapseAllZone: null, // { colStart, colEnd } for Collapse/Expand All button on refs line
   scrollbarOverlays: [],
   scrollbarDragInfo: null,    // { target, trackTop, trackH, maxScroll }
+  // ── Status 패널 브랜치 트리의 끌어 놓기 ──
+  // 브랜치 이름의 '/' 앞부분은 트리에서 폴더처럼 보이므로, 폴더를 옮기듯 끌어 놓아
+  // 이름을 바꿀 수 있게 한다(feature/x 를 bugfix/ 에 놓으면 bugfix/x).
+  // 누르자마자 끌기로 보면 평범한 클릭까지 끌기가 되므로, 누른 자리를 후보로만
+  // 적어 두고 다른 줄로 넘어간 뒤에야 ui.dragging='branch' 로 올린다.
+  branchDragCandidate: null,  // { branch, row } — 좌클릭으로 잡은 로컬 브랜치
+  branchDragSource: null,     // 끌고 있는 로컬 브랜치 이름
+  branchDropTarget: null,     // { prefix } — 놓을 그룹('' 이면 그룹 밖으로 뺀다)
+  branchDragCursor: null,     // { row, col } — 끌고 있는 마우스 자리. 툴팁을 여기 붙인다
   hoveredScrollbarTarget: null, // 'left' | 'files' | 'diff' | 'logList' | 'logDetail' | 'freshList' | 'freshDetail'
   filesScrollPin: undefined,     // pinned cursor value when scrollbar used
   logScrollPin: undefined,       // pinned logCursor value when scrollbar used
