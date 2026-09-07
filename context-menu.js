@@ -588,9 +588,9 @@ function buildPullRequestUrl(remoteUrl, branch) {
   let match = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
   if (match) return 'https://github.com/' + match[1] + '/pull/new/' + encodeURIComponent(branch);
   match = remoteUrl.match(/gitlab\.com[:/](.+?)(?:\.git)?$/);
-  if (match) return 'https://gitlab.com/' + match[1] + '/-/merge_requests/new?merge_request[source_branch]=' + encodeURIComponent(branch);  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
+  if (match) return 'https://gitlab.com/' + match[1] + '/-/merge_requests/new?merge_request[source_branch]=' + encodeURIComponent(branch);  // i18n-ok: GitLab URL 경로
   match = remoteUrl.match(/bitbucket\.org[:/](.+?)(?:\.git)?$/);
-  if (match) return 'https://bitbucket.org/' + match[1] + '/pull-requests/new?source=' + encodeURIComponent(branch);  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
+  if (match) return 'https://bitbucket.org/' + match[1] + '/pull-requests/new?source=' + encodeURIComponent(branch);  // i18n-ok: Bitbucket URL 경로
   return null;
 }
 
@@ -1915,7 +1915,7 @@ untrackedCount + t('menu.untracked'),
       state.mode = 'commit';
       state.commitAmend = true;
       state.commitMsg = message;
-      state.commitCursor = message.length;
+      state.commitCursor = message.length;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
       updateDiff();
       render();
       break;
@@ -2869,7 +2869,7 @@ async function runCherryPickFromDialog(ref, commitImmediately) {
     state.mode = 'commit';
     state.commitAmend = false;
     state.commitMsg = message;
-    state.commitCursor = message.length;
+    state.commitCursor = message.length;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
     state.diffScrollOffset = 0;
     state.diffScrollX = 0;
     updateDiff();

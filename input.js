@@ -314,7 +314,7 @@ function toggleCommitAmend() {
     gitCommitMessage(state.cwd, 'HEAD').then(msg => {
       if (state.mode === 'commit' && state.commitAmend && state.commitMsg.trim() === '' && msg) {
         state.commitMsg = msg;
-        state.commitCursor = msg.length;
+        state.commitCursor = msg.length;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
         render();
       }
     }).catch(() => null);
@@ -332,7 +332,7 @@ function enterCommitMode() {
   } else {
     state.commitMsg = takeCommitDraft() || '';
   }
-  state.commitCursor = state.commitMsg.length;
+  state.commitCursor = state.commitMsg.length;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
   render();
 }
 
@@ -347,7 +347,7 @@ function enterAmendCommitMode() {
   gitCommitMessage(state.cwd, 'HEAD').then(msg => {
     if (state.mode === 'commit' && state.commitAmend && state.commitMsg === '' && msg) {
       state.commitMsg = msg;
-      state.commitCursor = msg.length;
+      state.commitCursor = msg.length;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
       render();
     }
   }).catch(() => null);
@@ -1016,7 +1016,7 @@ function handleCommitInput(key) {
     const col = state.commitCursor - lineStart;
     const nextLineStart = state.commitCursor + nextNL + 1;
     const nextNL2 = state.commitMsg.indexOf('\n', nextLineStart);
-    const nextLineLen = nextNL2 === -1 ? state.commitMsg.length - nextLineStart : nextNL2 - nextLineStart;
+    const nextLineLen = nextNL2 === -1 ? state.commitMsg.length - nextLineStart : nextNL2 - nextLineStart;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
     state.commitCursor = nextLineStart + Math.min(col, nextLineLen);
     render();
     return;
@@ -1031,7 +1031,7 @@ function handleCommitInput(key) {
   }
   // Right arrow
   if (key === CSI + 'C') {
-    if (state.commitCursor < state.commitMsg.length) {
+    if (state.commitCursor < state.commitMsg.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
       state.commitCursor = nextCharIndex(state.commitMsg, state.commitCursor);
     }
     render();
@@ -1047,7 +1047,7 @@ function handleCommitInput(key) {
   // End → end of current line
   if (key === CSI + 'F' || key === CSI + '4~') {
     const nextNL = state.commitMsg.indexOf('\n', state.commitCursor);
-    state.commitCursor = nextNL === -1 ? state.commitMsg.length : nextNL;
+    state.commitCursor = nextNL === -1 ? state.commitMsg.length : nextNL;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
     render();
     return;
   }
@@ -1063,7 +1063,7 @@ function handleCommitInput(key) {
   }
   // Delete key – delete character after cursor
   if (key === CSI + '3~') {
-    if (state.commitCursor < state.commitMsg.length) {
+    if (state.commitCursor < state.commitMsg.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
       const next = nextCharIndex(state.commitMsg, state.commitCursor);
       state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + state.commitMsg.substring(next);
     }
@@ -2217,7 +2217,7 @@ async function handleMouseData(data) {
 
       // Click on 메시지 지우기 버튼 — 커서 이동보다 먼저 본다(메시지 줄 위에 얹혀 있다).
       if (ui.commitClearZone && cy === ui.commitClearZone.row && cx >= ui.commitClearZone.colStart && cx <= ui.commitClearZone.colEnd) {
-        if (state.mode === 'commit' && state.commitMsg.length > 0) {
+        if (state.mode === 'commit' && state.commitMsg.length > 0) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
           state.commitMsg = '';
           state.commitCursor = 0;
           render();
@@ -2471,7 +2471,7 @@ async function handleMouseData(data) {
 }
 
 function cleanup() {
-  process.stdout.write(ansi.mouseShape('default') + CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  process.stdout.write(ansi.mouseShape('default') + CSI + '?7h' + ansi.showCursor + ansi.reset + ansi.clear);  // i18n-ok: 터미널 제어 시퀀스
 }
 
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }

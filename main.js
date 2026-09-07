@@ -302,7 +302,7 @@ async function applyGitOptimizations(cwd, gitDir) {
         program: 'git', args: ['config', '--local', 'core.untrackedCache', 'true'],
         cwd, timeout_ms: 3000,
       });
-      console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
+      console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');  // i18n-ok: console 로그(사용자 UI 아님)
     }
   } catch { /* ignore */ }
 
@@ -344,7 +344,7 @@ async function applyGitOptimizations(cwd, gitDir) {
         program: 'git', args: ['config', '--local', 'core.fsmonitor', 'true'],
         cwd, timeout_ms: 3000,
       });
-      console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
+      console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');  // i18n-ok: console 로그(사용자 UI 아님)
     }
   } catch { /* ignore */ }
 }
@@ -460,13 +460,13 @@ async function setupGitWatcher() {
   async function statWorktreeEntry(file) {
     try {
       const r = await hecaton.fs.stat({ path: path.join(state.cwd, file) });
-      if (!r || !r.exists) return file + "\tmissing";  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      if (!r || !r.exists) return file + "\tmissing";  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
       const type = r.is_dir ? 'd' : 'f';
       const mtime = r.mtime_ms || 0;
       const size = r.size || 0;
       return file + '\t' + type + '\t' + mtime + '\t' + size;
     } catch {
-      return file + "\tmissing";  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      return file + "\tmissing";  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
     }
   }
 
@@ -611,6 +611,6 @@ async function setupGitWatcher() {
 }
 
 main().catch((e) => {
-  process.stderr.write('Error: ' + e.message + "\n");  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  process.stderr.write('Error: ' + e.message + "\n");  // i18n-ok: stderr 진단(사용자 UI 아님)
   process.exit(1);
 });

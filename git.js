@@ -64,9 +64,9 @@ function resultText(value) {
 }
 
 function truncateGitDetail(text) {
-  if (text.length <= MAX_GIT_ERROR_DETAIL) return text;
+  if (text.length <= MAX_GIT_ERROR_DETAIL) return text;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
   const half = Math.floor((MAX_GIT_ERROR_DETAIL - 40) / 2);
-  return text.substring(0, half) + t('git.outputTruncated') + text.substring(text.length - half);
+  return text.substring(0, half) + t('git.outputTruncated') + text.substring(text.length - half);  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
 }
 
 function formatGitFailure(result, fallback, timeoutMs) {
@@ -249,9 +249,9 @@ async function gitIsRepo(cwd) {
   // Provide diagnostic detail for troubleshooting
   const detail = {};
   // Dump raw result for diagnosis
-  detail.error = 'raw: ' + JSON.stringify(result);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  detail.error = 'raw: ' + JSON.stringify(result);  // i18n-ok: 진단 필드 이름(개발자용)
   if (result && result.__rpcError) {
-    detail.error = 'RPC error: ' + (result.__rpcError.message || JSON.stringify(result.__rpcError));  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+    detail.error = 'RPC error: ' + (result.__rpcError.message || JSON.stringify(result.__rpcError));  // i18n-ok: 진단 필드 이름(개발자용)
   } else if (result) {
     if (result.error) detail.error = result.error;
     if (result.stderr) detail.stderr = result.stderr;
@@ -1048,15 +1048,15 @@ async function gitApplyPatchText(cwd, patchText, opts = {}) {
 // git이 editor를 shell로 실행할 때 'cp "<src>" <대상파일>' 형태가 되도록 복사 명령 구성
 function buildCopyEditorCommand(srcPath) {
   if (typeof process !== 'undefined' && process.platform === 'win32') {
-    return 'cmd /c copy /y "' + srcPath + '"';  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+    return 'cmd /c copy /y "' + srcPath + '"';  // i18n-ok: 셸 명령
   }
-  return 'cp "' + srcPath.replace(/(["\\$`])/g, '\\$1') + '"';  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  return 'cp "' + srcPath.replace(/(["\\$`])/g, '\\$1') + '"';  // i18n-ok: 셸 명령
 }
 
 // baseRef..HEAD 커밋을 오래된 순으로 나열 (baseRef가 null이면 루트부터 전체)
 async function listRebaseCommits(cwd, baseRef) {
   const args = ['rev-list', '--reverse'];
-  if (baseRef) args.push(baseRef + '..HEAD'); else args.push('HEAD');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  if (baseRef) args.push(baseRef + '..HEAD'); else args.push('HEAD');  // i18n-ok: git revision 문법
   const raw = (await gitExec(args, cwd, 15000)).trim();
   return raw ? raw.split('\n').map(s => s.trim()).filter(Boolean) : [];
 }
@@ -1076,7 +1076,7 @@ async function gitRunRebaseTodo(cwd, baseRef, todoContent) {
     return (e && e.message) || t('git.failedWriteRebaseTodo');
   }
   const args = [
-    '-c', 'sequence.editor=' + buildCopyEditorCommand(todoPath),  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+    '-c', 'sequence.editor=' + buildCopyEditorCommand(todoPath),  // i18n-ok: git config 인자
     '-c', 'core.editor=true',
     'rebase', '-i',
   ];
@@ -1319,7 +1319,7 @@ async function gitBranchExists(cwd, name) {
 // clean:                  warning: failed to remove <path>: Invalid argument
 const UNLINK_BLOCKED_RE = /unable to unlink (?:old )?'([^']*)'/i;
 const REMOVE_BLOCKED_RE = /failed to remove ([^\n]*): (?:Invalid argument|Permission denied|Device or resource busy|Directory not empty)/i;
-const LOCKED_FILE_HINT =
+const lockedFileHint = () =>
   t('git.anotherProcessHoldingFileOpenSo')
   + t('git.closeWhateverHasItOpenTry')
   + t('git.canKeepLockEvenAfterWindow');
@@ -1331,7 +1331,7 @@ const LOCKED_FILE_HINT =
 // 경로로 지우려 하므로 Permission denied 로 막히고 discard가 그 파일에서 멈춘다.
 // 프로세스를 닫으라는 안내는 이 경우엔 틀린 진단이라 원인별로 갈라 준다.
 const WIN32_DEVICE_NAME_RE = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i;
-const RESERVED_NAME_HINT =
+const reservedNameHint = () =>
   t('git.windowsKeepsThisNameDeviceNul')
   + t('git.dotSpaceSoNoWin32Path')
   + t('git.reachesItThroughMsysRunRm');
@@ -1350,7 +1350,7 @@ function isUnnameablePath(file) {
 
 function lockedFileHintFor(message) {
   const blocked = unlinkBlockedPaths(message).concat(removeBlockedPaths(message));
-  return blocked.some(isUnnameablePath) ? RESERVED_NAME_HINT : LOCKED_FILE_HINT;
+  return blocked.some(isUnnameablePath) ? reservedNameHint() : lockedFileHint();
 }
 
 function withLockedFileHint(message) {
@@ -1446,7 +1446,7 @@ async function discardWithInPlaceFallback(cwd, file, source, originalError) {
   if (!isUnlinkBlockedError(originalError)) return withLockedFileHint(originalError);
   const reason = await restoreFileInPlace(cwd, file, source);
   if (!reason) return null;
-  return originalError + '\n\n' + LOCKED_FILE_HINT
+  return originalError + '\n\n' + lockedFileHint()
     + t('git.restoringContentPlaceAlsoFailed') + reason + '.';
 }
 
@@ -1677,7 +1677,7 @@ async function gitUnsetConfigLocal(cwd, key) { try { await git(['config', '--loc
 async function gitFreshLog(cwd, days) {
   try {
     const raw = await git(
-      ['log', '--max-count=1000', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      ['log', '--max-count=1000', '--since=' + days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'],  // i18n-ok: git 인자·포맷 문자열
       cwd
     );
     const items = [];

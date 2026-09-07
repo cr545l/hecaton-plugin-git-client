@@ -28,28 +28,29 @@ const { t } = require('./i18n');
 const { state, ui } = require('./state');
 
 // ── 사유 문자열 ──
-// 힌트바/토스트에 그대로 나가므로 UI 언어(영문)에 맞추고 한 줄로 유지한다.
+// 힌트바/토스트에 그대로 나가므로 한 줄로 유지한다.
+// getter 인 이유: 상수로 두면 require 시점(언어가 정해지기 전)에 굳는다.
 const REASON = {
-  LOADING: t('action.loadingRepository'),
-  BUSY: t('action.anotherOperationRunning'),
-  NO_REPO: t('action.notGitRepository'),
-  INDEX_LOCKED: t('action.gitIndexLockedUnlockFirst'),
-  CONFLICTS: t('action.resolveConflictsFirst'),
-  NO_OPERATION: t('action.noOperationProgress'),
-  DETACHED: t('action.detachedHeadNoCurrentBranch'),
-  NO_REMOTE: t('action.noRemoteConfigured'),
-  NO_UPSTREAM: t('action.noUpstreamConfigured'),
-  NO_STAGED: t('action.nothingStaged'),
-  NO_STAGEABLE: t('action.nothingStage'),
-  NO_UNSTAGEABLE: t('action.nothingUnstage'),
-  NO_CHANGES: t('action.noLocalChanges'),
-  NO_UNTRACKED: t('action.noUntrackedFiles'),
-  NO_STASH: t('action.noStashes'),
-  NO_COMMIT: t('action.selectCommitHistoryFirst'),
-  NO_MESSAGE: t('action.commitMessageEmpty'),
-  NO_FILE: t('action.noFileSelected'),
-  NOT_LOCKED: t('action.indexNotLocked'),
-  PARTIAL_CONFLICT: t('action.selectEveryConflictApply'),
+  get LOADING() { return t('action.loadingRepository'); },
+  get BUSY() { return t('action.anotherOperationRunning'); },
+  get NO_REPO() { return t('action.notGitRepository'); },
+  get INDEX_LOCKED() { return t('action.gitIndexLockedUnlockFirst'); },
+  get CONFLICTS() { return t('action.resolveConflictsFirst'); },
+  get NO_OPERATION() { return t('action.noOperationProgress'); },
+  get DETACHED() { return t('action.detachedHeadNoCurrentBranch'); },
+  get NO_REMOTE() { return t('action.noRemoteConfigured'); },
+  get NO_UPSTREAM() { return t('action.noUpstreamConfigured'); },
+  get NO_STAGED() { return t('action.nothingStaged'); },
+  get NO_STAGEABLE() { return t('action.nothingStage'); },
+  get NO_UNSTAGEABLE() { return t('action.nothingUnstage'); },
+  get NO_CHANGES() { return t('action.noLocalChanges'); },
+  get NO_UNTRACKED() { return t('action.noUntrackedFiles'); },
+  get NO_STASH() { return t('action.noStashes'); },
+  get NO_COMMIT() { return t('action.selectCommitHistoryFirst'); },
+  get NO_MESSAGE() { return t('action.commitMessageEmpty'); },
+  get NO_FILE() { return t('action.noFileSelected'); },
+  get NOT_LOCKED() { return t('action.indexNotLocked'); },
+  get PARTIAL_CONFLICT() { return t('action.selectEveryConflictApply'); },
 };
 
 // ── 자원 축 ──

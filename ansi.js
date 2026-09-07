@@ -4,8 +4,8 @@ const CSI = ESC + '[';
 
 const ansi = {
   clear: CSI + '2J' + CSI + 'H',
-  hideCursor:CSI + '?25l',  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
-  showCursor:CSI + '?25h',  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  hideCursor:CSI + '?25l',  // i18n-ok: 터미널 제어 시퀀스
+  showCursor:CSI + '?25h',  // i18n-ok: 터미널 제어 시퀀스
   reset: CSI + '0m',
   bold: CSI + '1m',
   dim: CSI + '2m',

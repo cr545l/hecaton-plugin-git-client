@@ -3,12 +3,12 @@ const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir } = require('./sta
 const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
-  { label: t('refresh.pending'), days: 0 },
-  { label: t('refresh.7Days'),  days: 7 },
-  { label: t('refresh.14Days'), days: 14 },
-  { label: t('refresh.30Days'), days: 30 },
-  { label: t('refresh.60Days'), days: 60 },
-  { label: t('refresh.90Days'), days: 90 },
+  { get label() { return t('refresh.pending'); }, days: 0 },
+  { get label() { return t('refresh.7Days'); },  days: 7 },
+  { get label() { return t('refresh.14Days'); }, days: 14 },
+  { get label() { return t('refresh.30Days'); }, days: 30 },
+  { get label() { return t('refresh.60Days'); }, days: 60 },
+  { get label() { return t('refresh.90Days'); }, days: 90 },
 ];
 const FRESH_LOG_MAX_COUNT = 1000;
 const { calcGraphRows } = require('./graph');
@@ -838,7 +838,7 @@ async function computeRefsTreeSignature(gitDir) {
   // ref가 상한을 넘는 저장소는 부분 지문만 남는다. 지문 자체는 안정적이므로
   // 오탐은 없고, 잘린 구간의 변경만 놓친다(= 종전 동작 수준).
   if (budget.truncated) out.push(t('refresh.truncated'));
-  return "refs\n" + out.join('\n');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  return "refs\n" + out.join('\n');  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
 }
 
 // linked worktree에서는 HEAD/logs/HEAD만 per-worktree git dir에 있고
@@ -1065,12 +1065,12 @@ async function refreshAsync(options = {}) {
       } else {
         parts.push(preCheck.error || 'git failed');
       }
-      parts.push('cwd: ' + state.cwd);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      parts.push('cwd: ' + state.cwd);  // i18n-ok: 진단 필드 이름(개발자용)
       if (preCheck) {
-        if (preCheck.error) parts.push('error: ' + preCheck.error);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
-        if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
-        if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
-        parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+        if (preCheck.error) parts.push('error: ' + preCheck.error);  // i18n-ok: 진단 필드 이름(개발자용)
+        if (preCheck.stderr && preCheck.stderr.trim()) parts.push('stderr: ' + preCheck.stderr.trim());  // i18n-ok: 진단 필드 이름(개발자용)
+        if (preCheck.exit_code !== undefined && preCheck.exit_code !== 0) parts.push('exit: ' + preCheck.exit_code);  // i18n-ok: 진단 필드 이름(개발자용)
+        parts.push('ok:' + preCheck.ok + ' stdout:[' + insideWorkTree + ']');  // i18n-ok: 진단 필드 이름(개발자용)
       }
       state.error = parts.join(' | ');
       state.branch = ''; state.worktrees = []; state.isLinkedWorktree = false; state.staged = []; state.unstaged = []; state.untracked = []; state.ignored = []; state.ignoredLoaded = false; state.ignoredLoading = false; state.diffLines = []; state.conflictView = null; state.currentDiffFile = null;
@@ -1411,7 +1411,7 @@ async function refreshAsync(options = {}) {
     // Append conflict file list if there are unmerged files
     const conflictFiles = state.unstaged.filter(f => f.status === 'U').map(f => f.file);
     if (conflictFiles.length > 0 && state.rebaseMessage && !state.rebaseMessage.includes('# Conflicts:')) {
-      state.rebaseMessage += "\n\n# Conflicts:\n" + conflictFiles.map(f => '#\t' + f).join('\n');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      state.rebaseMessage += "\n\n# Conflicts:\n" + conflictFiles.map(f => '#\t' + f).join('\n');  // i18n-ok: 커밋 메시지 주석 — 저장소에 남는 git 관례 형식
     }
   }
 
@@ -1450,7 +1450,7 @@ async function refreshAsync(options = {}) {
     const remote = cur && !cur.upstream ? currentBranchRemote() : '';
     if (remote) {
       aheadBehindRaw = await gitExec(
-        ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+        ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],  // i18n-ok: git ref 경로
         state.cwd,
       );
       if (_metaCache && _metaCacheCwd === state.cwd) {
@@ -2015,16 +2015,16 @@ function updateLogDetail(options = {}) {
   const lines = [];
   const separator = '\u2500'.repeat(40);
 
-  lines.push('commit ' + item.hash);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  lines.push(t('ui.commitLabel') + item.hash);
   if (item.authorName || item.authorDate) {
     const emailPart = item.authorEmail ? ' <' + item.authorEmail + '>' : '';
     const dateStr = item.authorDate ? formatDateTime(item.authorDate) : '';
-    lines.push('Author: ' + (item.authorName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+    lines.push(t('ui.authorLabel') + (item.authorName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
   }
   if (item.committerName || item.committerDate) {
     const emailPart = item.committerEmail ? ' <' + item.committerEmail + '>' : '';
     const dateStr = item.committerDate ? formatDateTime(item.committerDate) : '';
-    lines.push('Commit: ' + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+    lines.push(t('ui.committerLabel') + (item.committerName || '') + emailPart + (dateStr ? '  ' + dateStr : ''));
   }
 
   lines.push(separator);
@@ -2035,10 +2035,10 @@ function updateLogDetail(options = {}) {
     recoveryLines.push('');
     recoveryLines.push(t('refresh.recoveryReflogOnlyCommit'));
     if (item.recoveryRef && item.recoveryRef.selector) {
-      recoveryLines.push('Reflog: ' + item.recoveryRef.selector);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      recoveryLines.push(t('ui.reflogLabel') + item.recoveryRef.selector);
     }
     if (item.recoveryRef && item.recoveryRef.subject) {
-      recoveryLines.push('Event: ' + item.recoveryRef.subject);  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      recoveryLines.push(t('ui.eventLabel') + item.recoveryRef.subject);
     }
   }
 
@@ -2236,7 +2236,7 @@ function refreshFresh() {
   const tw = FRESH_TIME_WINDOWS[state.freshTimeWindow] || FRESH_TIME_WINDOWS[1];
   if (tw.days > 0) {
     const seq = ++_freshSeq;
-    gitExec(['log', '--max-count=' + FRESH_LOG_MAX_COUNT, '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+    gitExec(['log', '--max-count=' + FRESH_LOG_MAX_COUNT, '--since=' + tw.days + '.days.ago', '--name-status', '--pretty=format:__COMMIT__%h|%an|%aI|%s'], state.cwd, 30000).then(raw => {  // i18n-ok: git 인자·포맷 문자열
       if (_freshSeq !== seq) return;
       let currentCommit = null;
       for (const line of raw.split('\n')) {
