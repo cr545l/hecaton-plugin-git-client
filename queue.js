@@ -27,20 +27,21 @@ const TTL_MS = 90000;
 // 타이틀과 토스트에 내보낼 이름. 액션 id 를 그대로 쓰면 'git-push' 같은 내부 이름이
 // 사용자 눈에 보인다.
 const LABELS = {
-  'git-push': t('menu.push'),
-  'git-pull': t('menu.pull'),
-  'git-fetch': t('queue.fetch'),
-  stageSelected: t('menu.stage'),
-  unstageSelected: t('menu.unstage'),
-  stageAll: t('queue.stageAll'),
-  unstageAll: t('queue.unstageAll'),
+  get 'git-push'() { return t('menu.push'); },
+  get 'git-pull'() { return t('menu.pull'); },
+  get 'git-fetch'() { return t('queue.fetch'); },
+  get stageSelected() { return t('menu.stage'); },
+  get unstageSelected() { return t('menu.unstage'); },
+  get stageAll() { return t('queue.stageAll'); },
+  get unstageAll() { return t('queue.unstageAll'); },
 };
-const LABEL_PREFIXES = [['push_to_remote:', t('menu.push')]];
+// 값이 아니라 키를 담는다 — 배열 원소는 getter 를 걸 수 없어서, 쓰는 자리에서 t() 를 부른다.
+const LABEL_PREFIX_KEYS = [['push_to_remote:', 'menu.push']];
 
 function labelOf(id) {
   if (LABELS[id]) return LABELS[id];
-  for (const [prefix, label] of LABEL_PREFIXES) {
-    if (id.startsWith(prefix)) return label;
+  for (const [prefix, key] of LABEL_PREFIX_KEYS) {
+    if (id.startsWith(prefix)) return t(key);
   }
   return t('queue.action');
 }

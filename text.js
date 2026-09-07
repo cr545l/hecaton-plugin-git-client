@@ -67,7 +67,7 @@ function truncate(text, maxLen) {
   // Walk through text, counting visible width
   let vis = 0;
   let i = 0;
-  while (i < text.length && vis < maxLen - 1) {
+  while (i < text.length && vis < maxLen - 1) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
     if (text[i] === '\x1b') {
       const end = text.indexOf('m', i);
       if (end !== -1) { i = end + 1; continue; }
@@ -82,7 +82,7 @@ function truncate(text, maxLen) {
 }
 
 function viewport(text, cursorPos, maxWidth) {
-  cursorPos = Math.max(0, Math.min(cursorPos, text.length));
+  cursorPos = Math.max(0, Math.min(cursorPos, text.length));  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
   const before = text.substring(0, cursorPos);
   const after = text.substring(cursorPos);
   const beforeVis = visLen(before);

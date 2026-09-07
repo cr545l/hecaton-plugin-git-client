@@ -38,7 +38,7 @@ let _localNetworkOp = null;
 
 function hashKey(text) {
   let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
+  for (let i = 0; i < text.length; i++) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
     h ^= text.charCodeAt(i);
     h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
   }

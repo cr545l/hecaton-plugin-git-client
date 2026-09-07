@@ -124,7 +124,7 @@ async function reapOrphanedPollProcesses(coordinate) {
     await hecaton.process.exec({ program: 'taskkill', args, timeout_ms: 10000 });
   } catch { return 0; }
 
-  console.log('[git-client] reaped ' + targets.length + ' orphaned poll process(es)');  // i18n-ok: URL 경로·진단 로그 — UI 문자열이 아니다
+  console.log('[git-client] reaped ' + targets.length + ' orphaned poll process(es)');  // i18n-ok: console 로그(사용자 UI 아님)
   return targets.length;
 }
 

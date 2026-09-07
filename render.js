@@ -332,7 +332,7 @@ function renderBody() {
   const startRow = 1;
 
   const buf = [];
-  buf.push(ansi.hideCursor + CSI + '?7l');  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+  buf.push(ansi.hideCursor + CSI + '?7l');  // i18n-ok: 터미널 제어 시퀀스
 
   // Host-owned scroll: panel builders register their scrollable areas (plus
   // overscan bank content) here; banks/acks/regions are emitted after the body.
@@ -942,7 +942,7 @@ function renderBody() {
     // 비저장소는 오류가 아니라 설정 가능한 시작 상태다. 자세한 진단 문자열 대신 사용자가
     // 지금 할 수 있는 동작을 안내하고, 실제 오류(git 실행 파일 없음)만 빨간색으로 남긴다.
     if (state.spinnerActive) {
-      hintContent = ' ' + colors.dim + 'cwd: ' + state.cwd + ansi.reset;  // i18n-ok: git 문법·터미널 시퀀스·진단 로그 — UI 문자열이 아니다
+      hintContent = ' ' + colors.dim + t('ui.cwdLabel') + state.cwd + ansi.reset;
     } else if (state.gitNotFound) {
       hintContent = ' ' + colors.red + t('ui.gitExecutableNotFound') + ansi.reset;
     } else {
@@ -1298,7 +1298,7 @@ function renderBody() {
       ui.mergeApplyZone = {
         row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1,
         colStart: rpStartCol + 1,
-        colEnd: rpStartCol + applyLabel.length,
+        colEnd: rpStartCol + visLen(applyLabel),
         enabled: allSelected && caps().isEnabled('merge-apply'),
         label: applyLabel,
       };
@@ -1323,10 +1323,10 @@ function renderBody() {
       ui.clickableAreas.push({
         row: hintRow,
         colStart: contentStart + plainOffset,
-        colEnd: contentStart + plainOffset + hintButtons[i].label.length - 1,
+        colEnd: contentStart + plainOffset + visLen(hintButtons[i].label) - 1,
         action: hintButtons[i].action,
       });
-      plainOffset += hintButtons[i].label.length;
+      plainOffset += visLen(hintButtons[i].label);
     }
   }
   if (ui.hoveredAreaIndex >= ui.clickableAreas.length) ui.hoveredAreaIndex = -1;
@@ -1342,7 +1342,7 @@ function renderBody() {
     const maxW = ui.commitMsgCursorMaxW > 0 ? ui.commitMsgCursorMaxW : rightW - 2;
     const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
     const cursorLineEnd = state.commitMsg.indexOf('\n', state.commitCursor);
-    const lineText = state.commitMsg.substring(cursorLineStart, cursorLineEnd === -1 ? state.commitMsg.length : cursorLineEnd);
+    const lineText = state.commitMsg.substring(cursorLineStart, cursorLineEnd === -1 ? state.commitMsg.length : cursorLineEnd);  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
     const colInLine = state.commitCursor - cursorLineStart;
     const beforeVis = visLen(lineText.substring(0, colInLine));
     const afterVis = visLen(lineText.substring(colInLine));
@@ -1876,10 +1876,10 @@ function buildFileListPanel(w, h) {
   {
     const headerLabel = t('ui.unstaged') + unstagedCount + ')';
     const unlockLabel = state.indexLocked ? t('ui.unlock') : '';
-    const allBtnLabel = t('menu.stageAll');
+    const allBtnLabel = t('ui.stageAllBtn');
     const btnLabel = t('menu.stage');
-    const unlockLen = unlockLabel ? unlockLabel.length + 1 : 0;
-    const totalBtnLen = unlockLen + allBtnLabel.length + 1 + btnLabel.length;
+    const unlockLen = unlockLabel ? visLen(unlockLabel) + 1 : 0;
+    const totalBtnLen = unlockLen + visLen(allBtnLabel) + 1 + visLen(btnLabel);
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
 
@@ -1889,9 +1889,9 @@ function buildFileListPanel(w, h) {
       const unlockZoneIdx = ui.fileHeaderZones.length;
       const unlockOn = caps().isEnabled('unlockIndex');
       const unlockStyle = buttonStyle(unlockOn, ui.hoveredFileHeaderIdx === unlockZoneIdx, colors.red + ansi.bold);
-      ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: cursorCol, btnColEnd: cursorCol + unlockLabel.length - 1, action: 'unlockIndex', enabled: unlockOn });
+      ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: cursorCol, btnColEnd: cursorCol + visLen(unlockLabel) - 1, action: 'unlockIndex', enabled: unlockOn });
       unlockSeg = unlockStyle + unlockLabel + ansi.reset + ' ';
-      cursorCol += unlockLabel.length + 1;
+      cursorCol += visLen(unlockLabel) + 1;
     }
 
     const allZoneIdx = ui.fileHeaderZones.length;
@@ -1903,14 +1903,14 @@ function buildFileListPanel(w, h) {
     const btnStyle = actionStyle('stageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = cursorCol;
-    const btnStart = allBtnStart + allBtnLabel.length + 1;
+    const btnStart = allBtnStart + visLen(allBtnLabel) + 1;
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
       + unlockSeg
       + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'stageAll', enabled: allOn });
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'stageSelected', enabled: selOn });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + visLen(allBtnLabel) - 1, action: 'stageAll', enabled: allOn });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + visLen(btnLabel) - 1, action: 'stageSelected', enabled: selOn });
     pushFileLine(headerLine, -1);
   }
   pushSection('unstaged');
@@ -1920,7 +1920,7 @@ function buildFileListPanel(w, h) {
     const headerLabel = t('ui.staged2') + state.staged.length + ')';
     const allBtnLabel = t('ui.unstageAll');
     const btnLabel = t('menu.unstage');
-    const totalBtnLen = allBtnLabel.length + 1 + btnLabel.length;
+    const totalBtnLen = visLen(allBtnLabel) + 1 + visLen(btnLabel);
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
 
@@ -1933,13 +1933,13 @@ function buildFileListPanel(w, h) {
     const btnStyle = actionStyle('unstageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = headerLabelLen + gap;
-    const btnStart = allBtnStart + allBtnLabel.length + 1;
+    const btnStart = allBtnStart + visLen(allBtnLabel) + 1;
     const headerLine = colors.sectionHeader + ansi.bold + headerLabel + ansi.reset
       + ' '.repeat(gap)
       + allBtnStyle + allBtnLabel + ansi.reset + ' '
       + btnStyle + btnLabel + ansi.reset;
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + allBtnLabel.length - 1, action: 'unstageAll', enabled: allOn });
-    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + btnLabel.length - 1, action: 'unstageSelected', enabled: selOn });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: allBtnStart, btnColEnd: allBtnStart + visLen(allBtnLabel) - 1, action: 'unstageAll', enabled: allOn });
+    ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: btnStart, btnColEnd: btnStart + visLen(btnLabel) - 1, action: 'unstageSelected', enabled: selOn });
     pushFileLine(headerLine, -1);
   }
   pushSection('staged');
@@ -2080,7 +2080,7 @@ function buildDiffCommitPanel(w, h) {
   ui.diffHunkZones = [];
   const canHunk = !isConflictView && diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffLines.length > 0;
   const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? t('ui.unstageHunk') : t('ui.stageHunk')) : '';
-  const hunkAvail = hunkBtnLabel ? Math.max(8, innerW - hunkBtnLabel.length - 2) : 0;
+  const hunkAvail = hunkBtnLabel ? Math.max(8, innerW - visLen(hunkBtnLabel) - 2) : 0;
   const hunkOn = canHunk && caps().isEnabled('hunk-apply');
   const renderHunkButton = (hunkIdx) => {
     const style = buttonStyle(hunkOn, ui.hoveredDiffHunkIdx === hunkIdx,
@@ -2172,7 +2172,7 @@ function buildDiffCommitPanel(w, h) {
           for (let vi = 0; vi < visible.length; vi++) {
             const absIdx = state.diffScrollOffset + vi;
             if (sideHunkIdxByRow.has(absIdx)) {
-              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + hunkBtnLabel.length, hunkIdx: sideHunkIdxByRow.get(absIdx) });
+              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + visLen(hunkBtnLabel), hunkIdx: sideHunkIdxByRow.get(absIdx) });
             }
           }
         }
@@ -2216,7 +2216,7 @@ function buildDiffCommitPanel(w, h) {
           const absIdx = state.diffScrollOffset + vi;
           lines.push(renderUnifiedRow(visible[vi], absIdx));
           if (hunkBtnLabel && unifiedHunkIdxByRow.has(absIdx)) {
-            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + hunkBtnLabel.length, hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
+            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + visLen(hunkBtnLabel), hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
           }
         }
         ui.scrollPct.diff = annotated.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
@@ -2256,14 +2256,14 @@ function buildDiffCommitPanel(w, h) {
 
       // 메시지 지우기 버튼: 첫 줄 오른쪽 끝. 지울 내용이 있을 때만 자리를 차지한다.
       const clearLabel = t('ui.x');
-      const showClear = state.commitMsg.length > 0;
+      const showClear = state.commitMsg.length > 0;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
 
       for (let i = 0; i < maxMsgLines; i++) {
         const lineIdx = topLine + i;
         if (lineIdx < msgLines.length) {
           // 버튼이 얹히는 첫 줄만 폭을 양보한다 — 나머지 줄은 끝까지 쓴다.
           const hasBtn = i === 0 && showClear;
-          const lineW = hasBtn ? Math.max(8, w - 3 - clearLabel.length) : w - 2;
+          const lineW = hasBtn ? Math.max(8, w - 3 - visLen(clearLabel)) : w - 2;
           const body = lineIdx === cursorLineIdx
             ? viewport(msgLines[lineIdx], cursorCol, lineW)
             : truncate(msgLines[lineIdx], lineW);
@@ -2272,13 +2272,13 @@ function buildDiffCommitPanel(w, h) {
           let line = ' ' + colors.value + body + ansi.reset;
           if (hasBtn) {
             const bodyLen = visLen(stripAnsi(body));
-            const pad = Math.max(1, (w - 1 - clearLabel.length) - 1 - bodyLen);
+            const pad = Math.max(1, (w - 1 - visLen(clearLabel)) - 1 - bodyLen);
             const clearStyle = ui.hoveredCommitClear
               ? colors.red + ansi.bold + CSI + '4m'
               : colors.dim;
             line += ' '.repeat(pad) + clearStyle + clearLabel + ansi.reset;
             ui.commitClearBtnOffset = 1 + bodyLen + pad;
-            ui.commitClearBtnLen = clearLabel.length;
+            ui.commitClearBtnLen = visLen(clearLabel);
           }
           lines.push(line);
         } else {
@@ -2311,8 +2311,8 @@ function buildDiffCommitPanel(w, h) {
       const amendOn = caps().isEnabled('commit-amend');
       const amendStyle = buttonStyle(amendOn, ui.hoveredCommitAmend,
         state.commitAmend ? colors.yellow : colors.value);
-      ui.commitAmendBtnOffset = 1 + commitLabel.length + 2; // 선행공백 + commitLabel + 간격(2)
-      ui.commitAmendBtnLen = amendLabel.length;
+      ui.commitAmendBtnOffset = 1 + visLen(commitLabel) + 2; // 선행공백 + commitLabel + 간격(2)
+      ui.commitAmendBtnLen = visLen(amendLabel);
       btnLine += '  ' + amendStyle + amendLabel + ansi.reset;
     } else {
       ui.commitAmendBtnOffset = -1;
@@ -2827,12 +2827,12 @@ function relativeDate(date) {
   const now = Date.now();
   const d = new Date(date).getTime();
   const diffSec = Math.floor((now - d) / 1000);
-  if (diffSec < 60) return 'now';
-  if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm';
-  if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h';
+  if (diffSec < 60) return t('ui.timeNow');
+  if (diffSec < 3600) return t('ui.timeMinutes', { n: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t('ui.timeHours', { n: Math.floor(diffSec / 3600) });
   const days = Math.floor(diffSec / 86400);
-  if (days < 7) return days + 'd';
-  return Math.floor(days / 7) + 'w';
+  if (days < 7) return t('ui.timeDays', { n: days });
+  return t('ui.timeWeeks', { n: Math.floor(days / 7) });
 }
 
 function freshStatusIcon(status) {
@@ -2915,7 +2915,7 @@ function buildFreshPanel(w, h) {
     const fileColor = heatmapColor(item.date, tw.days || 7);
     const fileName = truncate(item.file, Math.max(10, innerW - 25));
     const relTime = relativeDate(item.date);
-    const authorPart = item.author ? truncate(item.author, 12) : (item.isPending ? 'pending' : '');
+    const authorPart = item.author ? truncate(item.author, 12) : (item.isPending ? t('ui.pendingAuthor') : '');
 
     const line = prefix + statusIcon + resetTo + ' ' + fileColor + fileName + resetTo
       + '  ' + colors.dim + padRight(relTime, 4) + resetTo
