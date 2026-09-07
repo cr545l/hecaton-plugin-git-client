@@ -653,25 +653,12 @@ async function handleKey(key) {
     return;
   }
 
-  // Left/Right: horizontal scroll
-  if (key === CSI + 'C') { // Right
-    if (state.focusPanel === 'diff') {
-      const maxX = state.rightView === 'log' ? (ui.logDetailMaxScrollX || 0)
-        : state.rightView === 'fresh' ? (ui.freshDetailMaxScrollX || 0)
-        : (ui.diffMaxScrollX || 0);
-      state.diffScrollX = Math.min(maxX, state.diffScrollX + 2);
-    } else {
-      state.filesScrollX = Math.min((ui.filesMaxScrollX || 0), state.filesScrollX + 2);
-    }
-    render();
-    return;
-  }
-  if (key === CSI + 'D') { // Left
-    if (state.focusPanel === 'diff') {
-      state.diffScrollX = Math.max(0, state.diffScrollX - 2);
-    } else {
-      state.filesScrollX = Math.max(0, state.filesScrollX - 2);
-    }
+  // Explicit keyboard movement goes through the same host region as the mouse.
+  if (key === CSI + 'C' || key === CSI + 'D') {
+    const target = state.focusPanel === 'diff'
+      ? (state.rightView === 'log' ? 'logDetail' : state.rightView === 'fresh' ? 'freshDetail' : 'diff')
+      : 'files';
+    hostScroll.moveHorizontal(target, key === CSI + 'C' ? 2 : -2);
     render();
     return;
   }
@@ -1320,22 +1307,6 @@ async function handleMouseData(data) {
         render();
         continue;
       }
-      if (ui.dragging === 'hscrollbar') {
-        const info = ui.hScrollbarDragInfo;
-        const relX = cx - info.colStart;
-        const ratio = Math.max(0, Math.min(1, relX / Math.max(1, info.trackCols - 1)));
-        const newScrollX = Math.round(ratio * info.maxScrollX);
-        if (info.target === 'diff') {
-          state.diffScrollX = newScrollX;
-        } else if (info.target === 'files') {
-          state.filesScrollX = newScrollX;
-        } else {
-          // logDetail, freshDetail share diffScrollX
-          state.diffScrollX = newScrollX;
-        }
-        render();
-        continue;
-      }
 
       // 브랜치 끌어 놓기 — 좌버튼(cb&3 === 0)을 누른 채 움직일 때만 성립한다.
       // 버튼을 떼고 움직이는 hover(cb=35)까지 끌기로 보면 마우스만 스쳐도 끌린다.
@@ -1504,15 +1475,6 @@ async function handleMouseData(data) {
         }
       }
 
-      // Hover: horizontal scrollbar
-      let newHScrollbarHover = null;
-      for (const hsb of ui.hScrollbarZones) {
-        if (cy === hsb.screenRow && cx >= hsb.colStart && cx <= hsb.colEnd) {
-          newHScrollbarHover = hsb.target;
-          break;
-        }
-      }
-
       // Hover: detail copy zones (log detail metadata)
       let newDetailCopyZone = null;
       if (state.rightView === 'log' && inBody && ui.detailCopyZones && ui.detailCopyZones.length > 0) {
@@ -1618,7 +1580,7 @@ async function handleMouseData(data) {
       const newDisabledReason = newHoveredAction ? disabledReason(newHoveredAction) : null;
 
       if (newHoveredAction !== ui.hoveredAction
-        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newRepoSetupHover !== ui.hoveredRepoSetupAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newHScrollbarHover !== ui.hoveredHScrollbarTarget || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
+        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newRepoSetupHover !== ui.hoveredRepoSetupAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredCommitterAction = newCommitterHover;
         ui.hoveredRepoSetupAction = newRepoSetupHover;
@@ -1632,7 +1594,6 @@ async function handleMouseData(data) {
         ui.hoveredFreshWindow = newFreshWindowHover;
         ui.hoveredScrollbarTarget = newScrollbarHover;
         ui.hoveredCommitButton = newCommitButtonHover;
-        ui.hoveredHScrollbarTarget = newHScrollbarHover;
         ui.hoveredMergeApplyButton = newMergeApplyHover;
         ui.hoveredMergeZoneIndex = newMergeZoneHover;
         ui.hoveredDetailCopyZone = newDetailCopyZone;
@@ -1754,22 +1715,13 @@ async function handleMouseData(data) {
       const inRight = cx >= rightStart && cx < L.startCol + L.width;
       const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (isHorizontalWheel || isShiftWheel) {
-        let changed = false;
-        if (inBody && inMiddle) {
-          const prev = state.filesScrollX;
-          state.filesScrollX = Math.max(0, Math.min((ui.filesMaxScrollX || 0), state.filesScrollX + wheelStep));
-          if (state.filesScrollX !== prev) changed = true;
-          state.focusPanel = 'status';
-        } else if (inBody && inRight) {
-          const prev = state.diffScrollX;
-          const maxX = state.rightView === 'log' ? (ui.logDetailMaxScrollX || 0)
-            : state.rightView === 'fresh' ? (ui.freshDetailMaxScrollX || 0)
-            : (ui.diffMaxScrollX || 0);
-          state.diffScrollX = Math.max(0, Math.min(maxX, state.diffScrollX + wheelStep));
-          if (state.diffScrollX !== prev) changed = true;
-          state.focusPanel = 'diff';
+        if (inBody && (inMiddle || inRight)) {
+          const target = inMiddle ? 'files' : state.rightView === 'log' ? 'logDetail'
+            : state.rightView === 'fresh' ? 'freshDetail' : 'diff';
+          hostScroll.moveHorizontal(target, wheelStep);
+          state.focusPanel = inMiddle ? 'status' : 'diff';
+          render();
         }
-        if (changed) render();
         continue;
       }
       if (inBody && inLeft) {
@@ -2065,36 +2017,6 @@ async function handleMouseData(data) {
           }
         }
         if (sbHandled) continue;
-      }
-
-      // Horizontal scrollbar drag start
-      {
-        let hsbHandled = false;
-        for (const hsb of ui.hScrollbarZones) {
-          if (cy === hsb.screenRow && cx >= hsb.colStart && cx <= hsb.colEnd) {
-            ui.dragging = 'hscrollbar';
-            ui.hScrollbarDragInfo = {
-              target: hsb.target,
-              colStart: hsb.colStart,
-              trackCols: hsb.trackCols,
-              maxScrollX: hsb.maxScrollX,
-            };
-            const relX = cx - hsb.colStart;
-            const ratio = Math.max(0, Math.min(1, relX / Math.max(1, hsb.trackCols - 1)));
-            const newScrollX = Math.round(ratio * hsb.maxScrollX);
-            if (hsb.target === 'diff') {
-              state.diffScrollX = newScrollX;
-            } else if (hsb.target === 'files') {
-              state.filesScrollX = newScrollX;
-            } else {
-              state.diffScrollX = newScrollX;
-            }
-            render();
-            hsbHandled = true;
-            break;
-          }
-        }
-        if (hsbHandled) continue;
       }
 
       // Click on committer controls at the right edge of the hint bar

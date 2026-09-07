@@ -1,6 +1,6 @@
 const { t } = require('./i18n');
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
-const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderHScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
+const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine } = require('./text');
 const { state, ui, isPinnedBranch, localRefKey, remoteRefKey, isFilteredRef, isHiddenRef } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
@@ -1037,9 +1037,22 @@ function renderBody() {
         const bankDepth = hostScroll.depthOf(r.id);
         const bankLines = bankDepth.before + bankDepth.after;
         for (let i = 0; i < bankLines; i++) {
-          buf.push(ansi.reset + ansi.moveTo(bankTop + 1 + i, absCol) + padRight(r.bank[i] || '', r.width) + ansi.reset);
+          buf.push(ansi.reset + ansi.moveTo(bankTop + 1 + i, absCol) + hostScroll.sliceLine(r.bank[i], r.left || 0, r.width) + ansi.reset);
         }
-        buf.push(hostScroll.ackString(r.id, r.off));
+        if (r.contentCols > r.width && r.getLine) {
+          const bankCol = hostScroll.bankCol(r.id);
+          const left = r.left || 0;
+          const writeColumns = (row, line) => {
+            const before = left < bankDepth.before
+              ? ' '.repeat(bankDepth.before - left) + hostScroll.sliceLine(line, 0, left)
+              : hostScroll.sliceLine(line, left - bankDepth.before, bankDepth.before);
+            const after = hostScroll.sliceLine(line, left + r.width, bankDepth.after);
+            buf.push(ansi.reset + ansi.moveTo(row, bankCol + 1) + before + after + ansi.reset);
+          };
+          for (let i = 0; i < r.height; i++) writeColumns(absRow + i, r.getLine(r.off + i));
+          for (let i = 0; i < bankLines; i++) writeColumns(bankTop + 1 + i, r.bank[i]);
+        }
+        buf.push(hostScroll.ackString(r.id, r.off, r.left || 0));
       }
       hostScrollDefs.push({
         id: r.id,
@@ -1048,7 +1061,9 @@ function renderBody() {
         width: r.width,
         height: r.height,
         contentRows: r.contentRows,
-        contentCols: r.width, // horizontal stays plugin-owned (field-level scroll)
+        contentCols: r.contentCols || r.width,
+        left: r.left || 0,
+        overscanCol: hostScroll.bankCol(r.id),
         overscanRow: bankTop,
         off: r.off,
       });
@@ -1093,7 +1108,6 @@ function renderBody() {
 
   // Scrollbar overlays
   ui.scrollbarOverlays = [];
-  ui.hScrollbarZones = [];
   if (SIXEL_ENABLED && !repoSetupMode) {
     const sbBodyTop = startRow + titleRows + 1;
     const midStart = startCol + leftW + divider1W;
@@ -1167,53 +1181,7 @@ function renderBody() {
       buf.push(ansi.moveTo(sb.screenRow, sb.screenCol) + sb.sixelStr);
     }
 
-    // Horizontal scrollbars (sixel)
-    const hasSixel = ui.cellW > 0 && ui.cellH > 0;
-    if (hasSixel) {
-      function addHScrollbar(target, hScreenRow, hColStart, hCols, viewportCols, scrollX, maxScrollX) {
-        const hPixBuf = renderHScrollbarPixels(ui.cellW, ui.cellH, hCols, viewportCols, scrollX, maxScrollX);
-        if (hPixBuf) {
-          const isActive = ui.dragging === 'hscrollbar' && ui.hScrollbarDragInfo && ui.hScrollbarDragInfo.target === target;
-          const isHovered = ui.hoveredHScrollbarTarget === target;
-          const palette = isActive ? SCROLLBAR_ACTIVE_PALETTE : isHovered ? SCROLLBAR_HOVER_PALETTE : SCROLLBAR_PALETTE;
-          const hSixelStr = encodeSixel(hPixBuf, hCols * ui.cellW, ui.cellH, palette);
-          buf.push(ansi.moveTo(hScreenRow, hColStart) + hSixelStr);
-          ui.hScrollbarZones.push({
-            target,
-            screenRow: hScreenRow,
-            colStart: hColStart,
-            colEnd: hColStart + hCols - 1,
-            trackCols: hCols,
-            maxScrollX,
-          });
-        }
-      }
 
-      const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
-
-      // Diff panel horizontal scrollbar (diff mode)
-      if (state.rightView === 'diff' && ui.diffMaxScrollX > 0 && rightW > 0) {
-        const hCols = rightW - 1;
-        addHScrollbar('diff', sbBodyTop + ui.rightDiffH, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.diffMaxScrollX);
-      }
-      // Files panel horizontal scrollbar (diff mode)
-      if (state.rightView === 'diff' && ui.filesMaxScrollX > 0 && middleW > 0) {
-        const hCols = middleW - 1;
-        addHScrollbar('files', sbBodyTop + contentH - 1, midStart, hCols, middleW - 1, state.filesScrollX, ui.filesMaxScrollX);
-      }
-      // Log detail horizontal scrollbar
-      if (state.rightView === 'log' && ui.logDetailMaxScrollX > 0 && rightW > 0 && ui.lastLogListH > 0) {
-        const hCols = rightW - 1;
-        const detailBottom = sbBodyTop + contentH - 1;
-        addHScrollbar('logDetail', detailBottom, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.logDetailMaxScrollX);
-      }
-      // Fresh detail horizontal scrollbar
-      if (state.rightView === 'fresh' && ui.freshDetailMaxScrollX > 0 && rightW > 0 && ui.lastFreshListH > 0) {
-        const hCols = rightW - 1;
-        const detailBottom = sbBodyTop + contentH - 1;
-        addHScrollbar('freshDetail', detailBottom, rpStartCol, hCols, rightW - 1, state.diffScrollX, ui.freshDetailMaxScrollX);
-      }
-    }
   }
 
   // ── 끌고 있는 것을 마우스 옆에 붙인다 ──
@@ -1820,17 +1788,19 @@ function buildFileListPanel(w, h) {
   // Only count files in non-collapsed sections
   let preMaxFileW = 0;
   for (const item of fileList) {
-    const fw = entryText(item).length;
+    const fw = visLen(entryText(item));
     if (fw > preMaxFileW) preMaxFileW = fw;
   }
   const filesContentWPre = Math.max(1, innerW - 6);
   const preFilesMaxScrollX = Math.max(0, preMaxFileW - filesContentWPre);
+  const canvasW = innerW + preFilesMaxScrollX;
+  state.filesScrollX = Math.min(state.filesScrollX, preFilesMaxScrollX);
   const hasFilesHScrollbar = preFilesMaxScrollX > 0;
-  if (hasFilesHScrollbar && h > 1) h--;
+  if (hasFilesHScrollbar && h > 0) h--;
 
   function pushFileLine(content, fileIdx) {
     lineToFileIdx.push(fileIdx);
-    if (visLen(content) > innerW) content = truncate(content, innerW);
+    if (visLen(content) > canvasW) content = truncate(content, canvasW);
     lines.push(content);
   }
 
@@ -1856,11 +1826,11 @@ function buildFileListPanel(w, h) {
     else if (item.type === 'untracked') mark = colors.dim + '?';
     else if (item.type === 'ignored') mark = colors.dim + '!';
     else mark = statusColor(item.status) + item.status;
-    const text = sliceByWidth(entryText(item), state.filesScrollX, innerW - 6);
+    const text = sliceByWidth(entryText(item), 0, canvasW - 6);
     // 무시된 파일과 폴더 이름은 눌러 둔다 — 변경 자체가 아니라 그 둘레의 정보다.
     const dim = item.kind === 'dir' || item.section === 'ignored';
     const body = dim ? colors.dim + text + resetTo : text;
-    pushFileLine(bgColor + padRight(prefix + mark + resetTo + ' ' + body, innerW) + ansi.reset, idx);
+    pushFileLine(bgColor + padRight(prefix + mark + resetTo + ' ' + body, canvasW) + ansi.reset, idx);
   }
 
   // 한 구획(Unstaged / Staged / Ignored)에 속한 줄을 목록 순서대로 소진한다.
@@ -1994,15 +1964,21 @@ function buildFileListPanel(w, h) {
     ui.scrollPct.files = -1;
   }
   ui.fileLineMap = lineToFileIdx.slice(state.scrollOffset, state.scrollOffset + h);
-  const visibleLines = lines.slice(state.scrollOffset, state.scrollOffset + h);
+  const visibleLines = lines.slice(state.scrollOffset, state.scrollOffset + h)
+    .map(line => hostScroll.sliceLine(line, state.filesScrollX, innerW));
 
   if (hostScroll.isActive() && h > 0) {
     const off = state.scrollOffset;
     ui.hostScrollRegions.push({
       id: 'files', panel: 'middle', relRow: 0, width: innerW, height: h,
-      contentRows: lines.length, off,
+      contentRows: lines.length, off, contentCols: canvasW, left: state.filesScrollX, getLine: i => lines[i],
       bank: hostScroll.buildBank('files', (i) => lines[i], off, h),
     });
+  }
+
+  for (const zone of ui.fileHeaderZones) {
+    zone.btnColStart = Math.max(0, zone.btnColStart - state.filesScrollX);
+    zone.btnColEnd = Math.min(innerW - 1, zone.btnColEnd - state.filesScrollX);
   }
 
   // Apply hover highlight to file list
@@ -2048,7 +2024,8 @@ function buildDiffCommitPanel(w, h) {
     if (diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffView === 'side') {
       sideBySideLayout = buildSideBySideDiffLayout(state.diffLines, innerW);
       if (sideBySideLayout) {
-        preMaxScrollX = sideBySideLayout.maxScrollX;
+        preMaxScrollX = sideBySideLayout.maxScrollX * 2;
+        sideBySideLayout = buildSideBySideDiffLayout(state.diffLines, innerW + preMaxScrollX);
       }
     }
 
@@ -2061,12 +2038,14 @@ function buildDiffCommitPanel(w, h) {
       for (const line of state.diffLines) {
         const plain = line.replace(/[\r\n]/g, '');
         if (isDiffMetaLine(plain)) continue;
-        const lw = stripAnsi(expandDiffTabs(plain)).length;
+        const lw = visLen(expandDiffTabs(plain));
         if (lw > maxLineW) maxLineW = lw;
       }
       preMaxScrollX = Math.max(0, maxLineW - contentW);
     }
   }
+  const canvasW = innerW + preMaxScrollX;
+  contentW += preMaxScrollX;
   const hasHScrollbar = !isConflictView && preMaxScrollX > 0;
   if (hasHScrollbar) diffH--;
 
@@ -2080,7 +2059,7 @@ function buildDiffCommitPanel(w, h) {
   ui.diffHunkZones = [];
   const canHunk = !isConflictView && diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffLines.length > 0;
   const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? t('ui.unstageHunk') : t('ui.stageHunk')) : '';
-  const hunkAvail = hunkBtnLabel ? Math.max(8, innerW - visLen(hunkBtnLabel) - 2) : 0;
+  const hunkAvail = hunkBtnLabel ? Math.max(8, canvasW - visLen(hunkBtnLabel) - 2) : 0;
   const hunkOn = canHunk && caps().isEnabled('hunk-apply');
   const renderHunkButton = (hunkIdx) => {
     const style = buttonStyle(hunkOn, ui.hoveredDiffHunkIdx === hunkIdx,
@@ -2100,7 +2079,7 @@ function buildDiffCommitPanel(w, h) {
     const pick = (i) => (i >= 0 && i < contentLen) ? renderRow(i) : '';
     ui.hostScrollRegions.push({
       id: 'diff', panel: 'right', relRow: top, width: innerW, height: h,
-      contentRows: contentLen, off,
+      contentRows: contentLen, off, contentCols: canvasW, left: state.diffScrollX, getLine: pick,
       bank: hostScroll.buildBank('diff', pick, off, h),
     });
   }
@@ -2129,7 +2108,7 @@ function buildDiffCommitPanel(w, h) {
           .filter(zone => zone.lineIdx >= headerH && zone.lineIdx < diffH));
       for (let i = 0; i < headerH; i++) lines.push(conflictRender.headerLines[i]);
       const visible = conflictRender.lines.slice(state.diffScrollOffset, state.diffScrollOffset + bodyH);
-      for (const line of visible) lines.push(line);
+      for (const line of visible) lines.push(hostScroll.sliceLine(line, state.diffScrollX, innerW));
       ui.scrollPct.diff = maxScroll > 0 ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
       for (let i = headerH + visible.length; i < diffH; i++) lines.push('');
       pushDiffRegion(conflictRender.lines.length, state.diffScrollOffset, (i) => conflictRender.lines[i], headerH, bodyH);
@@ -2150,7 +2129,7 @@ function buildDiffCommitPanel(w, h) {
       ui.mergeChunkLineMap = {};
       ui.diffMaxScrollX = preMaxScrollX;
       if (state.diffScrollX > preMaxScrollX) state.diffScrollX = preMaxScrollX;
-      const scrollX = state.diffScrollX;
+      const scrollX = 0;
 
       if (sideBySideLayout) {
         // hunk 행 → hunk 인덱스 매핑 (버튼 렌더/클릭 존용)
@@ -2167,12 +2146,12 @@ function buildDiffCommitPanel(w, h) {
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
         const visible = sideBySideLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
-        for (const line of visible) lines.push(line);
+        for (const line of visible) lines.push(hostScroll.sliceLine(line, state.diffScrollX, innerW));
         if (hunkBtnLabel) {
           for (let vi = 0; vi < visible.length; vi++) {
             const absIdx = state.diffScrollOffset + vi;
             if (sideHunkIdxByRow.has(absIdx)) {
-              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + visLen(hunkBtnLabel), hunkIdx: sideHunkIdxByRow.get(absIdx) });
+              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1 - state.diffScrollX, colEnd: hunkAvail + visLen(hunkBtnLabel) - state.diffScrollX, hunkIdx: sideHunkIdxByRow.get(absIdx) });
             }
           }
         }
@@ -2209,14 +2188,14 @@ function buildDiffCommitPanel(w, h) {
             }
             return gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX);
           }
-          return ' ' + colorizeDiffLine(entry.text, innerW - 1, state.currentDiffFile, scrollX);
+          return ' ' + colorizeDiffLine(entry.text, canvasW - 1, state.currentDiffFile, scrollX);
         };
         const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
         for (let vi = 0; vi < visible.length; vi++) {
           const absIdx = state.diffScrollOffset + vi;
-          lines.push(renderUnifiedRow(visible[vi], absIdx));
+          lines.push(hostScroll.sliceLine(renderUnifiedRow(visible[vi], absIdx), state.diffScrollX, innerW));
           if (hunkBtnLabel && unifiedHunkIdxByRow.has(absIdx)) {
-            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1, colEnd: hunkAvail + visLen(hunkBtnLabel), hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
+            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1 - state.diffScrollX, colEnd: hunkAvail + visLen(hunkBtnLabel) - state.diffScrollX, hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
           }
         }
         ui.scrollPct.diff = annotated.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
@@ -2658,15 +2637,17 @@ function buildLogPanel(w, h) {
       const logDetailContentW = innerW - (logDetailGutterW > 0 ? logDetailGutterW : 1);
       let logDetailMaxLineW = 0;
       for (const entry of filteredDetail) {
+        if (entry.isFileHeader) logDetailMaxLineW = Math.max(logDetailMaxLineW, visLen(' - ' + entry.file));
         if (entry.text && !entry.isFileHeader && !isDiffMetaLine(entry.text.replace(/[\r\n]/g, ''))) {
-          const lw = stripAnsi(expandDiffTabs(entry.text.replace(/[\r\n]/g, ''))).length;
+          const lw = visLen(expandDiffTabs(entry.text.replace(/[\r\n]/g, '')));
           if (lw > logDetailMaxLineW) logDetailMaxLineW = lw;
         }
       }
       const logDetailMaxScrollX = Math.max(0, logDetailMaxLineW - logDetailContentW);
+      const canvasW = innerW + logDetailMaxScrollX;
       ui.logDetailMaxScrollX = logDetailMaxScrollX;
       if (state.diffScrollX > logDetailMaxScrollX) state.diffScrollX = logDetailMaxScrollX;
-      if (logDetailMaxScrollX > 0 && cH > 1) cH--;
+      if (logDetailMaxScrollX > 0 && cH > 0) cH--;
 
       // Sticky file header: pin the file name when scrolled past its header.
       // The pinned row consumes a viewport row, so the scroll limit depends on
@@ -2676,6 +2657,7 @@ function buildLogPanel(w, h) {
       // limit agree at every alignment — any mismatch lets the trackpad
       // overscroll at the bottom (jitter + revealed blank bank rows).
       const stickyFileAt = (off) => {
+        if (cH < 2) return null;
         if (off <= 0 || off >= filteredDetail.length) return null;
         if (filteredDetail[off].isFileHeader) return null;
         for (let i = off - 1; i >= 0; i--) {
@@ -2711,9 +2693,9 @@ function buildLogPanel(w, h) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
           const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
-          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset;
+          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, canvasW), canvasW) + ansi.reset;
         } else if (/^\u2500{3,}$/.test(entry.text)) {
-          return colorizeDiffLine(entry.text, innerW, entry.file);
+          return colorizeDiffLine(entry.text, canvasW, entry.file);
         } else if (entry.inDiff && gutterW > 0) {
           let gutter;
           if (entry.oldNum != null || entry.newNum != null) {
@@ -2723,7 +2705,7 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          return gutter + colorizeDiffLine(entry.text, innerW - gutterW, entry.file, state.diffScrollX);
+          return gutter + colorizeDiffLine(entry.text, canvasW - gutterW, entry.file, 0);
         } else {
           const rawText = (entry.text || '').replace(/[\r\n]/g, '');
           // Register copy zones for metadata lines (visible rows only)
@@ -2763,17 +2745,17 @@ function buildLogPanel(w, h) {
           // Render with hover underline
           const hz = ui.hoveredDetailCopyZone;
           const hoveredZone = lineIdx >= 0 && hz && hz.lineIdx === lineIdx
-            ? ui.detailCopyZones.find(z => z.lineIdx === lineIdx && z.colStart === hz.colStart && z.colEnd === hz.colEnd)
+            ? ui.detailCopyZones.find(z => z.lineIdx === lineIdx && z.colStart === hz.colStart + state.diffScrollX && z.colEnd === hz.colEnd + state.diffScrollX)
             : null;
           if (hoveredZone) {
-            return ' ' + colorizeDiffLineWithUnderline(rawText, innerW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
+            return ' ' + colorizeDiffLineWithUnderline(rawText, canvasW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
           }
-          return ' ' + colorizeDiffLine(entry.text, innerW - 1, entry.file, state.diffScrollX);
+          return ' ' + colorizeDiffLine(entry.text, canvasW - 1, entry.file, 0);
         }
       }
       for (const entry of visible) {
         const rendered = renderDetailRow(entry, lines.length);
-        lines.push(rendered);
+        lines.push(hostScroll.sliceLine(rendered, state.diffScrollX, innerW));
         ui.detailFileHeaderMap.push(entry.isFileHeader ? entry.file : null);
       }
       if (hostScroll.isActive() && cH > 0) {
@@ -2784,10 +2766,13 @@ function buildLogPanel(w, h) {
           // Not filteredDetail.length: the sticky row makes the viewport height
           // position-dependent, so report whatever makes the host's limit
           // (contentRows - height) equal the plugin's true reachable limit.
-          contentRows: maxDetailScroll + cH, off,
+          contentRows: maxDetailScroll + cH, off, contentCols: canvasW, left: state.diffScrollX, getLine: pick,
           bank: hostScroll.buildBank('logDetail', pick, off, cH),
         });
       }
+      ui.detailCopyZones = ui.detailCopyZones.map(z => z.lineIdx < detailRegionRelRow ? z : ({ ...z,
+        colStart: z.colStart - state.diffScrollX, colEnd: z.colEnd - state.diffScrollX,
+      })).filter(z => z.colEnd >= 0 && z.colStart < innerW);
       // Reserve row for horizontal scrollbar
       if (logDetailMaxScrollX > 0) lines.push('');
     }
@@ -3008,23 +2993,24 @@ function buildFreshPanel(w, h) {
       for (const line of state.freshDetailLines) {
         const plain = line.replace(/[\r\n]/g, '');
         if (isDiffMetaLine(plain)) continue;
-        const lw = stripAnsi(expandDiffTabs(plain)).length;
+        const lw = visLen(expandDiffTabs(plain));
         if (lw > freshDetailMaxLineW) freshDetailMaxLineW = lw;
       }
       const freshDetailMaxScrollX = Math.max(0, freshDetailMaxLineW - (innerW - 1));
+      const canvasW = innerW + freshDetailMaxScrollX;
       ui.freshDetailMaxScrollX = freshDetailMaxScrollX;
       if (state.diffScrollX > freshDetailMaxScrollX) state.diffScrollX = freshDetailMaxScrollX;
-      if (freshDetailMaxScrollX > 0 && cH > 1) cH--;
+      if (freshDetailMaxScrollX > 0 && cH > 0) cH--;
 
       const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
       ui.freshDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const renderFreshDetailRow = (rawLine) =>
-        ' ' + colorizeDiffLine(rawLine, innerW - 1, selItem ? selItem.file : null, state.diffScrollX);
+        ' ' + colorizeDiffLine(rawLine, canvasW - 1, selItem ? selItem.file : null, 0);
       const detailRegionRelRow = lines.length;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
-        lines.push(renderFreshDetailRow(rawLine));
+        lines.push(hostScroll.sliceLine(renderFreshDetailRow(rawLine), state.diffScrollX, innerW));
       }
       if (hostScroll.isActive() && cH > 0) {
         const off = state.diffScrollOffset;
@@ -3032,7 +3018,7 @@ function buildFreshPanel(w, h) {
           ? renderFreshDetailRow(state.freshDetailLines[i]) : '';
         ui.hostScrollRegions.push({
           id: 'freshDetail', panel: 'right', relRow: detailRegionRelRow, width: innerW, height: cH,
-          contentRows: state.freshDetailLines.length, off,
+          contentRows: state.freshDetailLines.length, off, contentCols: canvasW, left: state.diffScrollX, getLine: pick,
           bank: hostScroll.buildBank('freshDetail', pick, off, cH),
         });
       }

@@ -232,9 +232,6 @@ const ui = {
   logDetailMaxScroll: 0,
   freshListMaxScroll: 0,
   freshDetailMaxScroll: 0,
-  hScrollbarZones: [],
-  hScrollbarDragInfo: null,
-  hoveredHScrollbarTarget: null,
   logDetailMaxScrollX: 0,
   freshDetailMaxScrollX: 0,
   // Merge conflict resolution UI
