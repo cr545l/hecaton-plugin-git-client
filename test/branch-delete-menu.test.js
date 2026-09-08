@@ -80,16 +80,16 @@ test('Tracking 목록이 길어도 삭제 위치는 밀리지 않는다', () => 
   assert.ok(idxOf(items, 'branch_delete') < 13);
 });
 
-test('업스트림이 없으면 원격 삭제 항목은 나오지 않는다', () => {
+test('업스트림이 없으면 원격 삭제 항목은 딤 처리한다', () => {
   setup({ upstream: '' });
   const items = buildBranchContextMenuItems('staging');
-  assert.equal(idxOf(items, 'branch_delete_remote'), -1);
+  assert.equal(items[idxOf(items, 'branch_delete_remote')].enabled, false);
   assert.ok(idxOf(items, 'branch_delete') >= 0, '로컬 삭제는 그대로 있어야 한다');
 });
 
-test('현재 브랜치는 로컬 삭제가 빠지고 원격 삭제만 남는다', () => {
+test('현재 브랜치의 로컬 삭제는 딤 처리하고 원격 삭제는 유지한다', () => {
   setup({ isCurrent: true });
   const items = buildBranchContextMenuItems('staging');
-  assert.equal(idxOf(items, 'branch_delete'), -1, '체크아웃 중인 브랜치는 로컬 삭제 불가');
+  assert.equal(items[idxOf(items, 'branch_delete')].enabled, false, '체크아웃 중인 브랜치는 로컬 삭제 불가');
   assert.ok(idxOf(items, 'branch_delete_remote') >= 0);
 });

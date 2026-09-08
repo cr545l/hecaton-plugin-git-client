@@ -184,6 +184,12 @@ const ui = {
   contextMenuFilePath: '',
   contextMenuTab: false,
   contextMenuBranch: null,
+  selectedBranchRefs: new Set(),
+  branchSelectionCwd: null,
+  branchSelectionAnchor: null,
+  branchSelectionAnchorOccurrence: 0,
+  contextMenuBranches: null,
+  leftPanelFullClickMap: null,
   contextMenuRemote: null,    // remote 그룹 우클릭 시 remote 이름
   contextMenuWorktree: null,  // worktree 행 우클릭 시 worktree 경로
   remoteSortMode: 'alpha', // 'alpha' | 'alpha_desc' | 'recent'

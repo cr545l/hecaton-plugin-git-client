@@ -87,8 +87,8 @@ test('상단 브랜치명 줄은 Branches 항목과 같은 goto-branch 액션을
   const topEntry = ui.leftPanelClickMap[0];
   const branchEntry = ui.leftPanelClickMap.find((entry, row) => row > 0 && entry && entry.branch === 'feature/login');
   // reveal은 상단 줄에만 붙는다 — 목록 줄은 눌린 자리가 곧 그 줄이라 스크롤할 이유가 없다.
-  assert.deepEqual(topEntry, { action: 'goto-branch', branch: 'feature/login', reveal: true });
-  assert.deepEqual(branchEntry, { action: 'goto-branch', branch: 'feature/login' });
+  assert.deepEqual(topEntry, { action: 'goto-branch', branch: 'feature/login', refKey: 'refs/heads/feature/login', reveal: true });
+  assert.deepEqual(branchEntry, { action: 'goto-branch', branch: 'feature/login', refKey: 'refs/heads/feature/login' });
 });
 
 // ── 접힌 토글 펼치기 + 스크롤 ──

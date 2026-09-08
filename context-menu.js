@@ -1,4 +1,5 @@
 const { t } = require('./i18n');
+const branchSelection = require('./branch-selection');
 const {
   state, ui, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
   localRefKey, remoteRefKey, isFilteredRef, isHiddenRef, toggleFilteredRef, toggleHiddenRef,
@@ -486,108 +487,277 @@ function buildHistoryBranchMenuItems(page) {
 // 브랜치나 우클릭해서 빠져나올 길이 항상 있어야 한다.
 // allowHide=false 면 Hide 를 빼고 낸다(현재 브랜치. 지금 체크아웃한 것을 감추는 건
 // 의미가 없고, 그래프에서 HEAD 가 사라져 어디에 있는지 알 수 없게 된다).
-function buildRefFilterMenuItems(idPrefix, refKey, label, allowHide) {
-  const items = [{ type: 'separator' }];
-  items.push(isFilteredRef(refKey)
-    ? { id: idPrefix + 'filter', label: t('menu.unfilter', { label })}
-    : { id: idPrefix + 'filter', label: t('menu.filter', { label })});
-  if (allowHide) {
-    items.push(isHiddenRef(refKey)
-      ? { id: idPrefix + 'hide', label: t('menu.unhide', { label })}
-      : { id: idPrefix + 'hide', label: t('menu.hide', { label })});
+const BRANCH_BATCH_ACTIONS = {
+  copy: 'branch_copy_name', pin: 'branch_pin', unpin: 'branch_pin',
+  filter: 'branch_filter', unfilter: 'branch_filter',
+  hide: 'branch_hide', unhide: 'branch_hide', delete: 'branch_delete',
+  clear_filters: 'branch_clear_filters', show_all: 'branch_show_all',
+  delete_remote: 'branch_delete_remote', push: 'branch_push', ff: 'branch_ff',
+};
+
+// A single menu schema for local, remote, single and multiple selections.
+// Keep ids, ordering, icons and shortcuts stable; only labels and capabilities vary.
+function buildBranchesContextMenuItems(target) {
+  const entries = branchSelection.resolve(target);
+  if (!entries.length || entries.length !== new Set(target.refs).size) return [];
+  const multiple = entries.length > 1;
+  const allLocal = entries.every(e => e.local);
+  const allRemote = entries.every(e => !e.local);
+  const first = entries[0];
+  const branchName = multiple ? t('ui.branchesSelected', { count: entries.length }) : first.name;
+  const upstream = multiple ? branchName : first.upstream;
+  const remote = multiple ? t('menu.branches.remotes') : (splitUpstreamRef(first.upstream, state.remotes).remote || state.remotes[0] || 'origin');
+  const prefix = allRemote ? 'remotebranch_' : 'branch_';
+  const localName = splitUpstreamRef(first.name, state.remotes).branch;
+  const localExists = state.branches.some(b => b.name === localName);
+  const checkoutId = allRemote ? (localExists ? 'remotebranch_checkout_local' : 'remotebranch_checkout_tracking') : 'branch_checkout';
+  const checkoutLabel = allRemote ? (localExists ? t('menu.checkout3', { localName }) : t('menu.checkoutAs', { localName })) : t('menu.checkout2', { branchName });
+  const { isEnabled } = require('./actions');
+  const can = action => branchSelection.allowed(action, target) && isEnabled(BRANCH_BATCH_ACTIONS[action]) &&
+    (!['delete_remote', 'push', 'ff'].includes(action) || isEnabled('branch_network_batch'));
+  const hasUpstream = allLocal && entries.every(e => e.upstream);
+  const heldElsewhere = state.worktrees.some(w => w.branch === first.name && !w.isCurrent);
+  const allPinned = allLocal && entries.every(e => isPinnedBranch(e.name));
+  const allFiltered = entries.every(e => isFilteredRef(e.ref));
+  const allHidden = entries.every(e => isHiddenRef(e.ref));
+  const items = [
+    { id: checkoutId, label: multiple ? t('menu.checkout2', { branchName }) : checkoutLabel, icon: 'git-branch', enabled: !multiple && (!first.local || (!first.current && !heldElsewhere)) },
+    { id: 'branch_rebase_onto', label: t('menu.rebaseCurrentOnto', { branchName }), icon: 'git-pull-request', enabled: !multiple && allLocal && !first.current },
+    { id: 'branch_merge_into', label: t('menu.mergeIntoCurrent', { branchName }), icon: 'git-merge', enabled: !multiple && allLocal && !first.current },
+    { id: 'branch_ff', label: t('menu.fastForward3', { upstream: upstream || branchName }), icon: 'arrow-down', enabled: !multiple && first.current ? hasUpstream : can('ff') },
+    { id: 'branch_pull', label: t('menu.pull2', { upstream: upstream || branchName }), icon: 'cloud-download', enabled: !multiple && hasUpstream && !heldElsewhere },
+    { id: 'branch_pull_rebase', label: t('menu.pullWithRebase', { upstream: upstream || branchName }), icon: 'cloud-download', enabled: !multiple && hasUpstream && !heldElsewhere },
+    { id: 'branch_push', label: t('menu.push3', { branchName, remote }), icon: 'cloud-upload', enabled: can('push') },
+    { id: 'branch_push_pr', label: t('menu.pushCreatePullRequest', { remote }), icon: 'git-pull-request', enabled: !multiple && allLocal && state.remotes.length > 0 },
+    { id: 'branch_force_push', label: t('menu.forcePush3', { branchName, remote }), icon: 'warning', enabled: !multiple && allLocal && state.remotes.length > 0 },
+    { type: 'separator' },
+    { id: 'branch_rename', label: t('menu.rename2', { branchName }), icon: 'edit', shortcut: 'F2', enabled: !multiple && allLocal },
+    { id: 'branch_delete', label: t('menu.deleteLocal', { branchName }), icon: 'trash', shortcut: t('menu.delete2'), enabled: can('delete') },
+    { id: prefix + 'delete_remote', label: allRemote ? t('menu.deleteRemote3', { remoteBranchName: branchName }) : t('menu.deleteRemote2', { upstream: upstream || branchName }), icon: 'warning', enabled: can('delete_remote') },
+    { type: 'separator' },
+    { id: allRemote ? 'remotebranch_new_branch' : 'branch_new_branch', label: allRemote ? t('menu.newBranchFromHere') : t('menu.newBranch'), icon: 'add', shortcut: 'Ctrl+Shift+B', enabled: !multiple },
+    { id: 'branch_new_tag', label: t('menu.newTag'), icon: 'tag', shortcut: 'Ctrl+Shift+T', enabled: !multiple },
+    { id: 'worktree_new', label: t('menu.newWorktree'), icon: 'add', enabled: !multiple },
+  ];
+  const trackingChildren = allLocal ? orderedTrackingRefs(first.name, first.upstream).map(rb => trackingEntry(rb, first.upstream)) : [];
+  if (allLocal && first.upstream) {
+    trackingChildren.push({ type: 'separator' }, { id: 'branch_untrack', label: t('menu.unsetUpstream'), icon: 'remove' });
   }
-  if (ui.filteredRefs.length > 0) {
-    items.push({ id: idPrefix + 'clear_filters', label: t('menu.clearAllFilters', { length: ui.filteredRefs.length })});
+  if (trackingChildren.length > REF_INLINE_MAX) {
+    items.push({ id: 'branch_tracking_open', label: t('menu.tracking'), icon: 'link', enabled: !multiple && allLocal });
+  } else {
+    items.push({ id: 'branch_tracking', label: t('menu.tracking2'), icon: 'link', children: trackingChildren, enabled: !multiple && allLocal && trackingChildren.length > 0 });
   }
-  if (ui.hiddenRefs.length > 0) {
-    items.push({ id: idPrefix + 'show_all', label: t('menu.showAllBranches', { length: ui.hiddenRefs.length })});
+  items.push(
+    { type: 'separator' },
+    { id: 'branch_pin', label: allPinned ? t('menu.unpin', { branchName }) : t('menu.pin', { branchName }), icon: allPinned ? 'pinned' : 'pin', enabled: can('pin') },
+    { type: 'separator' },
+    { id: prefix + 'filter', label: allFiltered ? t('menu.unfilter', { label: branchName }) : t('menu.filter', { label: branchName }), icon: 'filter', color: MENU_OPTION_COLOR, enabled: can('filter') },
+    { id: prefix + 'hide', label: allHidden ? t('menu.unhide', { label: branchName }) : t('menu.hide', { label: branchName }), icon: allHidden ? 'eye' : 'eye-closed', color: MENU_OPTION_COLOR, enabled: can(allHidden ? 'unhide' : 'hide') },
+    { id: prefix + 'clear_filters', label: t('menu.clearAllFilters', { length: ui.filteredRefs.length }), icon: 'clear-all', color: MENU_OPTION_COLOR, enabled: ui.filteredRefs.length > 0 },
+    { id: prefix + 'show_all', label: t('menu.showAllBranches', { length: ui.hiddenRefs.length }), icon: 'eye', color: MENU_OPTION_COLOR, enabled: ui.hiddenRefs.length > 0 },
+    { type: 'separator' },
+    { id: prefix + 'copy_name', label: t('menu.copyBranchName'), icon: 'copy', enabled: can('copy') },
+  );
+  return decorateMenuItems(items);
+}
+
+async function handleBranchesAction(action, target = ui.contextMenuBranches) {
+  const base = BRANCH_BATCH_ACTIONS[action];
+  if (!base) return;
+  if (!branchSelection.allowed(action, target)) { showError(t('menu.branches.changed')); return; }
+  if (!guardAction(base)) return;
+  const entries = branchSelection.resolve(target);
+  if (['delete_remote', 'push', 'ff'].includes(action)) {
+    await prepareBranchNetworkAction(action, target);
+    return;
   }
-  return items;
+  if (action === 'delete') {
+    state.pendingDialogAction = 'delete-branches';
+    state.pendingDialogTarget = { cwd: target.cwd, refs: [...target.refs] };
+    hecaton.dialog.show({ type: 'message', title: t('menu.branches.delete'),
+      message: t('menu.branches.confirmDelete', { count: entries.length }) + '\n\n' + entries.map(e => e.name).join('\n'),
+      buttons: [{ id: 'delete', label: t('menu.delete2'), style: 'danger' },
+        { id: 'cancel', label: t('menu.cancel'), default: true }] });
+    return;
+  }
+  if (action === 'copy') { copyToClipboard(entries.map(e => e.name).join('\n')); return; }
+  if (action === 'clear_filters') clearFilteredRefs();
+  if (action === 'show_all') clearHiddenRefs();
+  for (const entry of entries) {
+    if (action === 'pin' && !isPinnedBranch(entry.name)) togglePinnedBranch(entry.name);
+    if (action === 'unpin') unpinBranch(entry.name);
+    if ((action === 'filter' || action === 'unfilter') && isFilteredRef(entry.ref) !== (action === 'filter')) toggleFilteredRef(entry.ref);
+    if ((action === 'hide' || action === 'unhide') && isHiddenRef(entry.ref) !== (action === 'hide')) toggleHiddenRef(entry.ref);
+  }
+  if (['filter', 'unfilter', 'hide', 'unhide', 'clear_filters', 'show_all'].includes(action)) applyRefFilterChange();
+  else render();
+}
+
+function branchMenuBatchAction(id, target) {
+  const entries = branchSelection.resolve(target);
+  if (id.endsWith('_copy_name')) return 'copy';
+  if (id === 'branch_pin') return entries.every(e => isPinnedBranch(e.name)) ? 'unpin' : 'pin';
+  if (id.endsWith('_filter')) return entries.every(e => isFilteredRef(e.ref)) ? 'unfilter' : 'filter';
+  if (id.endsWith('_hide')) return entries.every(e => isHiddenRef(e.ref)) ? 'unhide' : 'hide';
+  if (id.endsWith('_clear_filters')) return 'clear_filters';
+  if (id.endsWith('_show_all')) return 'show_all';
+  if (id.endsWith('_delete_remote')) return 'delete_remote';
+  if (id === 'branch_delete') return 'delete';
+  if (id === 'branch_push') return 'push';
+  if (id === 'branch_ff') return 'ff';
+  return null;
+}
+
+function findBranchMenuItem(items, id, disabled = false) {
+  for (const item of items) {
+    if (item.id === id) return { ...item, enabled: !disabled && item.enabled !== false };
+    if (item.children) {
+      const found = findBranchMenuItem(item.children, id, disabled || item.enabled === false);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function branchRemoteUrls(cwd, targets, push) {
+  const urls = Object.create(null);
+  for (const remote of new Set(targets.map(t => t.remote))) {
+    const args = ['remote', 'get-url'];
+    if (push) args.push('--push');
+    args.push('--all', remote);
+    const result = await require('./git').gitExecChecked(args, cwd, 10000);
+    if (!result.ok || !result.text.trim()) throw new Error(t('menu.branches.changed'));
+    urls[remote] = result.text.trim().split(/\r?\n/);
+  }
+  return urls;
+}
+
+async function prepareBranchNetworkAction(action, target) {
+  const snapshot = { cwd: target.cwd, refs: [...target.refs] };
+  const targets = branchSelection.networkTargets(action, snapshot);
+  if (!targets) { showError(t('menu.branches.changed')); return; }
+  let urls;
+  try { urls = await branchRemoteUrls(snapshot.cwd, targets, action !== 'ff'); }
+  catch (e) { showError(e.message || String(e)); return; }
+  if (!branchSelection.allowed(action, snapshot) || !guardAction(BRANCH_BATCH_ACTIONS[action]) || !guardAction('branch_network_batch')) return;
+  const payload = { ...snapshot, action, targets, urls };
+  if (action === 'delete_remote') {
+    state.pendingDialogAction = 'delete-remote-branches';
+    state.pendingDialogTarget = payload;
+    const lines = Object.keys(urls).map(remote => remote + '\n' + urls[remote].join('\n') + '\n' +
+      targets.filter(item => item.remote === remote).map(item => '  refs/heads/' + item.branch).join('\n'));
+    hecaton.dialog.show({ type: 'message', title: t('menu.deleteRemoteBranch'),
+      message: t('menu.branches.confirmRemoteDelete', { count: targets.length }) + '\n\n' + lines.join('\n\n'),
+      buttons: [{ id: 'delete', label: t('menu.deleteRemote'), style: 'danger' }, { id: 'cancel', label: t('menu.cancel'), default: true }] });
+  } else {
+    await runBranchNetworkAction(payload);
+  }
+}
+
+async function runBranchNetworkAction(payload) {
+  const { action, targets, urls, cwd } = payload;
+  if (!branchSelection.allowed(action, payload)) { showError(t('menu.branches.changed')); return; }
+  if (!guardAction(BRANCH_BATCH_ACTIONS[action]) || !guardAction('branch_network_batch')) return;
+  const opName = action === 'delete_remote' ? t('menu.deleteRemoteBranch') : action === 'push' ? t('menu.push') : t('menu.fastForward');
+  // Keep the selected refs and their remote configuration stable for the batch.
+  const op = startSpinner(opName, [REMOTE, REFS, CONFIG]);
+  let succeeded = 0;
+  const failures = [];
+  try {
+    const gitApi = require('./git');
+    const [branches, remotes, worktrees] = await Promise.all([
+      gitApi.gitBranches(cwd), gitApi.gitRemotes(cwd), gitApi.gitWorktrees(cwd),
+    ]);
+    const fresh = branchSelection.networkTargets(action, payload, { branches, remotes });
+    const freshUrls = await branchRemoteUrls(cwd, targets, action !== 'ff');
+    if (state.cwd !== cwd || JSON.stringify(fresh) !== JSON.stringify(targets) || JSON.stringify(freshUrls) !== JSON.stringify(urls) ||
+      (action === 'ff' && (!worktrees.length || targets.some(item => worktrees.some(w => w.branch === item.localName))))) {
+      showError(t('menu.branches.changed'));
+      return;
+    }
+    for (const item of targets) {
+      const label = item.remote + '/' + item.branch;
+      if (state.cwd !== cwd) { failures.push(label + ': ' + t('menu.branches.changed')); continue; }
+      let err;
+      try {
+        if (action === 'delete_remote') err = await gitPushDeleteBranchAsync(cwd, item.remote, 'refs/heads/' + item.branch);
+        else if (action === 'push') err = await gitApi.gitPushBranchToRemoteAsync(cwd, item.remote, item.localName, item.branch);
+        else err = await gitFetchIntoBranchAsync(cwd, item.remote, 'refs/heads/' + item.branch, 'refs/heads/' + item.localName);
+      } catch (e) { err = e.message || String(e); }
+      if (err) failures.push(label + ': ' + err);
+      else {
+        succeeded++;
+        if (action === 'delete_remote' && state.cwd === cwd) {
+          const ref = remoteRefKey(label);
+          forgetRef(ref);
+          ui.selectedBranchRefs.delete(ref);
+        }
+      }
+    }
+    if (state.cwd === cwd) {
+      await refreshAsync();
+      if (state.rightView === 'log') refreshLog();
+    }
+  } catch (e) {
+    showError(e.message || String(e));
+    return;
+  } finally { stopSpinner(op); }
+  hecaton.dialog.show({ type: 'message', title: opName,
+    message: t('menu.branches.result', { succeeded, failed: failures.length }) + (failures.length ? '\n\n' + failures.join('\n\n') : ''),
+    buttons: [{ id: 'ok', label: 'OK', default: true }] });
+  render();
+}
+
+async function deleteSelectedBranches(target) {
+  if (!branchSelection.allowed('delete', target)) { showError(t('menu.branches.changed')); return; }
+  const entries = branchSelection.resolve(target);
+  const op = startSpinner(t('menu.deletingBranch'), [REFS]);
+  const failures = [];
+  let succeeded = 0;
+  try {
+    // Check external checkout/deletion changes since the confirmation dialog opened.
+    const { gitBranches, gitWorktrees } = require('./git');
+    const [branches, worktrees] = await Promise.all([gitBranches(target.cwd), gitWorktrees(target.cwd)]);
+    if (state.cwd !== target.cwd || !worktrees.length || entries.some(e =>
+      !branches.some(b => b.name === e.name && !b.isCurrent) || worktrees.some(w => w.branch === e.name))) {
+      showError(t('menu.branches.changed'));
+      return;
+    }
+    for (const entry of entries) {
+      if (state.cwd !== target.cwd) {
+        failures.push(entry.name + ': ' + t('menu.branches.changed'));
+        continue;
+      }
+      let err;
+      try { err = await gitDeleteBranch(target.cwd, entry.name, false); }
+      catch (e) { err = e.message || String(e); }
+      if (err) failures.push(entry.name + ': ' + err);
+      else {
+        succeeded++;
+        if (state.cwd === target.cwd) {
+          unpinBranch(entry.name);
+          forgetRef(entry.ref);
+          ui.selectedBranchRefs.delete(entry.ref);
+        }
+      }
+    }
+    if (state.cwd === target.cwd) {
+      await refreshAsync();
+      if (state.rightView === 'log') refreshLog();
+    }
+  } finally {
+    stopSpinner(op);
+  }
+  hecaton.dialog.show({ type: 'message', title: t('menu.branches.delete'),
+    message: t('menu.branches.result', { succeeded, failed: failures.length }) +
+      (failures.length ? '\n\n' + failures.join('\n\n') : ''),
+    buttons: [{ id: 'ok', label: 'OK', default: true }] });
+  render();
 }
 
 function buildBranchContextMenuItems(branchName) {
-  const branch = state.branches.find(b => b.name === branchName);
-  if (!branch) return [];
-
-  const upstream = branch.upstream;
-  const remote = upstream ? upstream.split('/')[0] : (state.remotes[0] || 'origin');
-  const items = [];
-
-  if (!branch.isCurrent) {
-    items.push({ id: 'branch_checkout', label: t('menu.checkout2', { branchName })});
-    items.push({ id: 'branch_rebase_onto', label: t('menu.rebaseCurrentOnto', { branchName })});
-    items.push({ id: 'branch_merge_into', label: t('menu.mergeIntoCurrent', { branchName })});
-  }
-
-  // 받아오기 계열은 결과가 HEAD에 들어간다 — merge도 pull도 "어디로"를 고를 수 없다.
-  // 그래서 체크아웃하지 않은 브랜치에 Pull을 그대로 실행하면 엉뚱하게 현재 브랜치를
-  // 건드리고, 현재 브랜치가 이미 그 커밋들을 담고 있으면 'Already up to date'로 종료 코드
-  // 0을 돌려줘 "눌러도 아무 일도 안 일어난다"로 보인다.
-  // 항목은 그대로 두되(의도는 "그 브랜치를 최신으로"가 맞다), 실행 시 어떤 명령으로
-  // 대신할지 고르게 한다 — showPullOtherBranchDialog 참고.
-  if (upstream) {
-    items.push(
-      { id: 'branch_ff', label: t('menu.fastForward3', { upstream })},
-      { id: 'branch_pull', label: t('menu.pull2', { upstream })},
-      { id: 'branch_pull_rebase', label: t('menu.pullWithRebase', { upstream })},
-    );
-  }
-
-  if (remote) {
-    items.push(
-      { id: 'branch_push', label: t('menu.push3', { branchName, remote })},
-      { id: 'branch_push_pr', label: t('menu.pushCreatePullRequest', { remote })},
-      { id: 'branch_force_push', label: t('menu.forcePush3', { branchName, remote }), icon: 'warning' },
-    );
-  }
-  // 이름 바꾸기/삭제는 push 묶음 바로 아래에 둔다. 호스트 menu.show는 위치·스크롤 옵션이
-  // 없어 창보다 긴 메뉴는 아래가 잘려 나간다 — 맨 끝에 두면 작은 창에서 아예 닿지 못한다.
-  // 삭제 둘은 붙여 두되 로컬을 먼저 둬서, 위에서부터 만나는 첫 "Delete '...'"가 항상
-  // 로컬이 되게 한다(원격 push --delete를 로컬 삭제로 오인하는 사고 방지).
-  items.push({ type: 'separator' });
-  items.push({ id: 'branch_rename', label: t('menu.rename2', { branchName }), shortcut: 'F2' });
-  if (!branch.isCurrent) {
-    items.push({ id: 'branch_delete', label: t('menu.deleteLocal', { branchName }), shortcut: t('menu.delete2') });
-  }
-  if (upstream) {
-    items.push({ id: 'branch_delete_remote', label: t('menu.deleteRemote2', { upstream }), icon: 'warning' });
-  }
-
-  items.push({ type: 'separator' });
-  items.push(
-    { id: 'branch_new_branch', label: t('menu.newBranch'), shortcut: 'Ctrl+Shift+B' },
-    { id: 'branch_new_tag', label: t('menu.newTag'), shortcut: 'Ctrl+Shift+T' },
-  );
-  // Worktrees 노드는 linked worktree가 있을 때만 보이므로, 첫 워크트리를 만들 진입점을
-  // 브랜치 메뉴에도 둔다. worktree_new는 대상 경로를 쓰지 않아 여기서도 안전하다.
-  items.push({ id: 'worktree_new', label: t('menu.newWorktree') });
-
-  // 리모트가 적을 때만 서브메뉴로 붙인다. 많으면 별도 메뉴로 넘겨 payload가 저장소
-  // 크기를 따라 커지지 않게 한다 — 그러지 않으면 아래 Pin / Copy Branch Name이 잘린다.
-  const trackingChildren = orderedTrackingRefs(branchName, upstream).map(rb => trackingEntry(rb, upstream));
-  if (upstream) {
-    trackingChildren.push({ type: 'separator' });
-    trackingChildren.push({ id: 'branch_untrack', label: t('menu.unsetUpstream') });
-  }
-  if (trackingChildren.length > REF_INLINE_MAX) {
-    items.push({ id: 'branch_tracking_open', label: t('menu.tracking') });
-  } else if (trackingChildren.length > 0) {
-    items.push({ id: 'branch_tracking', label: t('menu.tracking2'), children: trackingChildren });
-  }
-
-  items.push({ type: 'separator' });
-  items.push(isPinnedBranch(branchName)
-    ? { id: 'branch_pin', label: t('menu.unpin', { branchName }), icon: 'pinned' }
-    : { id: 'branch_pin', label: t('menu.pin', { branchName }), icon: 'pin' });
-
-  for (const item of buildRefFilterMenuItems('branch_', localRefKey(branchName), branchName, !branch.isCurrent)) {
-    items.push(item);
-  }
-
-  items.push({ type: 'separator' });
-  items.push({ id: 'branch_copy_name', label: t('menu.copyBranchName') });
-
-  return decorateMenuItems(items);
+  return buildBranchesContextMenuItems({ cwd: state.cwd, refs: [localRefKey(branchName)] });
 }
 
 function buildPullRequestUrl(remoteUrl, branch) {
@@ -646,39 +816,27 @@ function buildPushRemoteMenuItems() {
 }
 
 function buildRemoteBranchContextMenuItems(remoteBranchName) {
-  // Extract local branch name from remote branch (e.g. "origin/feature" -> "feature")
-  const slashIdx = remoteBranchName.indexOf('/');
-  const localName = slashIdx >= 0 ? remoteBranchName.substring(slashIdx + 1) : remoteBranchName;
-  const localExists = state.branches.some(b => b.name === localName);
-
-  const items = [];
-  if (localExists) {
-    items.push({ id: 'remotebranch_checkout_local', label: t('menu.checkout3', { localName })});
-  } else {
-    items.push({ id: 'remotebranch_checkout_tracking', label: t('menu.checkoutAs', { localName })});
-  }
-  items.push(
-    { id: 'remotebranch_new_branch', label: t('menu.newBranchFromHere') },
-    { type: 'separator' },
-    { id: 'remotebranch_delete_remote', label: t('menu.deleteRemote3', { remoteBranchName }), icon: 'warning' },
-  );
-
-  // 리모트 추적 브랜치는 동명 로컬 브랜치와 따로 지정한다. 핀은 일부러 둘을 묶어 두지만,
-  // 히스토리에서는 origin/foo 만 있고 로컬 foo 는 없는(또는 그 반대인) 커밋 줄기가 흔해
-  // 각각 걸 수 있어야 쓸모가 있다.
-  for (const item of buildRefFilterMenuItems('remotebranch_', remoteRefKey(remoteBranchName), remoteBranchName, true)) {
-    items.push(item);
-  }
-
-  items.push(
-    { type: 'separator' },
-    { id: 'remotebranch_copy_name', label: t('menu.copyBranchName'), icon: 'copy' },
-  );
-
-  return decorateMenuItems(items);
+  return buildBranchesContextMenuItems({ cwd: state.cwd, refs: [remoteRefKey(remoteBranchName)] });
 }
 
 async function handleContextMenuAction(actionId) {
+  const selectedBranches = ui.contextMenuBranches;
+  if (selectedBranches && (actionId.startsWith('branch_') || actionId.startsWith('remotebranch_') || actionId === 'worktree_new')) {
+    const items = buildBranchesContextMenuItems(selectedBranches);
+    const item = findBranchMenuItem(items, actionId);
+    const multiple = selectedBranches.refs.length > 1;
+    const trackingFollowup = !multiple && selectedBranches.refs[0].startsWith('refs/heads/') &&
+      (actionId.startsWith('branch_track:') || actionId.startsWith('branch_tracking_page:') || actionId === 'branch_untrack');
+    if (!items.length || (item && !item.enabled) || (!item && !trackingFollowup)) {
+      showError(t('menu.branches.changed'));
+      return;
+    }
+    const batch = branchMenuBatchAction(actionId, selectedBranches);
+    if (batch && (multiple || batch === 'delete_remote' || batch === 'push' || (batch === 'ff' && !branchSelection.resolve(selectedBranches)[0].current) || !['delete', 'ff'].includes(batch))) {
+      await handleBranchesAction(batch, selectedBranches);
+      return;
+    }
+  }
   // menu_activated는 stdin 게이트를 거치지 않는다 — 지금 불가능한 액션은 여기서
   // 직접 막아야 중첩 실행(커밋 중 discard, rebase 중 checkout 등)이 안 생긴다.
   // 메뉴에서 이미 딤 처리된 항목이라도 호스트가 흘려보낼 수 있으니 한 번 더 본다.
@@ -2028,6 +2186,8 @@ untrackedCount + t('menu.untracked'),
 // 같은 규칙을 본다. 여기 없는 pending 은 재검사 없이 지나간다 — 새 확인창을 만들면
 // 함께 등록해야 그 사이 시작된 작업과 겹치지 않는다.
 const DIALOG_ACTION_IDS = {
+  'delete-remote-branches': 'branch_network_batch',
+  'delete-branches': 'branch_delete',
   'unlock-index-confirm': 'unlockIndex',
   'delete-branch': 'branch_delete',
   'delete-remote-branch-confirm': 'branch_delete_remote',
@@ -2142,6 +2302,15 @@ async function handleDialogResult(params) {
         ? await gitPullRebaseAsync(state.cwd, remote, remoteBranch)
         : await gitPullFromRemoteAsync(state.cwd, remote, remoteBranch);
       await afterGitOp(pullErr, rebase ? t('menu.pullRebase') : t('menu.pull'), {}, coPullOp);
+      return;
+    }
+
+    if (action === 'delete-remote-branches') {
+      if (buttonId === 'delete') await runBranchNetworkAction(target);
+      return;
+    }
+    if (action === 'delete-branches') {
+      if (buttonId === 'delete') await deleteSelectedBranches(target);
       return;
     }
 
@@ -2912,6 +3081,7 @@ async function openRepositoryAt(path) {
   // git 출력 경로(루트 기준)와 pathspec 해석 기준(cwd)이 어긋나면 파일 조작이 전부 실패한다.
   path = await resolveWorkTreeRoot(path);
   state.cwd = path;
+  branchSelection.reset();
   await require('./persist').attachRepo(path);
   state.isGitRepo = false;
   state.error = null;
@@ -3165,6 +3335,7 @@ async function showInExplorer(fullPath) {
 }
 
 module.exports = {
+  buildBranchesContextMenuItems,
   buildHistoryContextMenuItems,
   buildStashContextMenuItems,
   buildFileContextMenuItems,
