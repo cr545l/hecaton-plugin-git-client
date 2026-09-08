@@ -81,7 +81,7 @@ test('Pinned 항목에도 goto-branch 클릭 액션이 붙는다', () => {
   resetState({ pinned: ['develop'] });
   const flat = plain(buildLeftPanel(PANEL_W, PANEL_H));
   const idx = sectionIdx(flat, 'Pinned');
-  assert.deepEqual(ui.leftPanelClickMap[idx + 1], { action: 'goto-branch', branch: 'develop' });
+  assert.deepEqual(ui.leftPanelClickMap[idx + 1], { action: 'goto-branch', branch: 'develop', refKey: 'refs/heads/develop' });
 });
 
 test('없는 브랜치의 핀은 표시하지 않는다', () => {

@@ -296,23 +296,23 @@ test('지정한 브랜치의 메뉴는 해제 문구로 바뀐다', () => {
   assert.equal(labelOf(buildBranchContextMenuItems('develop'), 'branch_hide'), "Unhide 'develop'");
 });
 
-test('현재 브랜치에는 Hide 를 내지 않는다', () => {
+test('현재 브랜치의 Hide 는 딤 처리한다', () => {
   menuSetup();
   const items = buildBranchContextMenuItems('main');
   assert.ok(ids(items).includes('branch_filter'), 'Filter 는 현재 브랜치에도 쓸모가 있다');
-  assert.ok(!ids(items).includes('branch_hide'), '지금 체크아웃한 브랜치를 감추면 HEAD 를 잃는다');
+  assert.equal(items.find(i => i.id === 'branch_hide').enabled, false);
 });
 
-test('전체 해제 항목은 지정이 있을 때만 나온다', () => {
+test('전체 해제 항목은 항상 보이고 지정이 없으면 딤 처리한다', () => {
   menuSetup();
   let items = buildBranchContextMenuItems('develop');
-  assert.ok(!ids(items).includes('branch_clear_filters'));
-  assert.ok(!ids(items).includes('branch_show_all'));
+  assert.equal(items.find(i => i.id === 'branch_clear_filters').enabled, false);
+  assert.equal(items.find(i => i.id === 'branch_show_all').enabled, false);
 
   toggleFilteredRef(localRefKey('develop'));
   items = buildBranchContextMenuItems('develop');
   assert.equal(labelOf(items, 'branch_clear_filters'), 'Clear All Filters (1)');
-  assert.ok(!ids(items).includes('branch_show_all'), '숨김이 없으면 그쪽 해제는 안 나온다');
+  assert.equal(items.find(i => i.id === 'branch_show_all').enabled, false);
 
   toggleHiddenRef(localRefKey('feature/login'));
   items = buildBranchContextMenuItems('develop');

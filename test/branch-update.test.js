@@ -408,7 +408,7 @@ test('슬래시가 들어간 upstream도 refspec을 바르게 만든다', async 
     'origin 뒤 전부가 원격 브랜치명이어야 한다: ' + execLog.join(' | '));
 });
 
-test('upstream이 없으면 받아오기 항목 자체가 없다', () => {
+test('upstream이 없으면 받아오기 항목은 딤 처리한다', () => {
   state.branches = [
     { name: 'work', isCurrent: true, upstream: '' },
     { name: 'scratch', isCurrent: false, upstream: '' },
@@ -416,7 +416,7 @@ test('upstream이 없으면 받아오기 항목 자체가 없다', () => {
   state.remoteBranches = [];
   state.remotes = ['origin'];
   ui.pinnedBranches = [];
-  const ids = idsOf(buildBranchContextMenuItems('scratch'));
-  assert.ok(!ids.includes('branch_ff'));
-  assert.ok(!ids.includes('branch_pull'));
+  const items = buildBranchContextMenuItems('scratch');
+  assert.equal(items.find(i => i.id === 'branch_ff').enabled, false);
+  assert.equal(items.find(i => i.id === 'branch_pull').enabled, false);
 });

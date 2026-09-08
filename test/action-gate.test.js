@@ -278,7 +278,10 @@ test('메뉴 항목의 enabled 는 실행 게이트의 판정과 일치한다', 
   ui.contextMenuBranch = 'dev';
   const items = buildBranchContextMenuItems('dev');
   for (const id of idsOf(items)) {
-    assert.equal(menuEnabled(items, id), isEnabled(id),
+    // Empty UI actions now stay visible but dim, instead of being omitted.
+    const hasTarget = id === 'branch_clear_filters' ? ui.filteredRefs.length > 0
+      : id === 'branch_show_all' ? ui.hiddenRefs.length > 0 : true;
+    assert.equal(menuEnabled(items, id), hasTarget && isEnabled(id),
       id + ' — 메뉴 표시와 실행 판정이 어긋난다');
   }
 });

@@ -1,6 +1,7 @@
 const { t } = require('./i18n');
 const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
+const branchSelection = require('./branch-selection');
 const hostScroll = require('./scroll');
 const tooltip = require('./tooltip');
 const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
@@ -26,7 +27,7 @@ const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
 const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, revealBranch } = require('./render');
-const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildRemoteBranchContextMenuItems, buildBranchContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
+const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildBranchesContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
 let currentMouseShape = 'default';
@@ -567,6 +568,12 @@ async function handleKey(key) {
   }
   if (state.mode === 'commit') {
     handleCommitInput(key);
+    return;
+  }
+  if (key === ESC && ui.selectedBranchRefs.size > 0) {
+    branchSelection.reset();
+    ui.leftPanelActiveBranch = null;
+    render();
     return;
   }
 
@@ -1660,6 +1667,16 @@ async function handleMouseData(data) {
       continue;
     }
 
+    // Branch selection uses the same modifiers as the file list.
+    if (!isRelease && (cb === 16 || cb === 4)) {
+      const row = cy - bodyTop;
+      const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
+      if (inLeft && branchSelection.select(ui.leftPanelClickMap[row], cb === 16 ? 'toggle' : 'range')) {
+        render();
+        continue;
+      }
+    }
+
     // Ctrl+Left click: toggle file selection (same group only)
     if (cb === 16) {
       const bodyRowIdx = cy - (bodyTop);
@@ -2078,14 +2095,15 @@ async function handleMouseData(data) {
               ui.collapsedGroups[entry.group] = !ui.collapsedGroups[entry.group];
               render();
             } else if (entry.action === 'goto-branch') {
-              if (state.remoteBranches.includes(entry.branch)) {
+              branchSelection.select(entry);
+              if (branchSelection.entryRef(entry).startsWith('refs/remotes/')) {
                 ui.remoteRecentBranchUsage[entry.branch] = Date.now();
               }
               // 로컬 브랜치는 여기서부터 끌어 옮길 수 있다. 아직 끌기로 올리지는 않는다 —
               // 다른 줄로 넘어가야 끌기가 되므로(motion 처리 참고) 평범한 클릭은 그대로다.
               // 리모트 추적 브랜치는 로컬에서 이름을 바꿀 대상이 아니라 잡지 않는다.
               // 상단 브랜치명 줄(reveal)도 트리의 그 줄이 따로 있으므로 잡지 않는다.
-              ui.branchDragCandidate = (!entry.reveal && isLocalBranch(entry.branch))
+              ui.branchDragCandidate = (!entry.reveal && branchSelection.entryRef(entry).startsWith('refs/heads/'))
                 ? { branch: entry.branch, row: bodyRowIdx2 }
                 : null;
               ui.leftPanelActiveBranch = entry.branch;
@@ -2506,6 +2524,7 @@ function cleanup() {
 function joinPath(...parts) { return parts.join('/').replace(/\\/g, '/').replace(/\/+/g, '/'); }
 
 function handleContextMenuRequest(col, row) {
+  ui.contextMenuBranches = null;
   const L = ui.lastLayout;
   if (!L) return;
 
@@ -2541,10 +2560,12 @@ function handleContextMenuRequest(col, row) {
     const inLeft = cx >= L.startCol && cx < L.startCol + L.leftW;
     if (inLeft && bodyRowIdx >= 0 && bodyRowIdx < ui.leftPanelClickMap.length) {
       const entry = ui.leftPanelClickMap[bodyRowIdx];
-      if (entry && entry.action === 'goto-branch' && state.remoteBranches.includes(entry.branch)) {
-        ui.leftPanelActiveBranch = entry.branch;
+      if (entry && entry.action === 'goto-branch') {
+        const target = branchSelection.capture(entry);
+        ui.contextMenuBranch = entry.branch;
         ui.contextMenuRemoteBranch = entry.branch;
-        hecaton.menu.show({ items: buildRemoteBranchContextMenuItems(entry.branch) }).catch(() => null);
+        ui.contextMenuWorktree = null;
+        hecaton.menu.show({ items: buildBranchesContextMenuItems(target) }).catch(() => null);
         render();
         return;
       }
@@ -2575,14 +2596,6 @@ function handleContextMenuRequest(col, row) {
         const stashEntry = state.stashes.find(s => s.ref === entry.ref);
         const stashMessage = stashEntry ? stashEntry.message : '';
         hecaton.menu.show({ items: buildStashContextMenuItems(entry.ref, stashMessage) }).catch(() => null);
-        render();
-        return;
-      }
-      if (entry && entry.action === 'goto-branch' && !state.remoteBranches.includes(entry.branch)) {
-        ui.leftPanelActiveBranch = entry.branch;
-        ui.contextMenuBranch = entry.branch;
-        ui.contextMenuWorktree = null;  // 브랜치 메뉴의 New Worktree는 대상 워크트리가 없다
-        hecaton.menu.show({ items: buildBranchContextMenuItems(entry.branch) }).catch(() => null);
         render();
         return;
       }

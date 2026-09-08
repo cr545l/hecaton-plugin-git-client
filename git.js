@@ -1269,6 +1269,10 @@ async function gitForcePushAsync(cwd, remote, branch) {
 async function gitPushDeleteBranchAsync(cwd, remote, branch) {
   return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, '--delete', branch], cwd, NETWORK_OP_TIMEOUT_MS));
 }
+async function gitPushBranchToRemoteAsync(cwd, remote, localBranch, remoteBranch) {
+  return await runNetworkOp('push', 0, () => gitAsyncWrap(
+    ['push', '-u', remote, 'refs/heads/' + localBranch + ':refs/heads/' + remoteBranch], cwd, NETWORK_OP_TIMEOUT_MS));
+}
 async function gitPushTagsAsync(cwd, remote) {
   return await runNetworkOp('push', 0, () => gitAsyncWrap(['push', remote, '--tags'], cwd, NETWORK_OP_TIMEOUT_MS));
 }
@@ -1905,7 +1909,7 @@ module.exports = {
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
   gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync,
-  gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync,
+  gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync, gitPushBranchToRemoteAsync,
   splitUpstreamRef,
   gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,
   gitRemoteRemove, gitRemoteRename, gitRemoteSetUrl, gitRemotePruneAsync,

@@ -1307,6 +1307,7 @@ async function refreshAsync(options = {}) {
   if (refsOk) {
     state.branches = branches;
     state.remoteBranches = remoteBranches;
+    require('./branch-selection').sync();
   }
 
   // remotes (remote 이름 목록 — 브랜치 없이 remote만 있을 수 있어 별도 조회)

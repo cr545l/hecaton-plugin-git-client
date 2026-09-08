@@ -136,6 +136,8 @@ const ACTION_SCOPES = {
   remote_push_tags: [REMOTE, REFS],
   // 리모트 쪽 ref 만 지운다 — 올릴 로컬 ref 를 읽지 않는다
   branch_delete_remote: [REMOTE], remotebranch_delete_remote: [REMOTE],
+  // Selection-based network batches retain refs/config until all targets finish.
+  branch_network_batch: [REMOTE, REFS, CONFIG],
   remote_prune: [REMOTE, REFS],
 
   // 로컬 ref 만
@@ -495,6 +497,7 @@ const REQUIRES_REMOTE = new Set([
   'git-fetch', 'git-pull', 'git-push',
   'branch_push', 'branch_push_pr', 'branch_force_push', 'branch_delete_remote',
   'remotebranch_delete_remote', 'remote_push_tags', 'remote_prune',
+  'branch_network_batch',
 ]);
 const REQUIRES_REMOTE_PREFIXES = ['push_to_remote:', 'tag_push:', 'tag_delete_remote:'];
 

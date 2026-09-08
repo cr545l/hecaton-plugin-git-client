@@ -712,5 +712,12 @@
   "ui.worktree2": "[worktree: ",
   "ui.worktrees": " Worktrees (",
   "ui.x": "[X]",
-  "ui.x2": "[x]"
+  "ui.x2": "[x]",
+  "ui.branchesSelected": "{count} branches selected",
+  "menu.branches.delete": "Delete Selected Local Branches",
+  "menu.branches.changed": "The selected branches cannot all be processed. Check the repository, branch existence, and checked-out worktrees, then select again.",
+  "menu.branches.confirmDelete": "Delete {count} local branches? Unmerged branches will be kept. No remote branches will be deleted.",
+  "menu.branches.result": "Succeeded: {succeeded} / Failed: {failed}",
+  "menu.branches.remotes": "configured remotes",
+  "menu.branches.confirmRemoteDelete": "Delete {count} remote branches from the destinations below? Local branches are kept. This pushes deletions to the remote servers."
 }

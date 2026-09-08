@@ -712,5 +712,12 @@
   "ui.worktree2": "[워크트리: ",
   "ui.worktrees": " 워크트리 (",
   "ui.x": "[X]",
-  "ui.x2": "[x]"
+  "ui.x2": "[x]",
+  "ui.branchesSelected": "브랜치 {count}개 선택됨",
+  "menu.branches.delete": "선택한 로컬 브랜치 삭제",
+  "menu.branches.changed": "선택한 브랜치 전체에 적용할 수 없습니다. 저장소, 브랜치 존재 여부, 워크트리 사용 여부를 확인하고 다시 선택해 주세요.",
+  "menu.branches.confirmDelete": "로컬 브랜치 {count}개를 삭제할까요? 병합되지 않은 브랜치는 유지하며 원격 브랜치는 삭제하지 않습니다.",
+  "menu.branches.result": "성공 {succeeded} / 실패 {failed}",
+  "menu.branches.remotes": "설정된 리모트",
+  "menu.branches.confirmRemoteDelete": "아래 대상에서 원격 브랜치 {count}개를 삭제할까요? 로컬 브랜치는 유지하며, 원격 서버에 삭제를 요청합니다."
 }

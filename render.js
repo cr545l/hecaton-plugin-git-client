@@ -1329,6 +1329,8 @@ function renderBody() {
 // ── Left panel: branch tree ──
 
 function buildLeftPanel(w, h) {
+  require('./branch-selection').sync();
+  ui.leftPanelFullClickMap = null;
   const lines = [];
   const clickMap = [];
   const innerW = w - 1;
@@ -1389,7 +1391,7 @@ function buildLeftPanel(w, h) {
     const nameColor = currentBranchEntry ? colors.green : colors.value;
     // Branches 목록의 브랜치 줄과 같은 액션을 사용해 히스토리 전환/커밋 이동도 동일하게 처리한다.
     // reveal은 이 줄에만 붙인다 — 목록의 같은 줄이 접혀 있으면 펼치고 거기로 스크롤하라는 표시다.
-    const branchEntry = currentBranchEntry ? { action: 'goto-branch', branch: currentBranchEntry.name, reveal: true } : null;
+    const branchEntry = currentBranchEntry ? { action: 'goto-branch', branch: currentBranchEntry.name, refKey: localRefKey(currentBranchEntry.name), reveal: true } : null;
     const availW = innerW - 1 - mark.length;
     let branchName = state.branch || '...';
     const slashIdx = branchName.lastIndexOf('/');
@@ -1435,7 +1437,9 @@ function buildLeftPanel(w, h) {
   const activeBranch = ui.leftPanelActiveBranch;
 
   function branchLine(indent, name, fullRef, isCurrent, isRemote, tag, heldByWorktree, track) {
-    const isActive = activeBranch === fullRef;
+    const isActive = ui.selectedBranchRefs.size > 0 || ui.branchSelectionAnchor !== null
+      ? ui.selectedBranchRefs.has(isRemote ? remoteRefKey(fullRef) : localRefKey(fullRef))
+      : activeBranch === fullRef;
     const tagText = tag || '';
     const tagPart = tagText ? colors.cyan + tagText + ansi.reset : '';
     // 추적 상태(@리모트 / ahead / behind)는 track을 넘겨 준 줄에만 붙인다 — Pinned 목록과
@@ -1508,7 +1512,7 @@ function buildLeftPanel(w, h) {
           // 대기 수까지 붙여 여기만 보고도 상태를 알 수 있게 한다.
           pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
             b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
-            branchTrackParts(b)), { action: 'goto-branch', branch: b.name });
+            branchTrackParts(b)), { action: 'goto-branch', branch: b.name, refKey: localRefKey(b.name) });
         }
       }
     }
@@ -1552,7 +1556,7 @@ function buildLeftPanel(w, h) {
             if (revealTarget && fullName === revealTarget) revealLineIdx = lines.length;
             pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent, false,
               item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName),
-              isPinnedBranch(fullName) ? branchTrackParts(item) : null), { action: 'goto-branch', branch: fullName });
+              isPinnedBranch(fullName) ? branchTrackParts(item) : null), { action: 'goto-branch', branch: fullName, refKey: localRefKey(fullName) });
           }
         }
       }
@@ -1560,7 +1564,7 @@ function buildLeftPanel(w, h) {
         if (revealTarget && b.name === revealTarget) revealLineIdx = lines.length;
         pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
           b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
-          isPinnedBranch(b.name) ? branchTrackParts(b) : null), { action: 'goto-branch', branch: b.name });
+          isPinnedBranch(b.name) ? branchTrackParts(b) : null), { action: 'goto-branch', branch: b.name, refKey: localRefKey(b.name) });
       }
     }
   }
@@ -1623,12 +1627,12 @@ function buildLeftPanel(w, h) {
             pushLine(colors.dim + '     ' + (subCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset, { action: 'toggle-group', group: subKey });
             if (!subCollapsed) {
               for (const item of items) {
-                pushLine(branchLine(8, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef });
+                pushLine(branchLine(8, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef, refKey: remoteRefKey(item.fullRef) });
               }
             }
           }
           for (const item of topLevel) {
-            pushLine(branchLine(6, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef });
+            pushLine(branchLine(6, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef, refKey: remoteRefKey(item.fullRef) });
           }
         }
       }
@@ -1696,6 +1700,7 @@ function buildLeftPanel(w, h) {
 
   ui.leftTabInfo = null;
   const maxScroll = Math.max(0, lines.length - h);
+  ui.leftPanelFullClickMap = clickMap;
   ui.leftMaxScroll = maxScroll;
   if (ui.leftPanelScrollOffset > maxScroll) ui.leftPanelScrollOffset = maxScroll;
 
@@ -3809,6 +3814,9 @@ const hintButtons = [];
 
 function buildHintText() {
   let result = '';
+  if (ui.selectedBranchRefs.size > 1) {
+    result += colors.cyan + t('ui.branchesSelected', { count: ui.selectedBranchRefs.size }) + ansi.reset + '  ';
+  }
   if (state.selectedFiles.size > 0) {
     result +=colors.cyan + state.selectedFiles.size + t('ui.selected') + ansi.reset + '  ';
     result +=colors.dim + t('ui.sTageUNstage') + ansi.reset + '  ';
