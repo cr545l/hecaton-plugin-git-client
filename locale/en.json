@@ -347,6 +347,7 @@
   "menu.history": "History...",
   "menu.historyCopiedClipboard": "History copied to clipboard",
   "menu.ignore": "Ignore",
+  "menu.editIgnorePattern": "Edit the pattern to add to .gitignore. All patterns are added after you confirm every edit.",
   "menu.ignoreByExtension": "Ignore by Extension",
   "menu.ignoreByName": "Ignore by Name",
   "menu.ignoreByPath": "Ignore by Path",

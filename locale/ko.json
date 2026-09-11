@@ -347,6 +347,7 @@
   "menu.history": "히스토리...",
   "menu.historyCopiedClipboard": "히스토리를 클립보드에 복사했습니다",
   "menu.ignore": "무시",
+  "menu.editIgnorePattern": ".gitignore에 추가할 패턴을 편집하세요. 여러 패턴은 모두 확인한 뒤 추가됩니다.",
   "menu.ignoreByExtension": "확장자로 무시",
   "menu.ignoreByName": "이름으로 무시",
   "menu.ignoreByPath": "경로로 무시",

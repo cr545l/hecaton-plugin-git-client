@@ -37,7 +37,7 @@ global.hecaton = {
 
 const { state, ui } = require('../state');
 const { buildFileList, setFileTreeView } = require('../refresh');
-const { handleContextMenuAction } = require('../context-menu');
+const { handleContextMenuAction, handleDialogResult } = require('../context-menu');
 
 function resetState() {
   execCalls = [];
@@ -89,6 +89,8 @@ test('폴더의 Ignore by Path 는 경로 패턴을 .gitignore 에 적는다', a
   openDirMenu('src/util');
 
   await handleContextMenuAction('dir_ignore_path');
+  assert.equal(writtenFiles.length, 0);
+  await handleDialogResult({ button_id: 'ok', value: '/src/util/' });
 
   assert.equal(writtenFiles.length, 1);
   assert.match(writtenFiles[0].path, /\.gitignore$/);
@@ -100,6 +102,8 @@ test('폴더의 Ignore by Name 은 이름 패턴을 적는다', async () => {
   openDirMenu('src/util');
 
   await handleContextMenuAction('dir_ignore_name');
+  assert.equal(writtenFiles.length, 0);
+  await handleDialogResult({ button_id: 'ok', value: 'util/' });
 
   assert.equal(writtenFiles[0].content, 'util/\n');
 });
@@ -149,4 +153,47 @@ test('트리 전환 항목은 어느 메뉴에서 눌러도 같은 동작', asyn
 
   await handleContextMenuAction('file_tree_view');
   assert.equal(ui.fileTreeView, false);
+});
+
+
+test('ignore uses edited input and cancellation writes nothing', async () => {
+  resetState();
+  openDirMenu('src/util');
+  await handleContextMenuAction('dir_ignore_path');
+  await handleDialogResult({ button_id: 'cancel', value: '\\#changed'  });
+  assert.equal(writtenFiles.length, 0);
+  await handleContextMenuAction('dir_ignore_path');
+  await handleDialogResult({ button_id: 'ok', value: '\\#changed'  });
+  assert.equal(ignoreContent, '\\#changed\n');
+});
+
+test('file ignore prefills each kind and waits for all edits', async () => {
+  for (const [kind, expected] of [['name', 'a.js'], ['ext', '*.js'], ['path', '/src/a.js']]) {
+    await new Promise(resolve => setTimeout(resolve, 30));
+    resetState();
+    const items = [
+      { type: 'untracked', status: '?', file: 'src/a.js' },
+      { type: 'untracked', status: '?', file: 'src/b.txt' },
+    ];
+    ui.contextMenuFileItem = items[0];
+    ui.contextMenuFileItems = items;
+    await handleContextMenuAction('file_ignore_' + kind);
+    assert.equal(state.pendingDialogTarget.patterns[0], expected);
+    assert.equal(writtenFiles.length, 0);
+    await handleDialogResult({ button_id: 'ok', value: '*.log' });
+    assert.equal(writtenFiles.length, 0);
+    await handleDialogResult({ button_id: 'ok', value: '/build/' });
+    assert.equal(ignoreContent, '*.log\n/build/\n');
+  }
+});
+
+test('ignore rejects blank input and cancels all pending edits', async () => {
+  resetState();
+  openDirMenu('src/util');
+  await handleContextMenuAction('dir_ignore_path');
+  await handleDialogResult({ button_id: 'ok', value: '  ' });
+  assert.equal(state.pendingDialogAction, 'ignore-patterns');
+  assert.equal(writtenFiles.length, 0);
+  await handleDialogResult({ button_id: 'cancel' });
+  assert.equal(writtenFiles.length, 0);
 });

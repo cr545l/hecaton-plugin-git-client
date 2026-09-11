@@ -35,6 +35,24 @@ function ignoreDirPatterns(dirs, kind) {
   return out;
 }
 
+function showIgnoreDialog(target) {
+  state.pendingDialogAction = 'ignore-patterns';
+  state.pendingDialogTarget = target;
+  hecaton.dialog.show({
+    type: 'input',
+    title: t('menu.ignore') + (target.patterns.length > 1 ? ` (${target.index + 1}/${target.patterns.length})` : ''),
+    message: t('menu.editIgnorePattern'),
+    defaultValue: target.patterns[target.index],
+    buttons: [{ id: 'ok', label: 'OK', default: true }, { id: 'cancel', label: t('menu.cancel') }],
+  });
+}
+
+// Host inputs are single-line. Collect every edit before writing any patterns.
+function editIgnorePatterns(patterns) {
+  if (patterns.length === 0) return;
+  showIgnoreDialog({ cwd: state.cwd, patterns, index: 0, edited: [] });
+}
+
 // 무엇이 추가되는지 메뉴에서 바로 보이도록 라벨 뒤에 괄호로 붙인다. 패턴이 여럿일
 // 때 전부 늘어놓으면 메뉴가 길어지므로 첫 패턴과 나머지 개수만 보여준다.
 function ignoreLabel(base, patterns) {
@@ -1180,14 +1198,7 @@ untrackedCount + t('menu.untracked'),
       case 'dir_ignore_path': {
         const kind = actionId === 'dir_ignore_name' ? 'name' : 'path';
         const patterns = ignoreDirPatterns(dirs, kind);
-        if (patterns.length === 0) break;
-        const dirIgnoreOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
-        let err = null;
-        for (const pattern of patterns) {
-          const oneErr = await gitIgnorePattern(state.cwd, pattern);
-          if (!err && oneErr) err = oneErr;
-        }
-        await afterGitOp(err, t('menu.ignore'), {}, dirIgnoreOp);
+        editIgnorePatterns(patterns);
         break;
       }
       case 'dir_copy_path': {
@@ -1403,48 +1414,16 @@ untrackedCount + t('menu.untracked'),
         }
         break;
       }
-      case 'file_ignore_name': {
-        const ignoreNameOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
-        let err = null;
-        for (const item of fileItems) {
-          if (!item) continue;
-          const pattern = baseName(item.file);
-          const oneErr = await gitIgnorePattern(state.cwd, pattern);
-          if (!err && oneErr) err = oneErr;
-        }
-        await afterGitOp(err, t('menu.ignore'), {}, ignoreNameOp);
-        break;
-      }
-      case 'file_ignore_ext': {
-        const exts = new Set();
-        for (const item of fileItems) {
-          if (!item) continue;
-          const ext = extName(item.file);
-          if (ext) exts.add(ext);
-        }
-        if (exts.size === 0) {
+      case 'file_ignore_name':
+      case 'file_ignore_ext':
+      case 'file_ignore_path': {
+        const kind = actionId.substring('file_ignore_'.length);
+        const patterns = ignorePatternsFor(fileItems, kind);
+        if (kind === 'ext' && patterns.length === 0) {
           showError(t('menu.noExtensionIgnore'));
           break;
         }
-        const ignoreExtOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
-        let err = null;
-        for (const ext of exts) {
-          const oneErr = await gitIgnorePattern(state.cwd, '*' + ext);
-          if (!err && oneErr) err = oneErr;
-        }
-        await afterGitOp(err, t('menu.ignore'), {}, ignoreExtOp);
-        break;
-      }
-      case 'file_ignore_path': {
-        const ignorePathOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
-        let err = null;
-        for (const item of fileItems) {
-          if (!item) continue;
-          const relPath = item.file.replace(/\\/g, '/').replace(/^\/+/, '');
-          const oneErr = await gitIgnorePattern(state.cwd, '/' + relPath);
-          if (!err && oneErr) err = oneErr;
-        }
-        await afterGitOp(err, t('menu.ignore'), {}, ignorePathOp);
+        editIgnorePatterns(patterns);
         break;
       }
       case 'file_stash_one': {
@@ -2186,6 +2165,7 @@ untrackedCount + t('menu.untracked'),
 // 같은 규칙을 본다. 여기 없는 pending 은 재검사 없이 지나간다 — 새 확인창을 만들면
 // 함께 등록해야 그 사이 시작된 작업과 겹치지 않는다.
 const DIALOG_ACTION_IDS = {
+  'ignore-patterns': 'file_ignore_path',
   'delete-remote-branches': 'branch_network_batch',
   'delete-branches': 'branch_delete',
   'unlock-index-confirm': 'unlockIndex',
@@ -2257,6 +2237,29 @@ async function handleDialogResult(params) {
     if (deferredId && buttonId && buttonId !== 'cancel' && !guardDeferredAction(deferredId)) {
       clearPendingTargets();
       render();
+      return;
+    }
+
+    if (action === 'ignore-patterns') {
+      if (buttonId !== 'ok' || typeof params.value !== 'string' || target.cwd !== state.cwd) return;
+      const pattern = params.value;
+      if (!pattern.trim() || /[\r\n\0]/.test(pattern)) {
+        showIgnoreDialog(target);
+        return;
+      }
+      target.edited.push(pattern);
+      target.index++;
+      if (target.index < target.patterns.length) {
+        showIgnoreDialog(target);
+        return;
+      }
+      const ignoreOp = startSpinner(t('menu.ignoring'), [WORKTREE]);
+      let err = null;
+      for (const edited of new Set(target.edited)) {
+        err = await gitIgnorePattern(target.cwd, edited);
+        if (err) break;
+      }
+      await afterGitOp(err, t('menu.ignore'), {}, ignoreOp);
       return;
     }
 

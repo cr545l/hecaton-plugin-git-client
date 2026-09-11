@@ -1640,7 +1640,8 @@ async function gitIgnorePattern(cwd, pattern) {
   try {
     const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
     const ignorePath = cwd + sep + '.gitignore';
-    const normalized = pattern.replace(/\\/g, '/');
+    // Patterns are editable gitignore syntax; preserve escapes such as \# and \!.
+    const normalized = pattern;
     let lines = [];
     const readRes = await hecaton.fs.read_file({ path: ignorePath });
     if (readRes && readRes.content) {
