@@ -141,3 +141,37 @@ test('Commits 탭이 아니면 Recovery 토글을 내보내지 않는다', () =>
   assert.ok(!frame.includes('Recovery:'), '히스토리 전용 옵션이 다른 탭에 새면 안 된다');
   assert.ok(!ui.titleClickZones.some(z => z.action === 'toggleLogRecovery'));
 });
+
+
+test('highlight toggle dims unrelated messages and restores them when disabled', () => {
+  setupLogView();
+  ui.termCols = 160;
+  ui.logHighlight = true;
+  let frame = captureRender();
+  assert.match(titleLine(frame), /Highlight: on/);
+  assert.ok(ui.titleClickZones.some(z => z.action === 'toggleLogHighlight'));
+  const lost = frame.split('\n').find(l => l.includes('lost 1'));
+  assert.ok(lost.includes('\x1b[2m'), 'unrelated revision is faint');
+  ui.logHighlight = false;
+  frame = captureRender();
+  assert.match(titleLine(frame), /Highlight: off/);
+});
+
+test('recovery toggle animates immediately while loading and clears on completion', () => {
+  const { beginPanelLoading, endPanelLoading, BRAILLE_FRAMES } = require('../spinner');
+  setupLogView();
+  ui.termCols = 160;
+  beginPanelLoading('logRecovery');
+  try {
+    state.spinnerFrame = 0;
+    assert.ok(titleLine(captureRender()).includes('Recovery: on ' + BRAILLE_FRAMES[0]));
+    state.spinnerFrame = 1;
+    assert.ok(titleLine(captureRender()).includes('Recovery: on ' + BRAILLE_FRAMES[1]));
+    ui.logShowRecovery = false;
+    assert.match(titleLine(captureRender()), /Recovery: off/);
+  } finally {
+    endPanelLoading('logRecovery');
+  }
+  ui.logShowRecovery = true;
+  assert.ok(!titleLine(captureRender()).includes(BRAILLE_FRAMES[1]));
+});

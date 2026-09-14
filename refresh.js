@@ -291,6 +291,7 @@ function ensureConflictSelections(conflictView) {
 let _logDetailSeq = 0;
 let _freshDetailSeq = 0;
 let _logSeq = 0;
+let _logRecoverySeq = 0;
 let _freshSeq = 0;
 let _backgroundRefreshCount = 0;
 
@@ -1785,6 +1786,10 @@ function refreshLog(options = {}) {
     return;
   }
   if (state.logLoading) {
+    if (ui.logShowRecovery && !state.logRecoveryLoading) {
+      _logRecoverySeq = _logSeq;
+      beginPanelLoading('logRecovery');
+    }
     if (state.rightView === 'log') require('./render').render();
     return;
   }
@@ -1811,6 +1816,10 @@ function refreshLog(options = {}) {
 
   const seq = ++_logSeq;
   state.logLoading = true;
+  if (ui.logShowRecovery) {
+    _logRecoverySeq = seq;
+    beginPanelLoading('logRecovery');
+  }
   (async () => {
     // 그래프 입력이 지난번과 같으면 git 을 한 번도 부르지 않는다. 지문 계산은 fs 조회만
     // 쓰므로(호스트 RPC 중 exec 만 비싸다) 아낀 프로세스 네 개에 비하면 사실상 공짜다.
@@ -1885,6 +1894,8 @@ function refreshLog(options = {}) {
     }
 
     _logExpansionRunning = true;
+    _logRecoverySeq = seq;
+    beginPanelLoading('logRecovery');
     try {
       const recovery = await loadRecovery();
       if (_logSeq !== seq) return;
@@ -1919,6 +1930,10 @@ function refreshLog(options = {}) {
     state.logLoading = false;
     state.logLoadingMore = false;
     if (state.rightView === 'log') require('./render').render();
+  }).finally(() => {
+    if (_logRecoverySeq !== seq) return;
+    endPanelLoading('logRecovery');
+    if (state.rightView === 'log') require('./render').render();
   });
 }
 
@@ -1949,6 +1964,10 @@ function loadMoreLog() {
   const seq = ++_logSeq;
   state.logLoadingMore = true;
   state.logLoading = true;
+  if (ui.logShowRecovery) {
+    _logRecoverySeq = seq;
+    beginPanelLoading('logRecovery');
+  }
   acquireSpinner();
   require('./render').render();
 
@@ -1988,6 +2007,7 @@ function loadMoreLog() {
     if (_logSeq === seq) state.logHasMore = false;
   }).finally(() => {
     const isCurrent = _logSeq === seq;
+    if (_logRecoverySeq === seq) endPanelLoading('logRecovery');
     if (isCurrent) {
       state.logLoading = false;
       state.logLoadingMore = false;

@@ -1,6 +1,7 @@
 const { t } = require('./i18n');
 const STYLE_NORMAL = 0;
 const STYLE_RECOVERY = 1;
+const STYLE_DIM = 2;
 
 function ensureWidth(row, width) {
   while (row.chars.length <= width) {
@@ -135,7 +136,7 @@ function countNormalLanes(commits) {
 
 // 정상 레인은 [0, recoveryBase), 리커버리 레인은 [recoveryBase, ...) 안에서만 고른다.
 function laneRange(lanes, style, recoveryBase) {
-  return style === STYLE_RECOVERY
+  return (style & STYLE_RECOVERY) === STYLE_RECOVERY
     ? { from: recoveryBase, to: lanes.length }
     : { from: 0, to: Math.min(lanes.length, recoveryBase) };
 }
@@ -196,7 +197,7 @@ function takeLane(lanes, laneStyles, laneColors, colorCursor, hash, style, recov
   return lanes.length - 1;
 }
 
-function calcGraphRows(commits, stashHashes, stashMap) {
+function calcGraphRows(commits, stashHashes, stashMap, related = null) {
   const rows = [];
   let lanes = [];
   // 간선의 주인은 부모가 아니라 자식 커밋이다. 레인이 가리키는 해시(= 다음에 올 부모)로
@@ -211,7 +212,9 @@ function calcGraphRows(commits, stashHashes, stashMap) {
 
   for (const commit of commits) {
     const { hash, parents } = commit;
-    const nodeStyle = commit.isRecovery ? STYLE_RECOVERY : STYLE_NORMAL;
+    const baseStyle = commit.isRecovery ? STYLE_RECOVERY : STYLE_NORMAL;
+    const nodeStyle = baseStyle | (related && !related.has(hash) ? STYLE_DIM : 0);
+    const edgeStyle = parent => baseStyle | (related && (!related.has(hash) || !related.has(parent)) ? STYLE_DIM : 0);
 
     // 같은 구역 안에서만 제 레인을 찾는다. 유실 커밋이 예약해 둔 레인이 정상 커밋을
     // 가리키고 있어도 그 커밋은 정상 구역에 자리를 잡고, 리커버리 레인은 아래의 코너
@@ -221,6 +224,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
     // 새로 연 레인이면 이 커밋이 가지의 팁이므로 노드 위로 이어질 획이 없다.
     const nodeUp = baseLane !== -1;
     if (baseLane === -1) baseLane = takeLane(lanes, laneStyles, laneColors, colorCursor, hash, nodeStyle, recoveryBase);
+    const incoming = lanes.map((target, lane) => ({ target, color: laneColors[lane], style: laneStyles[lane] }));
 
     const row = {
       type: 'commit',
@@ -231,6 +235,8 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       charStylesH: [], // 수평 획 전용 스타일(-1이면 charStyles 사용)
       commitLane: baseLane,
       hash,
+      parents,
+      paths: [],
       ref: hash.substring(0, 7),
       decoration: '',
       subject: commit.subject,
@@ -246,6 +252,8 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       // 노드에서 위/아래로 세로 획을 뻗을지. 이웃 행의 글자만 보고 추측하면 빈 레인을
       // 재사용한 노드가 앞 브랜치와 이어져 버린다 — 그래프 구조로 직접 정한다.
       nodeUp,
+      nodeUpStyle: nodeUp ? laneStyles[baseLane] : nodeStyle,
+      nodeDownStyle: parents.length ? edgeStyle(parents[0]) : nodeStyle,
       nodeDown: parents.length > 0,
     };
 
@@ -263,22 +271,26 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       laneStyles[baseLane] = STYLE_NORMAL;
     } else {
       lanes[baseLane] = parents[0];
-      laneStyles[baseLane] = nodeStyle;
+      laneStyles[baseLane] = edgeStyle(parents[0]);
       for (let p = 1; p < parents.length; p++) {
         const parentHash = parents[p];
         const existing = lanes.indexOf(parentHash);
         if (existing !== -1 && existing !== baseLane) {
           merges.push({ lane: existing, isNew: false, hash: parentHash });
         } else if (existing === -1) {
-          const newLane = takeLane(lanes, laneStyles, laneColors, colorCursor, parentHash, nodeStyle, recoveryBase);
+          const newLane = takeLane(lanes, laneStyles, laneColors, colorCursor, parentHash, edgeStyle(parentHash), recoveryBase);
           merges.push({ lane: newLane, isNew: true, hash: parentHash });
         }
       }
     }
 
     for (const merge of merges) {
-      const style = nodeStyle;
+      const style = edgeStyle(merge.hash);
       const color = laneColors[merge.lane];
+      row.paths.push({ kind: 'branch', from: baseLane, to: merge.lane, color, style });
+      // Multiple children can share the rest of a lane. Keep that shared tail
+      // bright if either incoming edge belongs to the selected history.
+      if (!merge.isNew && !(style & STYLE_DIM)) laneStyles[merge.lane] &= ~STYLE_DIM;
       addHorizontalConnector(row, baseLane, color, style, merge.lane > baseLane);
       fillHorizontal(row, baseLane, merge.lane, color, style);
       if (merge.isNew) {
@@ -298,6 +310,7 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       const priorSH = row.charStylesH[lane];
       const closeStyle = laneStyles[lane];
       const closeColor = laneColors[lane];
+      row.paths.push({ kind: 'join', from: lane, to: baseLane, color: closeColor, style: closeStyle });
       setCell(row, lane, lane > baseLane ? '\u256f' : '\u2570', closeColor, closeStyle);
       if (priorH >= 0) row.charColorsH[lane] = priorH;
       if (priorSH >= 0) row.charStylesH[lane] = priorSH;
@@ -305,6 +318,18 @@ function calcGraphRows(commits, stashHashes, stashMap) {
       lanes[lane] = null;
       laneStyles[lane] = STYLE_NORMAL;
     }
+
+    for (let lane = 0; lane < incoming.length; lane++) {
+      const edge = incoming[lane];
+      if (lane === baseLane || edge.target === null || edge.target === hash) continue;
+      row.paths.push({ kind: 'vertical', lane, half: 'top', color: edge.color, style: edge.style });
+      row.paths.push({ kind: 'vertical', lane, half: 'bottom', color: edge.color, style: laneStyles[lane] });
+    }
+    row.paths.push({
+      kind: 'node', lane: baseLane, color: laneColors[baseLane], style: nodeStyle,
+      up: nodeUp, down: parents.length > 0,
+      upStyle: row.nodeUpStyle, downStyle: row.nodeDownStyle,
+    });
 
     let decoration = '';
     if (commit.refs) {

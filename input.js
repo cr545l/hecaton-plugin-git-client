@@ -1847,6 +1847,10 @@ async function handleMouseData(data) {
               updateLogDetail();
               render();
               handled = true;
+            } else if (zone.action === 'toggleLogHighlight') {
+              ui.logHighlight = !ui.logHighlight;
+              render();
+              handled = true;
             } else if (zone.action === 'toggleLogRecovery') {
               ui.logShowRecovery = !ui.logShowRecovery;
               // 끌 때는 그리기 단계에서 걸러 내면 되지만, 켤 때는 유실 커밋이 캐시에 없을

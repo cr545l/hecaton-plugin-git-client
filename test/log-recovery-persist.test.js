@@ -73,3 +73,22 @@ test('저장값이 없으면 기본값을 지킨다', async () => {
   assert.equal(ui.logShowRecovery, true);
   await persist.flushNow();
 });
+
+
+test('highlight preference survives a new session', async () => {
+  storedFile = null;
+  let session = newSession();
+  await session.persist.load();
+  session.persist.attachRepo(REPO);
+  assert.equal(session.ui.logHighlight, false);
+  session.ui.logHighlight = true;
+  await session.persist.flushNow();
+  assert.equal(repoEntry().logHighlight, true);
+  session = newSession();
+  await session.persist.load();
+  session.persist.attachRepo(REPO);
+  assert.equal(session.ui.logHighlight, true);
+  session.ui.logHighlight = false;
+  await session.persist.flushNow();
+  assert.equal(repoEntry().logHighlight, false);
+});

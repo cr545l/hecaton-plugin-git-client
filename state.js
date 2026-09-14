@@ -23,6 +23,8 @@ const state = {
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'
   logItems: [],           // [{ type:'commit'|'graph', graphStr, ref, decoration, subject }]
   logSelectables: [],     // indices into logItems that are selectable
+  logRecoveryLoading: false,
+  logRecoveryLoadingSince: 0,
   logLoading: false,
   logLoadingMore: false,
   logHasMore: false,
@@ -199,6 +201,7 @@ const ui = {
   // 리커버리(reflog 에만 남은 유실) 커밋을 목록·그래프에 보일지. 끄면 그리기 단계에서만
   // 걸러내고 조회는 그대로 두므로, 다시 켤 때 git 재조회 없이 즉시 되살아난다.
   logShowRecovery: true,
+  logHighlight: false,
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,

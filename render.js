@@ -8,6 +8,7 @@ const { highlightCode, getLanguage } = require('./highlighter');
 const hostScroll = require('./scroll');
 const tooltip = require('./tooltip');
 const persist = require('./persist');
+const { highlightedRows } = require('./log-highlight');
 const { panelLoadingLabel } = require('./spinner');
 const actions = require('./actions');
 const queue = require('./queue');
@@ -483,9 +484,18 @@ function renderBody() {
         // 꺼져 있으면 흐리게 — 목록에서 뭔가 빠진 상태라는 걸 버튼만 보고 알 수 있어야 한다.
         rightParts.push({
           label: t('ui.recovery'),
-          value: ui.logShowRecovery ? 'on' : 'off',
+          value: ui.logShowRecovery
+            ? 'on' + (state.logRecoveryLoading ? ' ' + panelLoadingLabel('logRecovery', '').trim() : '')
+            : 'off',
           action: 'toggleLogRecovery',
           collapsed: !ui.logShowRecovery,
+          group: 'option',
+        });
+        rightParts.push({
+          label: t('ui.highlight'),
+          value: ui.logHighlight ? 'on' : 'off',
+          action: 'toggleLogHighlight',
+          collapsed: !ui.logHighlight,
           group: 'option',
         });
       }
@@ -2345,6 +2355,9 @@ function buildLogPanel(w, h) {
     ? state.logSelectables[Math.min(state.logCursor, state.logSelectables.length - 1)]
     : -1;
 
+  const highlight = ui.logHighlight
+    ? highlightedRows(state.logItems, state.logItems[selectedItemIdx]?.hash) : null;
+
   const logPinned = ui.logScrollPin !== undefined && ui.logScrollPin === state.logCursor;
   if (ui.logScrollPin !== undefined && ui.logScrollPin !== state.logCursor) ui.logScrollPin = undefined;
   if (!logPinned && selectedItemIdx >= 0) {
@@ -2375,6 +2388,8 @@ function buildLogPanel(w, h) {
     if (!item) return { text: '', graph: null };
 
     const isCursor = itemIdx === selectedItemIdx;
+    const graphItem = highlight?.rows.get(item.hash) || item;
+    const isDim = highlight && !highlight.related.has(item.hash);
 
     if (item.type === 'commit') {
       const prefix = ' ';
@@ -2422,14 +2437,17 @@ function buildLogPanel(w, h) {
       const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
       const pad = Math.max(1, innerW - usedLen - 7);
       const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
-      const line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
+      let line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
+      if (isDim) line = ansi.dim + line.replace(/\x1b\[0m/g, ansi.reset + ansi.dim).replace(/\x1b\[1m/g, '');
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
         text: (isCursor ? cursorBgColor : '') + padRight(line, innerW) + ansi.reset,
         graph: item.chars ? {
-          chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH,
-          charStyles: item.charStyles, charStylesH: item.charStylesH,
-          nodeUp: item.nodeUp, nodeDown: item.nodeDown,
+          chars: graphItem.chars, charColors: graphItem.charColors, charColorsH: graphItem.charColorsH,
+          charStyles: graphItem.charStyles, charStylesH: graphItem.charStylesH,
+          nodeUp: graphItem.nodeUp, nodeDown: graphItem.nodeDown,
+          nodeUpStyle: graphItem.nodeUpStyle, nodeDownStyle: graphItem.nodeDownStyle,
+          paths: graphItem.paths,
           isCursor: isCursor && logFocused, isCursorInactive: isCursor && !logFocused,
         } : null,
       };
@@ -2439,9 +2457,11 @@ function buildLogPanel(w, h) {
       return {
         text: ' ' + graphPart,
         graph: item.chars ? {
-          chars: item.chars, charColors: item.charColors, charColorsH: item.charColorsH,
-          charStyles: item.charStyles, charStylesH: item.charStylesH,
-          nodeUp: item.nodeUp, nodeDown: item.nodeDown,
+          chars: graphItem.chars, charColors: graphItem.charColors, charColorsH: graphItem.charColorsH,
+          charStyles: graphItem.charStyles, charStylesH: graphItem.charStylesH,
+          nodeUp: graphItem.nodeUp, nodeDown: graphItem.nodeDown,
+          nodeUpStyle: graphItem.nodeUpStyle, nodeDownStyle: graphItem.nodeDownStyle,
+          paths: graphItem.paths,
         } : null,
       };
     }

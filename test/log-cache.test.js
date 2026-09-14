@@ -81,6 +81,49 @@ async function settle() {
   }
 }
 
+test('recovery spinner remains active after base log loads until reflog finishes', async () => {
+  const cwd = 'C:/log-recovery-spinner';
+  installHost(cwd);
+  resetState(cwd);
+  const originalExec = hecaton.process.exec;
+  let finishRecovery;
+  const pending = new Promise(resolve => { finishRecovery = resolve; });
+  hecaton.process.exec = async request => {
+    if (request.args.includes('reflog')) await pending;
+    return originalExec(request);
+  };
+  refreshLog({ force: true });
+  assert.equal(state.logRecoveryLoading, true, 'immediate feedback');
+  try {
+    await settle();
+    assert.equal(state.logLoading, false, 'base log has finished');
+    assert.equal(state.logRecoveryLoading, true, 'recovery is still pending');
+  } finally {
+    finishRecovery();
+    for (let i = 0; i < 50 && state.logRecoveryLoading; i++) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  }
+  assert.equal(state.logRecoveryLoading, false, 'empty reflog also clears spinner');
+});
+
+test('failed recovery request clears its spinner', async () => {
+  const cwd = 'C:/log-recovery-spinner-failure';
+  installHost(cwd);
+  resetState(cwd);
+  const originalExec = hecaton.process.exec;
+  hecaton.process.exec = async request => {
+    if (request.args.includes('reflog')) throw new Error('reflog unavailable');
+    return originalExec(request);
+  };
+  refreshLog({ force: true });
+  for (let i = 0; i < 50 && state.logRecoveryLoading; i++) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(state.logRecoveryLoading, false);
+  assert.equal(state.logLoading, false);
+});
+
 test('두 번째 refreshLog 는 입력이 그대로면 git 을 부르지 않는다', async () => {
   const cwd = 'C:/log-cache-hit';
   const host = installHost(cwd);

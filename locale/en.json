@@ -664,6 +664,7 @@
   "ui.rebaseHintLabel": " Rebase: ",
   "ui.rebasedMiddle": "' (rebased ",
   "ui.rebasingPrefix": " Rebasing '",
+  "ui.highlight": "  Highlight: ",
   "ui.recovery": "  Recovery: ",
   "ui.reflogLabel": "Reflog: ",
   "ui.remoteNamePrompt": " Remote Name: ",

@@ -664,6 +664,7 @@
   "ui.rebaseHintLabel": " 리베이스: ",
   "ui.rebasedMiddle": "' (리베이스 ",
   "ui.rebasingPrefix": " 리베이스 중 '",
+  "ui.highlight": "  하이라이트: ",
   "ui.recovery": "  복구: ",
   "ui.reflogLabel": "리플로그: ",
   "ui.remoteNamePrompt": " 리모트 이름: ",

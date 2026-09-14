@@ -179,6 +179,7 @@ const PANEL_SPINNER_DELAY_MS = 70;
 const PANEL_LOADERS = {
   diff: ['diffLoading', 'diffLoadingSince'],
   logDetail: ['logDetailLoading', 'logDetailLoadingSince'],
+  logRecovery: ['logRecoveryLoading', 'logRecoveryLoadingSince'],
   freshDetail: ['freshDetailLoading', 'freshDetailLoadingSince'],
 };
 
@@ -207,7 +208,7 @@ function endPanelLoading(key) {
 function panelLoadingLabel(key, label) {
   const [flag, since] = PANEL_LOADERS[key];
   if (!state[flag]) return null;
-  if (Date.now() - state[since] < PANEL_SPINNER_DELAY_MS) return null;
+  if (key !== 'logRecovery' && Date.now() - state[since] < PANEL_SPINNER_DELAY_MS) return null;
   return BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length] + ' ' + label;
 }
 

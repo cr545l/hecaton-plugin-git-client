@@ -11,6 +11,12 @@ const SIXEL_PALETTE = [
   [160, 160, 160],
   [64,  64,  64],   // 포커스 없는 선택 줄 — ansi.js 의 cursorBgInactive 와 같은 값
 ];
+// Host foreground at 40% alpha follows both light and dark terminal themes.
+SIXEL_PALETTE.push(16);
+const DIM_GRAPH = 11;
+function graphColor(style, color) {
+  return (style & 2) ? DIM_GRAPH : (style & 1) ? 9 : (color % 6) + 1;
+}
 
 function pxSet(buf, w, h, x, y, c) { if (x >= 0 && x < w && y >= 0 && y < h) buf[y * w + x] = c; }
 
@@ -102,13 +108,17 @@ function connectsLeft(ch) { // 왼쪽 가장자리까지 획이 닿는 글자
 // orphan 브랜치가 main 과 한 줄기로 보이던 문제). 그래프가 계산해 둔 nodeUp/nodeDown —
 // 각각 "레인을 물려받았다(자식이 있다)", "부모가 있다" — 을 그대로 따른다.
 function renderGraphRowInto(buf, pw, ph, yOff, row, numCols, cellW, cellH, lineW, dotR, thinW, dashLen) {
+  if (row.paths) {
+    renderGraphPaths(buf, pw, ph, yOff, row.paths, cellW, cellH, lineW, dotR, thinW, dashLen);
+    return;
+  }
   const { chars, charColors, charColorsH, charStyles, charStylesH } = row;
   for (let i = 0; i < chars.length && i < numCols; i++) {
     const ch = chars[i];
     const cc = charColors[i];
     if (cc < 0 || ch === ' ') continue;
     const style = charStyles && i < charStyles.length ? charStyles[i] : 0;
-    const c = style === 1 ? 9 : (cc % 6) + 1;
+    const c = graphColor(style, cc);
     // 수평 획 전용 색. -1이면 세로색(cc)과 동일. 교차/T 지점에서 수평(병합)선이
     // 세로 레인색에 묻히지 않고 제 색을 유지하도록 분리해 칠한다.
     const cch = charColorsH && i < charColorsH.length ? charColorsH[i] : -1;
@@ -116,13 +126,13 @@ function renderGraphRowInto(buf, pw, ph, yOff, row, numCols, cellW, cellH, lineW
     // 세로획까지 회색으로 물들면 그 브랜치가 죽은 것처럼 보인다.
     const csh = charStylesH && i < charStylesH.length ? charStylesH[i] : -1;
     const hStyle = csh >= 0 ? csh : style;
-    const hc = hStyle === 1 ? 9 : ((cch >= 0 ? cch : cc) % 6) + 1;
+    const hc = graphColor(hStyle, cch >= 0 ? cch : cc);
     // 리커버리 획은 가늘고 끊어진 선으로. 색만 회색이면 굵기가 같아 살아있는 레인과
     // 같은 무게로 읽힌다 — 유실 가지가 많은 저장소에서 실제 트리가 묻힌다.
-    const lw = style === 1 ? thinW : lineW;
-    const dash = style === 1 ? dashLen : 0;
-    const hlw = hStyle === 1 ? thinW : lineW;
-    const hdash = hStyle === 1 ? dashLen : 0;
+    const lw = (style & 1) ? thinW : lineW;
+    const dash = (style & 1) ? dashLen : 0;
+    const hlw = (hStyle & 1) ? thinW : lineW;
+    const hdash = (hStyle & 1) ? dashLen : 0;
     // 코너(╭╮╯╰)가 수평 병합선 중간에 놓이면 관통선이 한쪽만 이어져 끊어져 보인다.
     // 좌우 이웃이 모두 이 셀 쪽으로 수평 획을 뻗으면 병합선이 관통하는 것이므로,
     // 코너 곡선에 더해 수평 브리지를 그려 선을 이어준다.
@@ -145,11 +155,11 @@ function renderGraphRowInto(buf, pw, ph, yOff, row, numCols, cellW, cellH, lineW
       case '\u25cc': {
         const hasAbove = !!row.nodeUp;
         const hasBelow = !!row.nodeDown;
-        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, c, lw, dash);
-        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, c, lw, dash);
+        if (hasAbove) pxVLine(buf, pw, ph, cx, top, cy - dotR - 1, graphColor(row.nodeUpStyle ?? style, cc), lw, dash);
+        if (hasBelow) pxVLine(buf, pw, ph, cx, cy + dotR + 1, bot, graphColor(row.nodeDownStyle ?? style, cc), lw, dash);
         // 링도 획 굵기를 따른다. 거의 꽉 찬 원으로 그리면 선만 가벼워지고 노드는
         // 살아있는 커밋만큼 무겁게 읽혀 대비가 흐려진다.
-        if (ch === '\u25cc' || style === 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - thinW), c);
+        if (ch === '\u25cc' || (style & 1)) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - thinW), c);
         else pxCircle(buf, pw, ph, cx, cy, dotR, c);
         if (i > 0 && connectsRight(chars[i - 1]) && chars[i - 1] !== '\u25cf' && chars[i - 1] !== '\u25cc') {
           pxHLine(buf, pw, ph, left, cx - dotR - 1, cy, hc, hlw, hdash);
@@ -196,6 +206,52 @@ function renderGraphRowInto(buf, pw, ph, yOff, row, numCols, cellW, cellH, lineW
         pxHLine(buf, pw, ph, left - 1, right + 1, cy, hc, hlw, hdash);
         break;
     }
+  }
+}
+
+// Draw complete connections instead of inferring stubs from adjacent glyphs.
+// A single path owns its color/style across every lane it crosses. Paint faint
+// paths first, then bright ones, and nodes last so crossings cannot erase them.
+function renderGraphPaths(buf, pw, ph, top, paths, cellW, cellH, lineW, dotR, thinW, dashLen) {
+  const cy = top + (cellH >> 1);
+  const bot = top + cellH - 1;
+  const center = lane => lane * cellW + (cellW >> 1);
+  const width = style => (style & 1) ? thinW : lineW;
+  const dash = style => (style & 1) ? dashLen : 0;
+  const vline = (lane, y0, y1, style, color) =>
+    pxVLine(buf, pw, ph, center(lane), y0, y1, graphColor(style, color), width(style), dash(style));
+  const edges = paths.filter(p => p.kind !== 'node');
+  edges.sort((a, b) => (b.style & 2) - (a.style & 2)
+    || Math.abs((b.to ?? b.lane) - (b.from ?? b.lane)) - Math.abs((a.to ?? a.lane) - (a.from ?? a.lane)));
+  for (const path of edges) {
+    const { kind, color, style } = path;
+    if (kind === 'vertical') {
+      vline(path.lane, path.half === 'top' ? top : cy, path.half === 'top' ? cy : bot, style, color);
+      continue;
+    }
+    const from = center(path.from), to = center(path.to);
+    const direction = Math.sign(to - from);
+    const radius = Math.min(Math.abs(to - from), Math.max(1, cellW >> 1));
+    const c = graphColor(style, color), lw = width(style), d = dash(style);
+    if (kind === 'branch') {
+      const elbow = to - direction * radius;
+      const start = from + direction * (dotR + 1);
+      pxHLine(buf, pw, ph, Math.min(start, elbow), Math.max(start, elbow), cy, c, lw, d);
+      pxBezier(buf, pw, ph, elbow, cy, to, cy, to, bot, c, lw, d);
+    } else {
+      const elbow = from + direction * radius;
+      const end = to - direction * (dotR + 1);
+      pxBezier(buf, pw, ph, from, top, from, cy, elbow, cy, c, lw, d);
+      pxHLine(buf, pw, ph, Math.min(elbow, end), Math.max(elbow, end), cy, c, lw, d);
+    }
+  }
+  for (const node of paths.filter(p => p.kind === 'node')) {
+    const { lane, style, color } = node;
+    if (node.up) vline(lane, top, cy - dotR - 1, node.upStyle, color);
+    if (node.down) vline(lane, cy + dotR + 1, bot, node.downStyle, color);
+    const cx = center(lane), c = graphColor(style, color);
+    if (style & 1) pxRing(buf, pw, ph, cx, cy, dotR, Math.max(0, dotR - thinW), c);
+    else pxCircle(buf, pw, ph, cx, cy, dotR, c);
   }
 }
 
