@@ -457,6 +457,7 @@ test('batch Push and Fast-forward use each upstream and preserve the checked-out
   for (const name of ['a', 'b']) git(cwd, 'branch', '-f', name, previous[name]);
   state.branches = await gitBranches(cwd);
   commands.length = 0;
+  dialogs.length = 0;
   await handleContextMenuAction('branch_ff');
   assert.equal(git(cwd, 'rev-parse', 'a'), next.a);
   assert.equal(git(cwd, 'rev-parse', 'b'), next.b);
@@ -464,5 +465,5 @@ test('batch Push and Fast-forward use each upstream and preserve the checked-out
   assert.equal(git(cwd, 'branch', '--show-current'), 'main');
   assert.equal(commands.some(args => args[0] === 'checkout'), false);
   assert.equal(commands.filter(args => args[0] === 'fetch').length, 2);
-  assert.match(dialogs.at(-1).message, /Succeeded: 2 \/ Failed: 0/);
+  assert.equal(dialogs.length, 0);
 });

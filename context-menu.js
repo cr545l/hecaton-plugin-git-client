@@ -721,9 +721,11 @@ async function runBranchNetworkAction(payload) {
     showError(e.message || String(e));
     return;
   } finally { stopSpinner(op); }
-  hecaton.dialog.show({ type: 'message', title: opName,
-    message: t('menu.branches.result', { succeeded, failed: failures.length }) + (failures.length ? '\n\n' + failures.join('\n\n') : ''),
-    buttons: [{ id: 'ok', label: 'OK', default: true }] });
+  if (action !== 'ff' || failures.length) {
+    hecaton.dialog.show({ type: 'message', title: opName,
+      message: t('menu.branches.result', { succeeded, failed: failures.length }) + (failures.length ? '\n\n' + failures.join('\n\n') : ''),
+      buttons: [{ id: 'ok', label: 'OK', default: true }] });
+  }
   render();
 }
 
