@@ -1364,6 +1364,12 @@ function buildLeftPanel(w, h) {
   // detached HEAD면 목록에도 ✓ 줄이 없으므로 표기도 클릭도 붙이지 않는다.
   const currentBranchEntry = state.branches.find(b => b.isCurrent) || null;
 
+  // 현재 브랜치와 같은 커밋에 올라탄 로컬 브랜치를 목록에서 짚어 주기 위한 대조표.
+  // 핀 고정 브랜치로 리베이스한 뒤처럼 "지금 여기가 그 브랜치이기도 하다"가 이름만 봐서는
+  // 드러나지 않는 상황을 위한 것이다. 해시는 for-each-ref 에 딸려 온다(추가 조회 없음).
+  const headHash = currentBranchEntry ? (currentBranchEntry.hash || '') : '';
+  const branchHashes = new Map(state.branches.map(b => [b.name, b.hash || '']));
+
   // 현재 브랜치의 추적 상태 — 상단 브랜치명 줄과 Branches 목록의 현재 브랜치에 같이 붙인다.
   // 리모트에 올라가 있으면 그 이름을 red로 먼저 붙인다. 화살표는 밀린 커밋이 있어야만 나오므로
   // 화살표만으로는 "리모트와 같다"와 "리모트에 아예 없다"가 구분되지 않는데, @리모트이름이
@@ -1463,11 +1469,17 @@ function buildLeftPanel(w, h) {
     const refKey = isRemote ? remoteRefKey(fullRef) : localRefKey(fullRef);
     const filtered = isFilteredRef(refKey);
     const hidden = isHiddenRef(refKey);
+    // 현재 브랜치와 같은 커밋에 있는 로컬 브랜치 — 체크와 같은 열에 흐린 ✓ 만 둔다.
+    // 이름 색은 손대지 않는다: 이 줄이 핀인지 다른 워크트리가 잡고 있는지가 더 강한 제약이라
+    // 색을 덮어쓰면 그 정보가 사라진다. detached HEAD 면 headHash 가 비어 아무 줄도 걸리지 않는다.
+    const atHead = !isCurrent && !isRemote && !!headHash && branchHashes.get(fullRef) === headHash;
+    // 마커가 붙는 줄은 그 2칸만큼 들여쓰기를 당겨 이름이 다른 줄과 같은 열에서 시작하게 한다.
+    const markIndent = (isCurrent || atHead) ? Math.max(0, indent - 2) : indent;
     if (isCurrent) {
       // \ud604\uc7ac \ube0c\ub79c\uce58\ub294 Hide \ub300\uc0c1\uc774 \uc544\ub2c8\ub2e4(\uba54\ub274\uc5d0 \ud56d\ubaa9\uc744 \ub0b4\uc9c0 \uc54a\ub294\ub2e4) \u2014 Filter \ub9cc \ubc18\uc601\ud55c\ub2e4.
       // \u2713 \ub294 \uadf8\ub300\ub85c \ub450\ubbc0\ub85c \uc0c9\uc774 \ubc14\ub00c\uc5b4\ub3c4 \uc5b4\ub514\uc5d0 \uc788\ub294\uc9c0\ub294 \uacc4\uc18d \ubcf4\uc778\ub2e4.
       const curClr = filtered ? colors.filtered : colors.green;
-      const content = ' '.repeat(indent) + curClr + ansi.bold + '\u2713 ' + truncate(name, Math.max(1, maxW - 2)) + ansi.reset + abPart + tagPart;
+      const content = ' '.repeat(markIndent) + curClr + ansi.bold + '\u2713 ' + truncate(name, maxW) + ansi.reset + abPart + tagPart;
       return isActive ? rowBg(content, colors.cursorBg) : content;
     } else {
       // 다른 워크트리가 점유한 브랜치는 [worktree] 표기와 같은 색으로 구분한다.
@@ -1484,7 +1496,10 @@ function buildLeftPanel(w, h) {
         : pinned ? colors.pinned
         : isRemote ? colors.red : colors.value;
       const emph = (pinned && !hidden) ? ansi.bold : '';
-      const content = ' '.repeat(indent) + clr + emph + truncate(name, maxW) + ansi.reset + abPart + tagPart;
+      // 마커는 그 줄의 이름 색을 그대로 쓴다 — 흐리게 하면 정작 마커가 안 보인다.
+      // 체크아웃한 브랜치와는 초록·bold 로 갈리므로 같은 글리프여도 강도가 구분된다.
+      const markPart = atHead ? clr + '\u2713 ' + ansi.reset : '';
+      const content = ' '.repeat(markIndent) + markPart + clr + emph + truncate(name, maxW) + ansi.reset + abPart + tagPart;
       return isActive ? rowBg(content, colors.cursorBg) : content;
     }
   }
@@ -1520,7 +1535,7 @@ function buildLeftPanel(w, h) {
         for (const b of pinned) {
           // 핀은 눈에 잘 띄라고 모아 둔 목록이니, 현재 브랜치처럼 @리모트와 push/pull
           // 대기 수까지 붙여 여기만 보고도 상태를 알 수 있게 한다.
-          pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
+          pushLine(branchLine(4, b.name, b.name, b.isCurrent, false,
             b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
             branchTrackParts(b)), { action: 'goto-branch', branch: b.name, refKey: localRefKey(b.name) });
         }
@@ -1564,7 +1579,7 @@ function buildLeftPanel(w, h) {
           for (const item of items) {
             const fullName = prefix + '/' + item.shortName;
             if (revealTarget && fullName === revealTarget) revealLineIdx = lines.length;
-            pushLine(branchLine(item.isCurrent ? 4 : 6, item.shortName, fullName, item.isCurrent, false,
+            pushLine(branchLine(6, item.shortName, fullName, item.isCurrent, false,
               item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName),
               isPinnedBranch(fullName) ? branchTrackParts(item) : null), { action: 'goto-branch', branch: fullName, refKey: localRefKey(fullName) });
           }
@@ -1572,7 +1587,7 @@ function buildLeftPanel(w, h) {
       }
       for (const b of topLevel) {
         if (revealTarget && b.name === revealTarget) revealLineIdx = lines.length;
-        pushLine(branchLine(b.isCurrent ? 2 : 4, b.name, b.name, b.isCurrent, false,
+        pushLine(branchLine(4, b.name, b.name, b.isCurrent, false,
           b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
           isPinnedBranch(b.name) ? branchTrackParts(b) : null), { action: 'goto-branch', branch: b.name, refKey: localRefKey(b.name) });
       }

@@ -1170,7 +1170,9 @@ async function refreshAsync(options = {}) {
   // upstream:track / trackshort까지 함께 받아 브랜치별 ahead/behind를 얻는다. 같은
   // for-each-ref 한 번에 딸려 오므로 spawn이 늘지 않는다 — Pinned 목록이 현재 브랜치처럼
   // push/pull 대기 수를 보여주는 데 쓴다.
-  const refsFormat = "%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)";
+  // objectname(브랜치 tip 커밋)도 같은 이유로 여기 얹는다 — 현재 브랜치와 같은 리비전에
+  // 놓인 브랜치를 왼쪽 목록에서 표시하는 데 쓴다(rev-parse를 따로 돌리지 않는다).
+  const refsFormat = "%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)\t%(objectname)";
   const sepLocal = (process.platform === 'win32') ? '\\' : '/';
   const gitDirPromise = (state.gitDir && state.gitCommonDir)
     ? Promise.resolve(state.gitDir)
@@ -1276,7 +1278,7 @@ async function refreshAsync(options = {}) {
         const isCurrent = headMark === '*';
         if (isCurrent) currentBranch = name;
         const track = parseUpstreamTrack(parts[3] || '', parts[4] || '');
-        branches.push({ name, isCurrent, upstream, ahead: track.ahead, behind: track.behind, upstreamGone: track.gone });
+        branches.push({ name, isCurrent, upstream, ahead: track.ahead, behind: track.behind, upstreamGone: track.gone, hash: parts[5] || '' });
       } else if (refname.startsWith('refs/remotes/')) {
         const name = refname.substring('refs/remotes/'.length);
         if (name.includes('/HEAD')) continue;

@@ -15,14 +15,14 @@ const { refreshAsync } = require('../refresh');
 
 const SEP = (process.platform === 'win32') ? '\\' : '/';
 
-// for-each-ref --format='%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)'
+// for-each-ref --format='%(HEAD)\t%(refname)\t%(upstream:short)\t%(upstream:track)\t%(upstream:trackshort)\t%(objectname)'
 // 브랜치별 추적 상태(ahead/behind/gone)는 이 한 번의 조회에서 함께 받는다 — Pinned 목록과
 // 힌트바가 현재 브랜치가 아닌 브랜치에도 push/pull 대기 수를 보여주는 근거다.
 const REFS_RAW = [
-  '*\trefs/heads/work5\torigin/work5\t[ahead 2]\t>',
-  '\trefs/heads/dev\torigin/dev\t[ahead 1, behind 4]\t<>',
-  '\trefs/heads/stale\torigin/stale\t[gone]\t',
-  '\trefs/heads/solo\t\t\t',
+  '*\trefs/heads/work5\torigin/work5\t[ahead 2]\t>\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  '\trefs/heads/dev\torigin/dev\t[ahead 1, behind 4]\t<>\tbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  '\trefs/heads/stale\torigin/stale\t[gone]\t\tcccccccccccccccccccccccccccccccccccccccc',
+  '\trefs/heads/solo\t\t\t\tdddddddddddddddddddddddddddddddddddddddd',
   '\trefs/remotes/origin/dev\t\t\t',
   '\trefs/remotes/origin/HEAD\t\t\t',
 ].join('\n') + '\n';

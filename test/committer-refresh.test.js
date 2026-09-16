@@ -22,7 +22,7 @@ function installHost(cwd) {
     const joined = args.join(' ');
     if (joined.includes('for-each-ref')) {
       host.refsCalls++;
-      return { ok: true, exit_code: 0, stdout: '*\trefs/heads/main\t\t\t\n' };
+      return { ok: true, exit_code: 0, stdout: '*\trefs/heads/main\t\t\t\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' };
     }
     if (joined.includes('worktree list')) {
       return {
