@@ -318,7 +318,7 @@ function buildDirContextMenuItems(dirItem, selection) {
   if (dirs.length === 0) dirs.push(dirItem);
   const files = expandFileTargets(rows);
 
-  const canStage = files.some(f => f.type !== 'staged' && f.type !== 'ignored');
+  const canStage = files.some(f => f.type !== 'staged');
   const canUnstage = files.some(f => f.type === 'staged');
   const canDiscard = files.some(f => f.type !== 'ignored');
 

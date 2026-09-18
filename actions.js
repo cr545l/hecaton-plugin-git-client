@@ -545,7 +545,7 @@ const EXTRA_RULES = {
   unstageAll: (s) => (s.staged > 0 ? null : REASON.NO_UNSTAGEABLE),
   stageSelected: () => (stageableTargets().length > 0 ? null : REASON.NO_STAGEABLE),
   unstageSelected: () => (unstageableTargets().length > 0 ? null : REASON.NO_UNSTAGEABLE),
-  file_stage: (s, extra) => (targetsOf(extra).some(t => t && t.type !== 'staged' && t.type !== 'ignored') ? null : REASON.NO_STAGEABLE),
+  file_stage: (s, extra) => (targetsOf(extra).some(t => t && t.type !== 'staged') ? null : REASON.NO_STAGEABLE),
   file_unstage: (s, extra) => (targetsOf(extra).some(t => t && t.type === 'staged') ? null : REASON.NO_UNSTAGEABLE),
   file_stage_all: (s) => (s.unstaged + s.untracked > 0 ? null : REASON.NO_STAGEABLE),
 
@@ -618,9 +618,9 @@ function selectedTargets() {
   return require('./refresh').expandFileTargets(selectedRows());
 }
 
-// ignored 파일은 git add 가 거부하므로 스테이징 대상에서 뺀다.
+// 명시적으로 선택한 ignored 파일도 git add -f 로 담을 수 있다.
 function stageableTargets() {
-  return selectedTargets().filter(t => t.type !== 'staged' && t.type !== 'ignored');
+  return selectedTargets().filter(t => t.type !== 'staged');
 }
 
 function unstageableTargets() {

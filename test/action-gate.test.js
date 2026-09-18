@@ -207,12 +207,15 @@ test('커서가 가리키는 파일에 따라 Stage / Unstage 가 갈린다', ()
   assert.equal(isEnabled('unstageSelected'), true);
 });
 
-test('ignored 파일은 스테이징 대상으로 치지 않는다', () => {
-  // git add 가 거부하는 대상이라, 버튼이 살아 있으면 눌러도 실패만 한다.
+test('ignored 파일은 선택 스테이징만 허용하고 전체 스테이징에서는 제외한다', () => {
   idle({ staged: [], unstaged: [], untracked: [], ignored: [{ status: '!', file: 'build.log' }] });
   ui.collapsedSections.ignored = false;
   state.cursor = 0;
-  assert.equal(disabledReason('stageSelected'), actions.REASON.NO_STAGEABLE);
+  assert.equal(isEnabled('stageSelected'), true);
+  assert.equal(isEnabled('file_stage'), true);
+  assert.deepEqual(actions.stageableTargets().map(item => item.file), ['build.log']);
+  assert.equal(disabledReason('stageAll'), actions.REASON.NO_STAGEABLE);
+  assert.equal(disabledReason('file_stage_all'), actions.REASON.NO_STAGEABLE);
   ui.collapsedSections = {};
 });
 
