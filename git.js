@@ -108,8 +108,7 @@ async function gitMutation(args, cwd, timeout, fallback) {
   } catch (e) {
     result = { ok: false, error: e };
   }
-  const succeeded = !!(result && result.ok && (result.exit_code === undefined || result.exit_code === 0));
-  return succeeded ? null : formatGitFailure(result, fallback, timeoutMs);
+  return gitProcessSucceeded(result) ? null : formatGitFailure(result, fallback, timeoutMs);
 }
 
 function unquoteGitPath(p) {
@@ -585,7 +584,9 @@ const gitRebaseState = gitOperationState; // backward compat
 
 async function gitRunOrError(args, cwd, timeout, errorMsg) {
   const r = await gitResult(args, cwd, timeout || 30000);
-  if (r && r.ok && r.exit_code === 0) return null;
+  // 성공 판정은 gitProcessSucceeded 한 곳에만 둔다. exit_code 를 안 주는 호스트에서
+  // `exit_code === 0` 을 직접 보면 성공한 명령까지 실패로 읽혀 오류 창이 뜬다.
+  if (gitProcessSucceeded(r)) return null;
   const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';
   const stdout = r && r.stdout ? r.stdout.replace(/\r\n/g, '\n').trim() : '';
   return stderr || stdout || errorMsg;
@@ -869,7 +870,7 @@ async function gitPush(cwd) { return await gitRunOrError(['push'], cwd, 30000, t
 // but we wrap in Promise to keep the same API for spinner-compatible callers.
 async function gitAsyncWrap(args, cwd, timeout) {
   const r = await gitResult(args, cwd, timeout || 30000);
-  if (r && r.ok && r.exit_code === 0) return null;
+  if (gitProcessSucceeded(r)) return null;
   // rebase/merge 계열은 실패 사유를 stdout 으로만 내보내는 경우가 있다.
   // stderr 가 비었다고 'Operation failed' 로 뭉개지 말고 stdout 을 쓴다.
   const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';

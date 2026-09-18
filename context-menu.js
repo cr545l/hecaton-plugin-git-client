@@ -89,7 +89,7 @@ const {
 } = require('./git');
 const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock, invalidateCommitterCache, expandFileTargets, setFileTreeView } = require('./refresh');
 const { render } = require('./render');
-const { startSpinner, updateSpinner, stopSpinner } = require('./spinner');
+const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
 // 메뉴를 만들 때(decorateMenuItems)와 실행할 때(guardAction)가 같은 표를 보므로,
 // "메뉴에선 살아 있는데 눌러도 안 되는" 어긋남이 생기지 않는다.
@@ -721,11 +721,7 @@ async function runBranchNetworkAction(payload) {
     showError(e.message || String(e));
     return;
   } finally { stopSpinner(op); }
-  if (action !== 'ff' || failures.length) {
-    hecaton.dialog.show({ type: 'message', title: opName,
-      message: t('menu.branches.result', { succeeded, failed: failures.length }) + (failures.length ? '\n\n' + failures.join('\n\n') : ''),
-      buttons: [{ id: 'ok', label: 'OK', default: true }] });
-  }
+  reportBatchResult(opName, succeeded, failures);
   render();
 }
 
@@ -769,11 +765,22 @@ async function deleteSelectedBranches(target) {
   } finally {
     stopSpinner(op);
   }
-  hecaton.dialog.show({ type: 'message', title: t('menu.branches.delete'),
-    message: t('menu.branches.result', { succeeded, failed: failures.length }) +
-      (failures.length ? '\n\n' + failures.join('\n\n') : ''),
-    buttons: [{ id: 'ok', label: 'OK', default: true }] });
+  reportBatchResult(t('menu.branches.delete'), succeeded, failures);
   render();
+}
+
+// 여러 건을 한 번에 도는 작업의 결과 보고. 전부 성공했으면 확인을 받을 것이 없으므로
+// 힌트바에 잠깐 띄우고 넘어가고, 한 건이라도 실패했을 때만 무엇이 왜 실패했는지
+// 읽고 닫아야 하는 다이얼로그로 알린다.
+function reportBatchResult(opName, succeeded, failures) {
+  const summary = t('menu.branches.result', { succeeded, failed: failures.length });
+  if (!failures.length) {
+    showToast(opName + ' — ' + summary);
+    return;
+  }
+  hecaton.dialog.show({ type: 'message', title: opName,
+    message: summary + '\n\n' + failures.join('\n\n'),
+    buttons: [{ id: 'ok', label: 'OK', default: true }] });
 }
 
 function buildBranchContextMenuItems(branchName) {
@@ -1254,7 +1261,7 @@ untrackedCount + t('menu.untracked'),
         const raw = await gitFilePatch(state.cwd, { ...fileItem, type: 'unstaged' });
         if (raw) {
           copyToClipboard(raw);
-          showError(t('menu.patchCopiedClipboard'));
+          showToast(t('menu.patchCopiedClipboard'));
         } else {
           showError(t('menu.noDiffWithHead'));
         }
@@ -1264,7 +1271,7 @@ untrackedCount + t('menu.untracked'),
         const raw = await gitFilePatch(state.cwd, { ...fileItem, type: 'staged' });
         if (raw) {
           copyToClipboard(raw);
-          showError(t('menu.indexDiffCopiedClipboard'));
+          showToast(t('menu.indexDiffCopiedClipboard'));
         } else {
           showError(t('menu.noDiffWithIndex'));
         }
@@ -1280,7 +1287,7 @@ untrackedCount + t('menu.untracked'),
         const raw = await gitBlameFile(state.cwd, fileItem.file);
         if (raw) {
           copyToClipboard(raw);
-          showError(t('menu.blameCopiedClipboard'));
+          showToast(t('menu.blameCopiedClipboard'));
         } else {
           showError(t('menu.blameNotAvailableThisFile'));
         }
@@ -1290,7 +1297,7 @@ untrackedCount + t('menu.untracked'),
         const raw = await gitFileHistory(state.cwd, fileItem.file);
         if (raw) {
           copyToClipboard(raw);
-          showError(t('menu.historyCopiedClipboard'));
+          showToast(t('menu.historyCopiedClipboard'));
         } else {
           showError(t('menu.noHistoryThisFile'));
         }
@@ -1451,7 +1458,7 @@ untrackedCount + t('menu.untracked'),
         }
         if (patches.length > 0) {
           copyToClipboard(patches.join('\n\n'));
-          showError(t('menu.patchCopiedClipboard'));
+          showToast(t('menu.patchCopiedClipboard'));
         } else {
           showError(t('menu.noPatchThisFile'));
         }
@@ -2140,7 +2147,7 @@ untrackedCount + t('menu.untracked'),
       const patch = await gitFormatPatch(state.cwd, hash);
       if (patch) {
         copyToClipboard(patch);
-        showError(t('menu.patchCopiedClipboard'));
+        showToast(t('menu.patchCopiedClipboard'));
       } else {
         showError(t('menu.failedGeneratePatch'));
       }

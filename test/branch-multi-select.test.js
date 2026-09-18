@@ -327,6 +327,22 @@ test('real Git deletion keeps unmerged branches and aggregates partial failure',
   assert.equal(state.spinnerActive, false);
 });
 
+test('deletion that fully succeeds reports through the hint bar, not a dialog', async () => {
+  setup(); const cwd = await repo();
+  git(cwd, 'branch', 'c'); // main 과 같은 자리 — a 와 함께 둘 다 지워진다.
+  state.branches = await gitBranches(cwd);
+  target(local('a'), local('c'));
+  await handleContextMenuAction('branch_delete');
+  assert.equal(state.pendingDialogAction, 'delete-branches');
+  dialogs.length = 0; // 확인창은 지우고, 결과 보고만 본다.
+  await handleDialogResult({ button_id: 'delete' });
+  assert.equal(git(cwd, 'branch', '--list', 'a'), '');
+  assert.equal(git(cwd, 'branch', '--list', 'c'), '');
+  assert.equal(dialogs.length, 0);
+  assert.match(state.error, /Succeeded: 2 \/ Failed: 0/);
+  assert.equal(state.spinnerActive, false);
+});
+
 test('confirmation rechecks external checkout before deleting any target', async () => {
   setup(); const cwd = await repo();
   target(local('a'), local('b'));
@@ -453,7 +469,9 @@ test('batch Push and Fast-forward use each upstream and preserve the checked-out
   assert.equal(git(origin, 'rev-parse', 'refs/heads/topic/a'), next.a);
   assert.equal(git(backup, 'rev-parse', 'refs/heads/topic/b'), next.b);
   assert.equal(git(origin, 'branch', '--list', 'a'), '');
-  assert.match(dialogs.at(-1).message, /Succeeded: 2 \/ Failed: 0/);
+  // 전부 성공했으면 확인창 없이 힌트바로만 알린다.
+  assert.equal(dialogs.length, 0);
+  assert.match(state.error, /Succeeded: 2 \/ Failed: 0/);
   for (const name of ['a', 'b']) git(cwd, 'branch', '-f', name, previous[name]);
   state.branches = await gitBranches(cwd);
   commands.length = 0;
