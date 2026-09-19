@@ -11,6 +11,7 @@ const FRESH_TIME_WINDOWS = [
   { get label() { return t('refresh.90Days'); }, days: 90 },
 ];
 const FRESH_LOG_MAX_COUNT = 1000;
+const perms = require('./permissions');
 const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner, beginPanelLoading, endPanelLoading, startSettleOp, endSettleOp } = require('./spinner');
 const { applyWindowTitle } = require('./title');
@@ -1041,7 +1042,7 @@ async function refreshAsync(options = {}) {
   // 첫 refresh나 repo 미확인 상태에서만 rev-parse 수행 — status/diff 결과로 실제 repo 여부가 다시 검증됨.
   // is-inside-work-tree와 git-dir을 한 번에 가져와 이후 Promise.all에서 git-dir 호출을 생략한다.
   if (!state.isGitRepo) {
-    const preCheck = await hecaton.process.exec({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir', '--git-common-dir'], cwd: state.cwd, timeout_ms: 5000 });
+    const preCheck = await perms.execGit({ program: 'git', args: ['--no-optional-locks', 'rev-parse', '--is-inside-work-tree', '--git-dir', '--git-common-dir'], cwd: state.cwd, timeout_ms: 5000 });
     const preLines = preCheck ? (preCheck.stdout || '').replace(/\r\n/g, '\n').split('\n') : [];
     const insideWorkTree = (preLines[0] || '').trim();
     const preGitDir = (preLines[1] || '').trim();

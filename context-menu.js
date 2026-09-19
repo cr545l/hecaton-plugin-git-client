@@ -1,4 +1,5 @@
 const { t } = require('./i18n');
+const perms = require('./permissions');
 const branchSelection = require('./branch-selection');
 const {
   state, ui, isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
@@ -894,7 +895,8 @@ async function handleContextMenuAction(actionId) {
   }
 
   if (actionId === 'tab_apply_patch') {
-    const clip = await hecaton.clipboard.read().catch(() => null);
+    const clip = await perms.clipboardRead('permission.reason.clipboardRead', 'permission.denied.clipboardRead');
+    if (clip && clip.error_code === 'access_denied') return;  // 거부는 토스트로 이미 알렸다
     const patchText = clip && clip.text ? clip.text : '';
     if (!patchText.trim() || !/^(diff --git |From [0-9a-f]{40} |--- )/m.test(patchText)) {
       showError(t('menu.clipboardDoesNotContainPatchCopy'));
@@ -1144,7 +1146,8 @@ untrackedCount + t('menu.untracked'),
         break;
       case 'worktree_open_explorer':
         // 워크트리 경로는 파일이 아니라 디렉터리이므로 그대로 연다.
-        if (wtPath) hecaton.overlay.open({ plugin_id: 'dev.hecaton.explorer', params: { path: wtPath } }).catch(() => null);
+        if (wtPath) perms.openOverlay({ plugin_id: 'dev.hecaton.explorer', params: { path: wtPath } },
+          'permission.reason.openTab', 'permission.denied.openTab');
         break;
       case 'worktree_copy_path':
         if (wtPath) copyToClipboard(wtPath);
@@ -1225,7 +1228,8 @@ untrackedCount + t('menu.untracked'),
         break;
       }
       case 'dir_open_explorer': {
-        hecaton.overlay.open({ plugin_id: 'dev.hecaton.explorer', params: { path: ui.contextMenuFilePath } }).catch(() => null);
+        perms.openOverlay({ plugin_id: 'dev.hecaton.explorer', params: { path: ui.contextMenuFilePath } },
+          'permission.reason.openTab', 'permission.denied.openTab');
         break;
       }
     }
@@ -1480,7 +1484,8 @@ untrackedCount + t('menu.untracked'),
       }
       case 'file_open_explorer': {
         const dir = fullPath.substring(0, fullPath.replace(/\\/g, '/').lastIndexOf('/')) || state.cwd;
-        hecaton.overlay.open({ plugin_id: 'dev.hecaton.explorer', params: { path: dir } }).catch(() => null);
+        perms.openOverlay({ plugin_id: 'dev.hecaton.explorer', params: { path: dir } },
+          'permission.reason.openTab', 'permission.denied.openTab');
         break;
       }
     }
@@ -3317,7 +3322,7 @@ function showForceDeleteBranchDialog(branchName, err) {
 }
 
 function copyToClipboard(text) {
-  hecaton.clipboard.write({ text }).catch(() => null);
+  perms.clipboardWrite(text, 'permission.reason.clipboardWrite', 'permission.denied.clipboardWrite');
 }
 
 async function openExternal(fullPath) {
@@ -3330,8 +3335,10 @@ async function openExternal(fullPath) {
     } else {
       program = 'xdg-open'; args = [fullPath];
     }
-    const r = await hecaton.process.exec({ program, args, timeout_ms: 5000 });
+    // 거부는 호출부가 이미 띄우는 실패 메시지로 알린다 — 토스트까지 겹치면 같은 말을 두 번 한다.
+    const r = await perms.exec({ program, args, timeout_ms: 5000 }, 'permission.reason.openExternal');
     if (r && r.ok) return null;
+    if (r && r.error_code === 'access_denied') return t('permission.denied.openExternal');
     return (r && r.error) || t('menu.failedOpenFile');
   } catch (e) {
     return e.message || t('menu.failedOpenFile');

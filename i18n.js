@@ -56,6 +56,13 @@ function t(key, args) {
     Object.prototype.hasOwnProperty.call(args, name) ? String(args[name]) : whole);
 }
 
+// 호스트가 직접 언어를 고르는 API(permissions.request 의 reason 등)에는 번역을 통째로 넘긴다.
+// t() 로 한 언어만 골라 보내면 호스트에 설정된 플러그인 언어가 우리와 다를 때 엉뚱한 언어가 뜬다.
+function translations(key) {
+  return Object.fromEntries(Object.entries(CATALOGS).map(([tag, catalog]) =>
+    [tag, catalog[key] ?? CATALOGS[FALLBACK][key] ?? key]));
+}
+
 // 영어 원문을 그대로 얻는다 — 번역된 라벨과 별개로 검색어를 영문으로도 받기 위한 뒷문.
 function english(key) {
   const value = CATALOGS[FALLBACK][key];
@@ -68,6 +75,7 @@ function has(key) {
 
 module.exports = {
   t,
+  translations,
   english,
   has,
   setLocale,

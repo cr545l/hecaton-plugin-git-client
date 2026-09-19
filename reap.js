@@ -1,4 +1,5 @@
 const { t } = require('./i18n');
+const perms = require('./permissions');
 // 폴링용으로 스폰한 git 프로세스가 부모가 사라진 뒤에도 남는 경우가 있다.
 // 하나하나는 유휴 상태지만 며칠 단위로 쌓이면 핸들과 메모리를 계속 물고 있고,
 // .git 을 열어둔 채 남으면 뒤따르는 git 명령과 경합한다.
@@ -12,6 +13,9 @@ const { t } = require('./i18n');
 //   3. 생성 시각을 못 읽으면 건드리지 않을 것 — 나이를 모르면 판단도 없다
 // 조건 하나라도 못 맞추면 그냥 두고 넘어간다. 정리는 어디까지나 덤이고,
 // 살아 있는 남의 git을 죽이는 쪽이 훨씬 비싼 실수다.
+//
+// 권한 팝업에는 사유를 붙이되(왜 powershell 이 뜨는지는 읽혀야 한다) 거부는 조용히
+// 받아들인다 — 사용자가 시킨 적 없는 뒷정리의 실패를 토스트로 알릴 이유가 없다.
 
 // 정상 폴링은 exec 타임아웃(5초) 안에 끝난다. 이 나이를 넘겼다면 회수되지 못한 것이다.
 const MIN_AGE_MS = 5 * 60 * 1000;
@@ -100,11 +104,11 @@ async function reapOrphanedPollProcesses(coordinate) {
 
   let listed;
   try {
-    listed = await hecaton.process.exec({
+    listed = await perms.exec({
       program: 'powershell',
       args: ['-NoProfile', '-NonInteractive', '-Command', LIST_SCRIPT],
       timeout_ms: 15000,
-    });
+    }, 'permission.reason.reap');
   } catch { return 0; }
   if (!listed || !listed.ok || !listed.stdout) return 0;
 
@@ -121,7 +125,7 @@ async function reapOrphanedPollProcesses(coordinate) {
   for (const pid of targets) args.push('/PID', String(pid));
   args.push('/F');
   try {
-    await hecaton.process.exec({ program: 'taskkill', args, timeout_ms: 10000 });
+    await perms.exec({ program: 'taskkill', args, timeout_ms: 10000 }, 'permission.reason.reap');
   } catch { return 0; }
 
   console.log('[git-client] reaped ' + targets.length + ' orphaned poll process(es)');  // i18n-ok: console 로그(사용자 UI 아님)

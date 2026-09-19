@@ -1,4 +1,5 @@
 const { t } = require('./i18n');
+const perms = require('./permissions');
 const { ESC, CSI, ansi } = require('./ansi');
 const { state, ui } = require('./state');
 const branchSelection = require('./branch-selection');
@@ -918,7 +919,7 @@ function handleCommitInput(key) {
   // Ctrl+V / Cmd+V — Paste from clipboard
   if (key === '\x16' || key === CSI + '118;9u') {
     (async () => {
-      const result = await hecaton.clipboard.read().catch(() => null);
+      const result = await perms.clipboardRead('permission.reason.clipboardRead', 'permission.denied.clipboardRead');
       if (result && result.text) {
         const clean = result.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         state.commitMsg = state.commitMsg.substring(0, state.commitCursor) + clean + state.commitMsg.substring(state.commitCursor);
@@ -1170,7 +1171,7 @@ async function handleNameInput(key) {
   // Ctrl+V / Cmd+V — Paste from clipboard
   if (key === '\x16' || key === CSI + '118;9u') {
     (async () => {
-      const result = await hecaton.clipboard.read().catch(() => null);
+      const result = await perms.clipboardRead('permission.reason.clipboardRead', 'permission.denied.clipboardRead');
       if (result && result.text) {
         state.inputBuffer += result.text.replace(/[\r\n]/g, '');
         render();
@@ -2458,7 +2459,7 @@ async function handleMouseData(data) {
               const relCol = cx - rightStart;
               for (const zone of ui.detailCopyZones) {
                 if (bodyRowIdx === zone.lineIdx && relCol >= zone.colStart && relCol <= zone.colEnd) {
-                  hecaton.clipboard.write({ text: zone.text }).catch(() => null);
+                  perms.clipboardWrite(zone.text, 'permission.reason.clipboardWrite', 'permission.denied.clipboardWrite');
                   // 복사는 쓰기 작업이 아니다 — spinner 대신 비차단 토스트로 알린다.
                   showToast(t('input.copied') + zone.text);
                   state.focusPanel = 'diff';

@@ -2,6 +2,7 @@
 // No direct child_process or fs usage — all operations go through host permission system.
 
 const { t } = require('./i18n');
+const perms = require('./permissions');
 const nodePath = require('path');
 const coordinate = require('./coordinate');
 
@@ -17,7 +18,7 @@ function gitProcessSucceeded(result) {
 }
 
 async function gitExec(args, cwd, timeout) {
-  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (result && result.ok) {
     return (result.stdout || '').replace(/\r\n/g, '\n');
   } else {
@@ -29,7 +30,7 @@ async function gitExec(args, cwd, timeout) {
 // "명령이 실패해 아무것도 못 읽었다"를 구분해야 하는 호출자는 이 쪽을 쓴다.
 // 예: for-each-ref가 실패했을 때 브랜치 목록을 빈 배열로 덮어쓰면 브랜치가 통째로 사라진다.
 async function gitExecChecked(args, cwd, timeout) {
-  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   const ok = gitProcessSucceeded(result);
   const exitCode = result && result.exit_code !== undefined
     ? result.exit_code
@@ -38,7 +39,7 @@ async function gitExecChecked(args, cwd, timeout) {
 }
 
 async function git(args, cwd, timeout) {
-  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (!result || !result.ok) {
     const err = new Error(result ? result.error || 'git failed' : t('git.execProcessFailed'));
     err.stderr = result ? (result.stderr || '') : '';
@@ -50,7 +51,7 @@ async function git(args, cwd, timeout) {
 }
 
 async function gitResult(args, cwd, timeout) {
-  return await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  return await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
 }
 
 const GIT_MUTATION_TIMEOUT_MS = 30000;
@@ -243,7 +244,7 @@ async function resolveWorkTreeRoot(cwd) {
 }
 
 async function gitIsRepo(cwd) {
-  const result = await hecaton.process.exec({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout_ms: 5000 });
+  const result = await perms.execGit({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout_ms: 5000 });
   if (gitProcessSucceeded(result)) return true;
   // Provide diagnostic detail for troubleshooting
   const detail = {};
@@ -385,7 +386,7 @@ async function gitStatusPorcelain(cwd, opts = {}) {
   if (opts.includeBranch === true) args.push('--branch');
   if (showUntracked && includeIgnored) args.push('--ignored');
 
-  const result = await hecaton.process.exec({ program: 'git', args, cwd, timeout_ms: statusTimeout });
+  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: statusTimeout });
   if (!gitProcessSucceeded(result)) {
     if (opts.nullOnError) return null;
     return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };

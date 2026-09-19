@@ -4,7 +4,33 @@
   "icon": "terminal-git-bash",
   "version": "1.5.0",
   "entry": "main.js",
-  "apiVersion": "1.12",
+  "apiVersion": "1.15",
+  "permission_usage_descriptions": {
+    "process_exec": {
+      "en": "Run git to read the status, history and diffs of the repository you opened, and to carry out the actions you pick from the menu.",
+      "ko": "연 저장소의 상태·이력·변경 내용을 읽고 메뉴에서 고른 작업을 수행하기 위해 git 을 실행합니다."
+    },
+    "fs_read": {
+      "en": "Read the repository's git metadata and working tree to show branches, commits, file status and diffs.",
+      "ko": "브랜치·커밋·파일 상태·변경 내용을 보여주기 위해 저장소의 git 메타데이터와 작업 트리를 읽습니다."
+    },
+    "fs_write": {
+      "en": "Write the commit message you typed, the conflict resolutions you chose and this plugin's own saved layout.",
+      "ko": "입력한 커밋 메시지, 선택한 충돌 해결 내용, 이 플러그인이 저장하는 화면 상태를 기록합니다."
+    },
+    "clipboard_read": {
+      "en": "Paste clipboard text into the commit message or name field you are editing.",
+      "ko": "편집 중인 커밋 메시지나 이름 입력란에 클립보드 텍스트를 붙여 넣습니다."
+    },
+    "clipboard_write": {
+      "en": "Copy the commit hash, branch name, file path or diff you picked from the menu.",
+      "ko": "메뉴에서 고른 커밋 해시·브랜치 이름·파일 경로·변경 내용을 복사합니다."
+    },
+    "open_tab": {
+      "en": "Open the file or folder you selected in the file explorer plugin.",
+      "ko": "선택한 파일이나 폴더를 탐색기 플러그인에서 엽니다."
+    }
+  },
   "overlay": {
     "mode": "floating",
     "width": "70%",

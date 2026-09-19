@@ -33,6 +33,7 @@ const tooltip = require('./tooltip');
 const persist = require('./persist');
 const coordinate = require('./coordinate');
 const reap = require('./reap');
+const perms = require('./permissions');
 const path = require('path');
 
 async function main() {
@@ -295,14 +296,14 @@ async function applyGitOptimizations(cwd, gitDir) {
 
   // core.untrackedCache
   try {
-    const cur = await hecaton.process.exec({
+    const cur = await perms.execGit({
       program: 'git', args: ['config', '--local', '--get', 'core.untrackedCache'],
       cwd, timeout_ms: 3000,
     });
     const val = cur && cur.ok ? (cur.stdout || '').replace(/\r\n/g, '\n').trim().toLowerCase() : '';
     // exit_code != 0 이거나 stdout 비어있으면 미설정 → 자동 활성화
     if (val !== 'true' && val !== 'false') {
-      await hecaton.process.exec({
+      await perms.execGit({
         program: 'git', args: ['config', '--local', 'core.untrackedCache', 'true'],
         cwd, timeout_ms: 3000,
       });
@@ -324,7 +325,7 @@ async function applyGitOptimizations(cwd, gitDir) {
     // 잘못 띄우는 쪽이 status가 조금 느린 쪽보다 비싸다.
     if (indexBytes < FSMONITOR_MIN_INDEX_BYTES) return;
 
-    const ver = await hecaton.process.exec({
+    const ver = await perms.execGit({
       program: 'git', args: ['--version'],
       cwd, timeout_ms: 3000,
     });
@@ -336,7 +337,7 @@ async function applyGitOptimizations(cwd, gitDir) {
     const supportsFsmonitor = (major > 2) || (major === 2 && minor >= 37);
     if (!supportsFsmonitor) return;
 
-    const cur = await hecaton.process.exec({
+    const cur = await perms.execGit({
       program: 'git', args: ['config', '--local', '--get', 'core.fsmonitor'],
       cwd, timeout_ms: 3000,
     });
@@ -344,7 +345,7 @@ async function applyGitOptimizations(cwd, gitDir) {
     // 미설정만 자동 활성화. true/false/외부 hook 경로가 잡혀 있으면 그대로 둔다.
     if (val !== '' && val !== 'true' && val !== 'false') return;
     if (val === '') {
-      await hecaton.process.exec({
+      await perms.execGit({
         program: 'git', args: ['config', '--local', 'core.fsmonitor', 'true'],
         cwd, timeout_ms: 3000,
       });
@@ -400,7 +401,7 @@ async function setupGitWatcher() {
     commonDir = state.gitCommonDir;
   } else {
     try {
-      const gitDirResult = await hecaton.process.exec({
+      const gitDirResult = await perms.execGit({
         program: 'git', args: ['rev-parse', '--git-dir', '--git-common-dir'], cwd: state.cwd, timeout_ms: 3000
       });
       if (gitDirResult && gitDirResult.ok && gitDirResult.stdout) {
@@ -478,7 +479,7 @@ async function setupGitWatcher() {
   // ls-files를 따로 걸어 폴링 한 틱마다 프로세스를 두 개 썼다 — 3초마다 상시 도는
   // 경로라, 프로세스 생성이 비싼 환경에서는 여기서 아끼는 하나가 가장 크게 남는다.
   async function buildWorktreeSnapshot() {
-    const result = await hecaton.process.exec({
+    const result = await perms.execGit({
       program: 'git',
       args: ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],
       cwd: state.cwd,
