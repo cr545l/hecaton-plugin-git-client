@@ -55,12 +55,37 @@ function formatWindowTitle() {
 
 // 창 타이틀 반영의 유일한 통로. 스피너가 80ms마다 부르는데 처리상태가 없는 동안에는
 // 같은 문자열이 계속 나오므로, 바뀐 경우에만 호스트로 내보내 RPC를 아낀다.
+//
+// 처리상태가 도는 동안에는 스피너 프레임이 바뀌어 매번 새 문자열이 된다 — 그대로 보내면
+// 인스턴스마다 초당 12번 set_title 이 나갔고, 시작 새로고침(git 호출이 초 단위)이 길어지면
+// 호스트 fast 큐에 3~4초씩 줄이 서서 menu.show 같은 다른 요청까지 밀렸다. 보내는 간격을
+// 늦춘다. 창이 가려져 있어도 멈추지 않는다(탭 제목·작업표시줄에는 계속 보인다) — 간격 안에
+// 들어온 변경은 버리지 않고 간격이 끝날 때 최신 값으로 한 번 보낸다.
+const TITLE_MIN_INTERVAL_MS = 250;
 let _lastTitle = null;
+let _lastSentAt = 0;
+let _flushTimer = null;
+function sendWindowTitle(title) {
+  _lastTitle = title;
+  _lastSentAt = Date.now();
+  hecaton.window.set_title({ title }).catch(() => null);
+}
+function flushWindowTitle() {
+  _flushTimer = null;
+  const title = formatWindowTitle();
+  if (!title || title === _lastTitle) return;
+  sendWindowTitle(title);
+}
 function applyWindowTitle() {
   const title = formatWindowTitle();
   if (!title || title === _lastTitle) return;
-  _lastTitle = title;
-  hecaton.window.set_title({ title }).catch(() => null);
+  const wait = _lastSentAt + TITLE_MIN_INTERVAL_MS - Date.now();
+  if (wait > 0) {
+    // 예약 시점이 아니라 발화 시점의 타이틀을 보낸다 — 그 사이 바뀐 값을 놓치지 않는다.
+    if (!_flushTimer) _flushTimer = setTimeout(flushWindowTitle, wait);
+    return;
+  }
+  sendWindowTitle(title);
 }
 
 module.exports = { getLocalChangeCount, formatWindowTitle, formatProgressStatus, applyWindowTitle, BRAILLE_FRAMES };
