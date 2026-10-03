@@ -1598,8 +1598,11 @@ function buildLeftPanel(w, h) {
   {
     const collapsed = !!ui.collapsedSections.remotes;
     pushLine(colors.sectionHeader + ansi.bold + ' ' + (collapsed ? ARROW_CLOSED : ARROW_OPEN) + t('ui.remotes') + ansi.reset, { action: 'toggle-section', section: 'remotes' });
-    if (!collapsed && state.remoteBranches.length > 0) {
+    if (!collapsed && (state.remoteBranches.length > 0 || state.remotes.length > 0)) {
       const remoteGroups = new Map();
+      // 막 추가했거나 아직 fetch/push 하지 않은 리모트는 원격 브랜치가 없다 — 브랜치로만
+      // 묶으면 목록에서 사라져 우클릭(Prune/Rename/Remove …)할 자리도 없어진다.
+      for (const remote of state.remotes) remoteGroups.set(remote, []);
       for (const rb of state.remoteBranches) {
         const slashIdx = rb.indexOf('/');
         if (slashIdx >= 0) {
