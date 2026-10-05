@@ -2580,8 +2580,11 @@ function buildLogPanel(w, h) {
   // 커밋 헤더는 바로 나오고 본문/패치는 늦게 온다 — 그 사이 상세 끝에 스피너를 붙인다.
   // 스크롤 한계도 이 목록에서 나오므로 원본에 얹어 두고 한 번에 계산한다.
   const detailSpin = panelLoadingLabel('logDetail', t('ui.loadingDiff'));
-  const detailSource = detailSpin ? [...state.logDetailLines, '', detailSpin] : state.logDetailLines;
-  const filteredDetail = filterLogDetailLines(detailSource, ui.collapsedDetailFiles);
+  const detail = getLogDetailLayout(state.logDetailLines, ui.collapsedDetailFiles);
+  // Animation is presentation state; it must not invalidate the parsed patch.
+  const filteredDetail = detailSpin ? detail.lines.concat([
+    { text: '', inDiff: false }, { text: detailSpin, inDiff: false },
+  ]) : detail.lines;
   ui.filteredDetailCount = filteredDetail.length;
 
   // Pre-calculate detail scroll pct for separator. Display only — the
@@ -2618,10 +2621,7 @@ function buildLogPanel(w, h) {
     } else {
       const refsRaw = selItem && selItem.decoration ? selItem.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
       // Collapse/Expand All button
-      const allDetailFiles = [];
-      for (const entry of filteredDetail) {
-        if (entry.isFileHeader) allDetailFiles.push(entry.file);
-      }
+      const allDetailFiles = detail.files;
       const hasFiles = allDetailFiles.length > 0;
       const allCollapsed = hasFiles && allDetailFiles.every(f => ui.collapsedDetailFiles.has(f));
       const collapseLabel = hasFiles ? (allCollapsed ? t('ui.expandAll') : t('ui.collapseAll')) : '';
@@ -2676,16 +2676,9 @@ function buildLogPanel(w, h) {
       let cH = detailH - 1;
 
       // Compute horizontal scroll for log detail
-      const logDetailGutterW = filteredDetail.maxLine > 0 ? String(filteredDetail.maxLine).length * 2 + 2 : 0;
+      const logDetailGutterW = detail.lines.maxLine > 0 ? String(detail.lines.maxLine).length * 2 + 2 : 0;
       const logDetailContentW = innerW - (logDetailGutterW > 0 ? logDetailGutterW : 1);
-      let logDetailMaxLineW = 0;
-      for (const entry of filteredDetail) {
-        if (entry.isFileHeader) logDetailMaxLineW = Math.max(logDetailMaxLineW, visLen(' - ' + entry.file));
-        if (entry.text && !entry.isFileHeader && !isDiffMetaLine(entry.text.replace(/[\r\n]/g, ''))) {
-          const lw = visLen(expandDiffTabs(entry.text.replace(/[\r\n]/g, '')));
-          if (lw > logDetailMaxLineW) logDetailMaxLineW = lw;
-        }
-      }
+      const logDetailMaxLineW = Math.max(detail.maxWidth, detailSpin ? visLen(detailSpin) : 0);
       const logDetailMaxScrollX = Math.max(0, logDetailMaxLineW - logDetailContentW);
       const canvasW = innerW + logDetailMaxScrollX;
       ui.logDetailMaxScrollX = logDetailMaxScrollX;
@@ -2728,7 +2721,7 @@ function buildLogPanel(w, h) {
 
       const detailRegionRelRow = lines.length;
       const visible = filteredDetail.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
-      const numW = filteredDetail.maxLine > 0 ? String(filteredDetail.maxLine).length : 0;
+      const numW = detail.lines.maxLine > 0 ? String(detail.lines.maxLine).length : 0;
       const gutterW = numW > 0 ? numW * 2 + 2 : 0;
       // lineIdx = -1: overscan bank row (skip zone registration / hover)
       function renderDetailRow(entry, lineIdx) {
@@ -3698,6 +3691,33 @@ function annotateDiffLineNumbers(lines) {
   }
   result.maxLine = maxLine;
   return result;
+}
+
+// refresh.js replaces logDetailLines when a new patch arrives. Keep only that
+// patch's layout, so hover, scrolling and spinner frames do not rescan every
+// character. Snapshot the mutable collapse set, including same-size changes.
+let logDetailLayoutCache = null;
+function getLogDetailLayout(lines, collapsedFiles) {
+  const cached = logDetailLayoutCache;
+  if (cached && cached.source === lines && cached.sourceLength === lines.length &&
+      cached.collapsed.length === collapsedFiles.size &&
+      cached.collapsed.every(file => collapsedFiles.has(file))) return cached;
+
+  const filtered = filterLogDetailLines(lines, collapsedFiles);
+  const files = [];
+  let maxWidth = 0;
+  for (const entry of filtered) {
+    if (entry.isFileHeader) {
+      files.push(entry.file);
+      maxWidth = Math.max(maxWidth, visLen(' - ' + entry.file));
+    } else if (entry.text) {
+      const text = entry.text.replace(/[\r\n]/g, '');
+      if (!isDiffMetaLine(text)) maxWidth = Math.max(maxWidth, visLen(expandDiffTabs(text)));
+    }
+  }
+  logDetailLayoutCache = { source: lines, sourceLength: lines.length,
+    collapsed: [...collapsedFiles], lines: filtered, files, maxWidth };
+  return logDetailLayoutCache;
 }
 
 function filterLogDetailLines(lines, collapsedFiles) {
