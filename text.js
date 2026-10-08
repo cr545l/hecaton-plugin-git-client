@@ -18,8 +18,15 @@ function isWide(cp) {
     (cp >= 0x20000 && cp <= 0x3134F);
 }
 
+// isWide 가 2칸으로 세는 문자는 모두 U+1100 이상이다(서로게이트 쌍도 이 범위에 든다).
+// 이런 문자가 하나도 없으면 UTF-16 단위 하나가 곧 한 칸이라 length 로 바로 답한다.
+// QuickJS 에서는 문자 단위 순회가 정규식 한 번보다 수십 배 느려서, 파일 수천 개를 그리는
+// 목록에서는 이 지름길이 프레임 시간을 좌우한다.
+const MAYBE_WIDE_RE = /[ᄀ-￿]/;
+
 function visLen(text) {
   const plain = stripAnsi(text);
+  if (!MAYBE_WIDE_RE.test(plain)) return plain.length;
   let w = 0;
   for (const ch of plain) {
     w += isWide(ch.codePointAt(0)) ? 2 : 1;
@@ -137,6 +144,11 @@ function viewport(text, cursorPos, maxWidth) {
 
 function sliceByWidth(text, startCol, maxWidth) {
   const plain = stripAnsi(text);
+  if (!MAYBE_WIDE_RE.test(plain)) {
+    if (!(maxWidth > 0)) return '';
+    const begin = Math.min(startCol > 0 ? startCol : 0, plain.length);
+    return plain.substring(begin, begin + maxWidth);
+  }
   let vis = 0, i = 0;
   // Skip startCol visual columns
   while (i < plain.length && vis < startCol) {

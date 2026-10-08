@@ -270,7 +270,12 @@ function isCollapsedFileDir(section, dir) {
 
 // 펼칠 때는 키를 지운다 — false 로 남겨 두면 한 번 열어 본 디렉토리가 전부 쌓여
 // 영속 파일이 저장소 크기만큼 커진다. 결과 접힘 상태를 반환.
+// 파일 목록 캐시(refresh.js buildFileList)가 접힘 변화를 알아채도록 바꿀 때마다 올린다.
+let _collapsedFileDirsVersion = 0;
+function collapsedFileDirsVersion() { return _collapsedFileDirsVersion; }
+
 function toggleCollapsedFileDir(section, dir) {
+  _collapsedFileDirsVersion++;
   const key = fileDirKey(section, dir);
   if (ui.collapsedFileDirs[key]) { delete ui.collapsedFileDirs[key]; return false; }
   ui.collapsedFileDirs[key] = true;
@@ -369,7 +374,7 @@ function renameRef(oldKey, newKey) {
 
 module.exports = {
   state, ui, init,
-  isCollapsedFileDir, toggleCollapsedFileDir,
+  isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion,
   isPinnedBranch, togglePinnedBranch, unpinBranch, renamePinnedBranch,
   localRefKey, remoteRefKey,
   isFilteredRef, isHiddenRef, toggleFilteredRef, toggleHiddenRef,

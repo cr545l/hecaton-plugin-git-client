@@ -495,6 +495,10 @@ async function setupGitWatcher() {
       const x = rec[0];
       // -z porcelain v1에서 rename/copy는 "XY new\0old\0" — 뒤따르는 원본 경로를 건너뛴다.
       if (x === 'R' || x === 'C') i++;
+      // 작업 트리 쪽(Y)이 깨끗한 항목은 stat 하지 않는다. 그 파일을 다시 고치면 Y 가 바뀌어
+      // status 문자열이 먼저 달라진다. mtime 이 필요한 건 이미 고쳐진 파일을 또 고친 경우뿐이다.
+      // 스테이징만 수천 개인 워크트리에서 매 틱 수천 번의 stat RPC 가 입력 처리를 밀어내던 곳이다.
+      if (rec[1] === ' ') continue;
       let file = rec.substring(3);
       if (file.endsWith('/')) file = file.slice(0, -1);
       if (file) files.add(file);

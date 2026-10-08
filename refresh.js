@@ -1,5 +1,5 @@
 const { t } = require('./i18n');
-const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir } = require('./state');
+const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
 const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
@@ -444,7 +444,28 @@ function pushTreeRows(out, section, entries) {
   out.push(...walk(root, '', 0).rows);
 }
 
+// 목록은 렌더·호버·클릭마다 여러 번 불린다. 변경이 수천 개면 한 번 만드는 데도 QuickJS 에서
+// 수 ms 가 들어 같은 입력이면 직전 결과를 돌려준다. 파일 배열은 늘 통째로 갈아 끼우거나
+// 길이가 바뀌는 식으로만 고쳐지므로(applyStageToState 등) 참조와 길이로 변화를 잡는다.
+// 돌려준 목록과 그 항목은 읽기 전용으로 다룬다.
+let _fileListCache = null;
+function fileListCacheKey() {
+  return [state.unstaged, state.unstaged.length, state.untracked, state.untracked.length,
+    state.staged, state.staged.length, state.ignored, state.ignored.length,
+    ui.fileTreeView, ui.collapsedSections.ignored === false,
+    ui.collapsedFileDirs, collapsedFileDirsVersion()];
+}
+
 function buildFileList() {
+  const key = fileListCacheKey();
+  const cached = _fileListCache;
+  if (cached && cached.key.every((v, i) => v === key[i])) return cached.list;
+  const list = buildFileListUncached();
+  _fileListCache = { key, list };
+  return list;
+}
+
+function buildFileListUncached() {
   const raw = rawFileEntries();
   if (!ui.fileTreeView) {
     return raw.map(e => ({ ...e, kind: 'file', section: sectionOf(e.type), name: e.file, depth: 0 }));

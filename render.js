@@ -1819,11 +1819,16 @@ function buildFileListPanel(w, h) {
 
   // Pre-compute horizontal scroll to reserve row for scrollbar
   // Only count files in non-collapsed sections
-  let preMaxFileW = 0;
-  for (const item of fileList) {
-    const fw = visLen(entryText(item));
-    if (fw > preMaxFileW) preMaxFileW = fw;
+  // 목록은 같은 입력이면 같은 배열이 돌아오므로(buildFileList 캐시) 폭도 그 배열에 얹어 둔다.
+  if (fileList.maxEntryWidth === undefined) {
+    let maxW = 0;
+    for (const item of fileList) {
+      const fw = visLen(entryText(item));
+      if (fw > maxW) maxW = fw;
+    }
+    fileList.maxEntryWidth = maxW;
   }
+  const preMaxFileW = fileList.maxEntryWidth;
   const filesContentWPre = Math.max(1, innerW - 6);
   const preFilesMaxScrollX = Math.max(0, preMaxFileW - filesContentWPre);
   const canvasW = innerW + preFilesMaxScrollX;
@@ -1831,10 +1836,23 @@ function buildFileListPanel(w, h) {
   const hasFilesHScrollbar = preFilesMaxScrollX > 0;
   if (hasFilesHScrollbar && h > 0) h--;
 
+  function fitLine(content) {
+    return visLen(content) > canvasW ? truncate(content, canvasW) : content;
+  }
+
   function pushFileLine(content, fileIdx) {
     lineToFileIdx.push(fileIdx);
-    if (visLen(content) > canvasW) content = truncate(content, canvasW);
-    lines.push(content);
+    lines.push(fitLine(content));
+  }
+
+  // 파일 줄은 자리만 잡아 두고 실제 문자열은 화면(과 overscan bank)에 걸리는 줄만 만든다.
+  // 변경이 수천 개인 워크트리에서 매 프레임 전부를 꾸미면 호버 한 번에도 수백 ms 가 든다.
+  function lineAt(i) {
+    const line = lines[i];
+    if (line === undefined || typeof line === 'string') return line;
+    const built = fitLine(formatEntryLine(fileList[line.entry], line.entry));
+    lines[i] = built;
+    return built;
   }
 
   function statusColor(s) {
@@ -1848,9 +1866,14 @@ function buildFileListPanel(w, h) {
   // 파일 줄과 폴더 줄을 한 자리에서 그린다. 상태 글자 자리(4번째 칸)에 폴더는 접힘
   // 표시(+/-)를 놓아, 이름 칸이 어느 줄에서나 같은 열에서 시작하게 한다.
   function pushEntryLine(item, idx) {
+    if (state.cursor === idx) cursorLineIdx = lines.length;
+    lineToFileIdx.push(idx);
+    lines.push({ entry: idx });
+  }
+
+  function formatEntryLine(item, idx) {
     const isCursor = state.cursor === idx;
     const isMultiSel = state.selectedFiles.has(idx);
-    if (isCursor) cursorLineIdx = lines.length;
     const bgColor = isMultiSel ? colors.selectedBg : (isCursor ? cursorBgColor : '');
     const resetTo = bgColor ? ansi.reset + bgColor : ansi.reset;
     const prefix = isMultiSel ? bgColor + colors.value + ' \u2713 ' : '   ';
@@ -1863,7 +1886,7 @@ function buildFileListPanel(w, h) {
     // 무시된 파일과 폴더 이름은 눌러 둔다 — 변경 자체가 아니라 그 둘레의 정보다.
     const dim = item.kind === 'dir' || item.section === 'ignored';
     const body = dim ? colors.dim + text + resetTo : text;
-    pushFileLine(bgColor + padRight(prefix + mark + resetTo + ' ' + body, canvasW) + ansi.reset, idx);
+    return bgColor + padRight(prefix + mark + resetTo + ' ' + body, canvasW) + ansi.reset;
   }
 
   // 한 구획(Unstaged / Staged / Ignored)에 속한 줄을 목록 순서대로 소진한다.
@@ -1997,15 +2020,17 @@ function buildFileListPanel(w, h) {
     ui.scrollPct.files = -1;
   }
   ui.fileLineMap = lineToFileIdx.slice(state.scrollOffset, state.scrollOffset + h);
-  const visibleLines = lines.slice(state.scrollOffset, state.scrollOffset + h)
-    .map(line => hostScroll.sliceLine(line, state.filesScrollX, innerW));
+  const visibleLines = [];
+  for (let i = state.scrollOffset; i < Math.min(lines.length, state.scrollOffset + h); i++) {
+    visibleLines.push(hostScroll.sliceLine(lineAt(i), state.filesScrollX, innerW));
+  }
 
   if (hostScroll.isActive() && h > 0) {
     const off = state.scrollOffset;
     ui.hostScrollRegions.push({
       id: 'files', panel: 'middle', relRow: 0, width: innerW, height: h,
-      contentRows: lines.length, off, contentCols: canvasW, left: state.filesScrollX, getLine: i => lines[i],
-      bank: hostScroll.buildBank('files', (i) => lines[i], off, h),
+      contentRows: lines.length, off, contentCols: canvasW, left: state.filesScrollX, getLine: lineAt,
+      bank: hostScroll.buildBank('files', lineAt, off, h),
     });
   }
 
