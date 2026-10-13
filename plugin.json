@@ -15,8 +15,8 @@
       "ko": "브랜치·커밋·파일 상태·변경 내용을 보여주기 위해 저장소의 git 메타데이터와 작업 트리를 읽습니다."
     },
     "fs_write": {
-      "en": "Write the commit message you typed, the conflict resolutions you chose and this plugin's own saved layout.",
-      "ko": "입력한 커밋 메시지, 선택한 충돌 해결 내용, 이 플러그인이 저장하는 화면 상태를 기록합니다."
+      "en": "Write the commit message you typed, the conflict resolutions you chose, temporary path lists for large Git selections and this plugin's own saved layout.",
+      "ko": "입력한 커밋 메시지, 선택한 충돌 해결 내용, 대량 Git 작업에 필요한 임시 경로 목록과 플러그인의 화면 상태를 기록합니다."
     },
     "clipboard_read": {
       "en": "Paste clipboard text into the commit message or name field you are editing.",

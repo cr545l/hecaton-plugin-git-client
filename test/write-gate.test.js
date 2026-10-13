@@ -112,7 +112,7 @@ test('쓰기 작업 중 스테이징 키는 git 을 스폰하지 않는다', asy
   resetState({ busy: true });
   execLog.length = 0;
   await handleKey('s');
-  assert.deepEqual(execLog.filter(c => c.startsWith('add')), [], 'stage 가 실행되면 안 된다');
+  assert.deepEqual(execLog.filter(c => /(^| )add( |$)/.test(c)), [], 'stage 가 실행되면 안 된다');
   assert.ok(state.busyFlashUntil > Date.now(), '차단 피드백이 남아야 한다');
 });
 

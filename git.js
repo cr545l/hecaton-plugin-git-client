@@ -55,6 +55,12 @@ async function gitResult(args, cwd, timeout) {
 }
 
 const GIT_MUTATION_TIMEOUT_MS = 30000;
+// Indexing a directory can mean thousands of files and expensive clean filters,
+// even when the UI supplies only one path. Keep this separate from small writes.
+const GIT_INDEX_TIMEOUT_MS = 10 * 60 * 1000;
+const PATHSPEC_ARG_BUDGET = 16000;
+const PATHSPEC_FILE_THRESHOLD = 512;
+let pathspecSequence = 0;
 const MAX_GIT_ERROR_DETAIL = 3500;
 
 function resultText(value) {
@@ -468,7 +474,7 @@ async function gitDiffUntracked(cwd, file) {
 }
 
 async function gitStage(cwd, file) {
-  return await gitMutation(['add', '-f', '--', file], cwd, 10000, t('git.couldNotStage') + file);
+  return await gitIndexPaths(cwd, [file], true, t('git.couldNotStage') + file);
 }
 
 // unstage는 커밋 하나 없는 저장소(unborn HEAD)에서도 동작해야 한다.
@@ -476,17 +482,17 @@ async function gitStage(cwd, file) {
 // HEAD를 생략한 'reset'을 쓴다. HEAD가 있으면 'reset HEAD'와 동작이 같고,
 // 없으면 인덱스에서 항목을 지워 untracked로 되돌린다. 워킹트리는 어느 쪽이든 그대로다.
 async function gitUnstage(cwd, file) {
-  return await gitMutation(['reset', '--', file], cwd, 10000, t('git.couldNotUnstage') + file);
+  return await gitIndexPaths(cwd, [file], false, t('git.couldNotUnstage') + file);
 }
 
 async function gitStageAll(cwd) {
   // Never force ignored files into the index. `-f -A` can unexpectedly walk
   // large ignored trees such as node_modules/.venv and make Stage All time out.
-  return await gitMutation(['add', '-A'], cwd, GIT_MUTATION_TIMEOUT_MS, t('git.couldNotStageAllFiles'));
+  return await gitMutation(['add', '-A'], cwd, GIT_INDEX_TIMEOUT_MS, t('git.couldNotStageAllFiles'));
 }
 
 async function gitUnstageAll(cwd) {
-  return await gitMutation(['reset'], cwd, GIT_MUTATION_TIMEOUT_MS, t('git.couldNotUnstageAllFiles'));
+  return await gitMutation(['reset', '--quiet', '--no-refresh'], cwd, GIT_INDEX_TIMEOUT_MS, t('git.couldNotUnstageAllFiles'));
 }
 
 async function gitCommit(cwd, message) {
@@ -1156,23 +1162,63 @@ async function gitStageAsync(cwd, file) {
 async function gitUnstageAsync(cwd, file) {
   return await gitUnstage(cwd, file);
 }
+
+// Small selections avoid filesystem RPCs. Large selections go through one NUL
+// delimited pathspec file, so argv size is bounded and Git takes the index lock
+// only once. Batching add/reset would repeatedly read/write the growing index
+// and could leave a partially processed selection after a later batch fails.
+async function gitIndexPaths(cwd, files, isStage, fallback) {
+  const paths = [...new Set(files)];
+  if (paths.length === 0) return null;
+  const args = ['--literal-pathspecs', ...(isStage ? ['add', '-f'] : ['reset', '--quiet', '--no-refresh'])];
+  // Upper bound for UTF-8 bytes / Windows quoting, with room for the executable.
+  const argSize = paths.reduce((size, file) => size + file.length * 4 + 3, 256);
+  if (paths.length < PATHSPEC_FILE_THRESHOLD && argSize < PATHSPEC_ARG_BUDGET) {
+    return gitMutation([...args, '--', ...paths], cwd, GIT_INDEX_TIMEOUT_MS, fallback);
+  }
+
+  let pathspecPath;
+  try {
+    const directory = await gitExecChecked(['rev-parse', '--absolute-git-dir'], cwd);
+    if (!directory.ok || !directory.text.trim()) {
+      return fallback + ':\n' + t('git.failedResolveGitDirectory');
+    }
+    // Worktree-specific git dir, outside the working tree. Separate invocations
+    // and plugin instances must never overwrite one another's selection.
+    const id = Date.now().toString(36) + '-' + (++pathspecSequence) + '-' + Math.random().toString(36).slice(2);
+    pathspecPath = nodePath.join(directory.text.trim(), 'hecaton-pathspec-' + id);
+    const written = await hecaton.fs.write_file({ path: pathspecPath, content: paths.join('\0') + '\0' });
+    if (!written || written.ok === false || written.__rpcError) {
+      return formatGitFailure(written, fallback + ': ' + t('git.failedWritePathspec'), GIT_INDEX_TIMEOUT_MS);
+    }
+    return await gitMutation(
+      [...args, '--pathspec-from-file=' + pathspecPath, '--pathspec-file-nul'],
+      cwd, GIT_INDEX_TIMEOUT_MS, fallback
+    );
+  } catch (error) {
+    return formatGitFailure({ error }, fallback, GIT_INDEX_TIMEOUT_MS);
+  } finally {
+    // Cleanup failure must not turn a completed index update into a failed one.
+    // Only our unique temporary file is removed; never touch index.lock here.
+    if (pathspecPath) {
+      try { await hecaton.fs.delete({ path: pathspecPath }); } catch { /* best effort */ }
+    }
+  }
+}
+
 async function gitStageMultiple(cwd, files) {
   if (files.length === 0) return null;
   if (files.length === 1) return gitStage(cwd, files[0]);
-  return await gitMutation(
-    ['add', '-f', '--', ...files],
-    cwd,
-    GIT_MUTATION_TIMEOUT_MS,
+  return await gitIndexPaths(
+    cwd, files, true,
     t('git.couldNotStagePrefix') + files.length + t('git.selectedFilesSuffix')
   );
 }
 async function gitUnstageMultiple(cwd, files) {
   if (files.length === 0) return null;
   if (files.length === 1) return gitUnstage(cwd, files[0]);
-  return await gitMutation(
-    ['reset', '--', ...files],
-    cwd,
-    GIT_MUTATION_TIMEOUT_MS,
+  return await gitIndexPaths(
+    cwd, files, false,
     t('git.couldNotUnstagePrefix') + files.length + t('git.selectedFilesSuffix')
   );
 }

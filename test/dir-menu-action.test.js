@@ -114,7 +114,7 @@ test('폴더에 건 Stage 는 하위 파일 경로로 실행된다', async () =>
 
   await handleContextMenuAction('file_stage');
 
-  const add = execCalls.find(args => args[0] === 'add');
+  const add = execCalls.find(args => args.includes('add'));
   assert.ok(add, 'git add 가 실행돼야 한다');
   // 폴더가 그대로 넘어갔다면 여기에 undefined 나 'src/util' 이 들어온다.
   assert.deepEqual(add.slice(-2).sort(), ['src/util/fmt.js', 'src/util/log.js']);
@@ -133,7 +133,7 @@ test('무시 파일 메뉴에서 선택한 파일만 강제로 스테이징한�
   assert.equal(menu.find(it => it.id === 'file_stage').enabled, true);
 
   await handleContextMenuAction('file_stage');
-  assert.deepEqual(execCalls.find(args => args[0] === 'add'), ['add', '-f', '--', 'build.log']);
+  assert.deepEqual(execCalls.find(args => args.includes('add')), ['--literal-pathspecs', 'add', '-f', '--', 'build.log']);
 });
 
 test('무시 폴더 메뉴에서 하위 선택 파일들을 강제로 스테이징한다', async () => {
@@ -145,7 +145,7 @@ test('무시 폴더 메뉴에서 하위 선택 파일들을 강제로 스테이�
   assert.equal(menu.find(it => it.id === 'file_stage').enabled, true);
 
   await handleContextMenuAction('file_stage');
-  assert.deepEqual(execCalls.find(args => args[0] === 'add'), ['add', '-f', '--', 'logs/a.log', 'logs/b.log']);
+  assert.deepEqual(execCalls.find(args => args.includes('add')), ['--literal-pathspecs', 'add', '-f', '--', 'logs/a.log', 'logs/b.log']);
 });
 
 test('폴더에 건 Discard 는 하위 파일을 확인창 대상으로 잡는다', async () => {
