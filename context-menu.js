@@ -2235,6 +2235,7 @@ function clearPendingTargets() {
 }
 
 async function handleDialogResult(params) {
+  if (require('./operation-error').resolve(params)) return;
   const buttonId = params && params.button_id;
 
   // Name input dialog results (new-branch, new-tag, rename-stash, rename-branch, new-remote, delete-branch)
@@ -3159,40 +3160,29 @@ async function runHistoryRewrite(opName, fn) {
 // 돌 수 있으므로 반드시 넘겨야 한다 — 넘기지 않으면 stopSpinner 가 "가장 나중에
 // 시작된 작업"을 끝내므로, 겹친 상대를 대신 끝내 버린다.
 async function afterGitOp(err, opName, refreshOpts = {}, op = null) {
+  if (err) {
+    stopSpinner(op);
+    // Present failure before background refresh, which can fail independently.
+    showError(opName + t('menu.failed') + err);
+    refreshInBackground(refreshOpts, { refreshLog: !refreshOpts.statusOnly });
+    return;
+  }
   if (!state.spinnerActive) state.error = null;
   // git 명령 자체는 대개 수십 ms 만에 끝나고, 결과를 화면에 반영하는 refresh가 그보다
   // 훨씬 오래 걸린다. 라벨을 넘기지 않으면 사용자가 보는 거의 모든 시간 동안
   // "Refreshing..."만 떠서 정작 무슨 작업이었는지 알 수 없다. 후속 갱신까지가 한 동작이다.
-  // 실패한 경우엔 이름을 잇지 않는다 — 되돌아간 상태를 다시 읽는 것뿐이고,
-  // 무슨 일이 있었는지는 곧 뜨는 오류 창이 말해 준다.
   // settle: 이 갱신이 끝나야 목록이 작업 결과를 반영한다 — 그때까지는 새 쓰기를 받지 않는다.
-  // 실패한 경우엔 저장소가 그대로라 목록도 낡지 않았으므로 걸지 않는다.
-  const followup = { refreshLog: !refreshOpts.statusOnly };
-  if (!err) {
-    followup.message = opName + '...';
-    followup.settle = true;
-    // 뒷정리가 막을 범위는 방금 끝난 작업과 같다. op 을 알면 그대로 물려주고,
-    // 모르면 아직 살아 있는 작업의 것을 startSettleOp 가 알아서 가져간다.
-    if (op) followup.scopes = op.scopes;
-  }
+  const followup = { refreshLog: !refreshOpts.statusOnly, message: opName + '...', settle: true };
+  // 뒷정리가 막을 범위는 방금 끝난 작업과 같다.
+  if (op) followup.scopes = op.scopes;
   // stopSpinner 보다 먼저 건다. 순서를 뒤집으면 스피너 참조가 잠깐 0이 되어
   // 두 표시 사이에서 제목이 한 번 맨 상태로 떨어졌다 돌아온다.
   refreshInBackground(refreshOpts, followup);
   stopSpinner(op);
-  if (err) showError(opName + t('menu.failed') + err);
 }
 
 function showError(msg) {
-  // 쓰기 작업이 진행 중이면 힌트바의 진행 메시지를 지우지 않는다
-  // (읽기 액션의 안내 다이얼로그가 작업 표시를 덮어쓰는 것 방지).
-  if (!state.spinnerActive) state.error = null;
-  hecaton.dialog.show({
-    type: 'message',
-    title: t('menu.error'),
-    message: msg,
-    buttons: [{ id: 'ok', label: 'OK', default: true }],
-  });
-  render();
+  require('./operation-error').show(msg);
 }
 
 function isStaleRebaseError(err) {

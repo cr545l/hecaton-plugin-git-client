@@ -146,6 +146,16 @@ function execGit(params) {
   return exec(params, 'permission.reason.gitExec', { deniedKey: 'permission.denied.gitExec' });
 }
 
+async function spawnGit(params) {
+  const allowed = await ensure('process_exec', 'permission.reason.gitExec', {
+    path: params.program, deniedKey: 'permission.denied.gitExec',
+  });
+  if (!allowed) return deniedResult('permission.denied.gitExec');
+  const result = await hecaton.process.spawn(params);
+  if (result && result.error_code === 'access_denied') forget('process_exec', params.program);
+  return result;
+}
+
 async function clipboardWrite(text, reasonKey, deniedKey) {
   const allowed = await ensure('clipboard_write', reasonKey, { deniedKey });
   if (!allowed) return { ok: false, error_code: 'access_denied' };
@@ -179,5 +189,5 @@ function reset() {
 }
 
 module.exports = {
-  ensure, exec, execGit, clipboardWrite, clipboardRead, openOverlay, forget, reset,
+  ensure, exec, execGit, spawnGit, clipboardWrite, clipboardRead, openOverlay, forget, reset,
 };

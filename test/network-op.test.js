@@ -113,9 +113,9 @@ test('pull도 남의 결과로 대체하지 않는다', async () => {
 
 test('멈춘 인스턴스의 기록에 발이 묶이지 않는다', async () => {
   reset();
-  // coordinate.NETOP_STALE_MS(150초)를 확실히 넘긴 기록이어야 죽은 것으로 판정된다.
+  // 네트워크 실행 상한(30분)을 확실히 넘긴 기록이어야 죽은 것으로 판정된다.
   // 그 미만이면 진행 중으로 보고 기다리는 것이 옳은 동작이라 이 테스트의 대상이 아니다.
-  files.set(NETOP, JSON.stringify({ op: 'fetch', owner: 'dead', startedAt: Date.now() - 300000, finishedAt: 0, ok: false }));
+  files.set(NETOP, JSON.stringify({ op: 'fetch', owner: 'dead', startedAt: Date.now() - 31 * 60000, finishedAt: 0, ok: false }));
   const err = await git.gitFetchAsync(CWD);
   assert.equal(err, null);
   assert.equal(execCalls.length, 1);
@@ -147,5 +147,43 @@ test('force push도 진행 중인 작업과 겹치지 않게 조율된다', asyn
     files.set(NETOP, JSON.stringify({ op: 'push', owner: 'other', startedAt: now, finishedAt: Date.now(), ok: true }));
   }, 250);
   await git.gitForcePushAsync(CWD, 'origin', 'main');
-  assert.equal(execCalls.length, 0);
+  assert.equal(execCalls.length, 1, '기다린 뒤 자신의 push를 실제 실행해야 한다');
+  assert.equal(gitArgsOf(execCalls[0]), 'push --force-with-lease origin main');
+});
+
+test('다른 창의 실패한 push를 기다린 뒤 자신의 push 오류를 전달한다', async () => {
+  reset();
+  const now = Date.now();
+  files.set(NETOP, JSON.stringify({ op: 'push', owner: 'other', startedAt: now, finishedAt: 0, ok: false }));
+  execResult = { ok: true, exit_code: 1, stderr: 'remote: error: GH001: Large files detected.' };
+  setTimeout(() => {
+    files.set(NETOP, JSON.stringify({ op: 'push', owner: 'other', startedAt: now, finishedAt: Date.now(), ok: false }));
+  }, 20);
+  assert.match(await git.gitPushToRemoteAsync(CWD, 'origin', 'main'), /GH001/);
+  assert.equal(execCalls.length, 1);
+  assert.equal(netop().ok, false);
+});
+
+test('기다리던 fetch가 실패했으면 성공으로 간주하지 않고 다시 실행한다', async () => {
+  reset();
+  const now = Date.now();
+  files.set(NETOP, JSON.stringify({ op: 'fetch', owner: 'other', startedAt: now, finishedAt: 0, ok: false }));
+  setTimeout(() => {
+    files.set(NETOP, JSON.stringify({ op: 'fetch', owner: 'other', startedAt: now, finishedAt: Date.now(), ok: false }));
+  }, 20);
+  assert.equal(await git.gitFetchAsync(CWD), null);
+  assert.equal(execCalls.length, 1);
+});
+
+test('대기 시간이 끝나도 남의 작업이 살아 있으면 실패를 알리고 중복 실행하지 않는다', async () => {
+  reset();
+  const rec = { op: 'push', owner: 'other', startedAt: Date.now(), finishedAt: 0, ok: false };
+  files.set(NETOP, JSON.stringify(rec));
+  const wait = coordinate.waitForNetworkOp;
+  coordinate.waitForNetworkOp = async () => false;
+  try {
+    assert.match(await git.gitPushAsync(CWD), /not performed/);
+    assert.equal(execCalls.length, 0);
+    assert.deepEqual(netop(), rec);
+  } finally { coordinate.waitForNetworkOp = wait; }
 });

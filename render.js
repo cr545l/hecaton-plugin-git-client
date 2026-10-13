@@ -899,14 +899,16 @@ function renderBody() {
   // 오른쪽(committer)을 먼저 확정해야 왼쪽에 남는 폭을 알 수 있다.
   // 리비전 힌트가 그 폭에 맞춰 표시 항목을 줄이기 때문에 순서가 중요하다.
   // 처리상태 스피너는 힌트바에서 빼고 창 타이틀에서 돌린다 (title.js 참고).
+  const branchDrag = branchDragLabel();
+  const showOperationError = state.mode === 'normal' && !state.freshTimeWindowMode && !branchDrag
+    && require('./operation-error').current();
   const committerMaxWidth = Math.max(0, Math.min(72, Math.floor(width * 0.55)));
-  const committerHint = buildCommitterHint(committerMaxWidth);
+  const committerHint = showOperationError ? { content: '', zones: [] } : buildCommitterHint(committerMaxWidth);
   const rightContent = committerHint.content;
   const rightWidth = visLen(rightContent);
   const leftMaxWidth = Math.max(0, width - rightWidth - (rightWidth > 0 ? 1 : 0));
 
   let hintContent;
-  const branchDrag = branchDragLabel();
   if (branchDrag) {
     // 끌고 있는 동안에는 손을 떼면 무슨 이름이 될지를 먼저 보여 준다 — 놓을 자리의
     // 배경색만으로는 어느 그룹인지는 알아도 결과 이름까지는 읽히지 않는다.
@@ -948,6 +950,8 @@ function renderBody() {
     }
     windowHint +=colors.dim + t('ui.selectEnterApply') + ansi.reset;
     hintContent = windowHint;
+  } else if (showOperationError) {
+    hintContent = ' ' + colors.red + require('./operation-error').hint() + ansi.reset;
   } else if (!state.isGitRepo && (state.error || state.cwd)) {
     // 비저장소는 오류가 아니라 설정 가능한 시작 상태다. 자세한 진단 문자열 대신 사용자가
     // 지금 할 수 있는 동작을 안내하고, 실제 오류(git 실행 파일 없음)만 빨간색으로 남긴다.
@@ -1293,7 +1297,9 @@ function renderBody() {
 
   // Clickable areas for hint bar
   ui.clickableAreas = [];
-  if (state.mode === 'normal' && !state.error) {
+  if (showOperationError) {
+    ui.clickableAreas.push({ row: hintRow, colStart: startCol, colEnd: startCol + width - 1, action: 'error-details' });
+  } else if (state.mode === 'normal' && !state.error) {
     const contentStart = startCol + 1;
     let plainOffset = 0;
     for (let i = 0; i < hintButtons.length; i++) {

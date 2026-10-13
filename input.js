@@ -48,6 +48,7 @@ function actionToKey(action) {
     case 'log':      return 'l';
     case 'rebase':   return 'b';
     case 'refresh':  return 'r';
+    case 'error-details': return 'e';
     case 'tab':      return '\t';
     case 'quit':     return 'q';
     default:         return '';
@@ -142,14 +143,7 @@ async function handleCommitterAction(action) {
 }
 
 function showErrorDialog(msg) {
-  // 쓰기 작업 진행 중에는 힌트바의 진행 메시지를 유지한다.
-  if (!state.spinnerActive) state.error = null;
-  hecaton.dialog.show({
-    type: 'message',
-    title: t('menu.error'),
-    message: msg,
-    buttons: [{ id: 'ok', label: 'OK', default: true }],
-  });
+  require('./operation-error').show(msg);
 }
 
 // Detect a branch whose upstream carries a different name, which is what a
@@ -208,7 +202,7 @@ function pushCurrentBranch() {
   pushPromise.then(async err => {
     if (err) {
       stopSpinner(pushOp);
-      showErrorDialog(err);
+      showErrorDialog(t('git.pushFailed') + ':\n' + err);
       render();
     } else {
       // 후속 갱신까지가 "Push" 한 동작이다 — 라벨을 이어 주고, 스피너를 넘겨준 뒤 내린다
@@ -547,6 +541,7 @@ function openOperationMenu() {
 }
 
 async function handleKey(key) {
+  if (state.mode === 'normal' && (key === 'e' || key === 'E') && require('./operation-error').reopen()) return;
   // Fresh time window mode intercept
   if (state.freshTimeWindowMode) {
     if (key === CSI + 'D' || key === 'h') { // Left

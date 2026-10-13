@@ -311,7 +311,8 @@ test('다른 워크트리가 잡고 있으면 고르게 하지 않고 그 사실
   const d = dialogs[0];
   assert.match(d.message, /checked out in another worktree/i);
   assert.match(d.message, /C:\/repo-dev/, '어느 워크트리인지 짚어야 한다');
-  assert.deepEqual(d.buttons.map(b => b.id), ['ok'], '실패가 뻔한 선택지를 주면 안 된다');
+  assert.deepEqual(d.buttons.map(b => b.label), ['OK'], '실패가 뻔한 선택지를 주면 안 된다');
+  assert.match(d.buttons[0].id, /^git-error:/);
   assert.equal(state.pendingDialogAction, null);
 });
 

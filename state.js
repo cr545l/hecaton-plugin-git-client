@@ -50,6 +50,7 @@ const state = {
   pendingDialogTarget: null,
   pendingRebaseMenu: false,
   error: null,
+  operationError: null, // retained until acknowledged, independent of progress messages
   loading: true,
   minimized: false,
   pendingStash: false,

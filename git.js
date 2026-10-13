@@ -5,12 +5,13 @@ const { t } = require('./i18n');
 const perms = require('./permissions');
 const nodePath = require('path');
 const coordinate = require('./coordinate');
+const gitProcess = require('./git-process');
 
 // Hecaton's process.exec `ok` flag means that the host successfully started and
 // waited for the process. Git command success is reported separately through
 // exit_code (legacy hosts may omit it).
 function gitProcessSucceeded(result) {
-  if (!result || !result.ok) return false;
+  if (!result || !result.ok || result.__rpcError || result.error || result.error_code) return false;
   const exitCode = result.exit_code !== undefined
     ? result.exit_code
     : (result.code !== undefined ? result.code : null);
@@ -78,18 +79,25 @@ function truncateGitDetail(text) {
 
 function formatGitFailure(result, fallback, timeoutMs) {
   const errorText = resultText(result && result.error);
+  const errorCodeText = resultText(result && result.error_code);
   const rpcErrorText = resultText(result && result.__rpcError);
   const stderrText = resultText(result && result.stderr);
   const stdoutText = resultText(result && result.stdout);
-  const combined = [errorText, rpcErrorText, stderrText, stdoutText]
+  const combined = [errorText, errorCodeText, rpcErrorText, stderrText, stdoutText]
     .filter(Boolean)
     .join('\n')
-    .replace(/\r\n/g, '\n')
+    .replace(/\r\n?/g, '\n')
     .trim();
 
   let lines = combined.split('\n').map(line => line.trimEnd()).filter(Boolean);
   const nonWarnings = lines.filter(line => !/^warning:/i.test(line));
   if (nonWarnings.length > 0) lines = nonWarnings;
+  // Server rejection lines must survive long transfer logs. Leave short logs
+  // and local multiline diagnostics in their original order (Git wraps them).
+  if (lines.join('\n').length > MAX_GIT_ERROR_DETAIL) {
+    const isReason = line => /^remote:\s*(?:error:|fatal:)/i.test(line);
+    lines = [...lines.filter(isReason), ...lines.filter(line => !isReason(line))];
+  }
 
   const exitCode = result && (result.exit_code !== undefined ? result.exit_code : result.code);
   let detail = lines.join('\n').trim();
@@ -98,8 +106,13 @@ function formatGitFailure(result, fallback, timeoutMs) {
   detail = truncateGitDetail(detail);
 
   let message = fallback + ':\n' + detail;
-  if (/timed?\s*out|timeout/i.test(combined)) {
-    message += t('git.commandTimedOut', { seconds: Math.round(timeoutMs / 1000) });
+  if ((result && result.timed_out) || /timed?\s*out|timeout/i.test(combined)) {
+    const reported = combined.match(/(?:after|exceeded)\s+(\d+(?:\.\d+)?)\s*(ms|milliseconds?|seconds?|s)\b/i);
+    const seconds = reported ? Number(reported[1]) / (/^m/i.test(reported[2]) ? 1000 : 1)
+      : result && result.timed_out && result.timeout_ms > 0 ? result.timeout_ms / 1000 : null;
+    message += seconds !== null
+      ? t('git.commandTimedOut', { seconds })
+      : t('git.commandTimedOutUnknown');
   } else if (/index\.lock|another git process seems to be running/i.test(combined)) {
     message += t('git.anotherGitProcessMayStillUsing')
       + t('git.useUnlockButtonOnlyAfterConfirming');
@@ -111,9 +124,11 @@ async function gitMutation(args, cwd, timeout, fallback) {
   const timeoutMs = timeout || GIT_MUTATION_TIMEOUT_MS;
   let result;
   try {
-    result = await gitResult(args, cwd, timeoutMs);
+    result = timeoutMs > 60000
+      ? await gitProcess.run({ program: 'git', args, cwd, timeout_ms: timeoutMs })
+      : await gitResult(args, cwd, timeoutMs);
   } catch (e) {
-    result = { ok: false, error: e };
+    result = { ok: false, error: e, stderr: e && e.stderr, stdout: e && e.stdout };
   }
   return gitProcessSucceeded(result) ? null : formatGitFailure(result, fallback, timeoutMs);
 }
@@ -876,13 +891,8 @@ async function gitPush(cwd) { return await gitRunOrError(['push'], cwd, 30000, t
 // Async helpers — in Deno runner, exec_process is synchronous RPC,
 // but we wrap in Promise to keep the same API for spinner-compatible callers.
 async function gitAsyncWrap(args, cwd, timeout) {
-  const r = await gitResult(args, cwd, timeout || 30000);
-  if (gitProcessSucceeded(r)) return null;
-  // rebase/merge 계열은 실패 사유를 stdout 으로만 내보내는 경우가 있다.
-  // stderr 가 비었다고 'Operation failed' 로 뭉개지 말고 stdout 을 쓴다.
-  const stderr = r && r.stderr ? r.stderr.replace(/\r\n/g, '\n').trim() : '';
-  const stdout = r && r.stdout ? r.stdout.replace(/\r\n/g, '\n').trim() : '';
-  return stderr || stdout || t('menu.operationFailed');
+  // Callers expect an error string. RPC exceptions must also reach their UI.
+  return gitMutation(args, cwd, timeout || 30000, t('menu.operationFailed'));
 }
 
 async function gitCheckRebaseConflicts(cwd, targetRef) {
@@ -907,23 +917,19 @@ async function gitCheckRebaseConflicts(cwd, targetRef) {
 // 붙으므로 병렬로 돌린다. git 2.36+ 에서 원격 fetch에 적용되고, 그 이전 버전은
 // 옵션을 조용히 무시하거나 서브모듈에만 적용해 동작이 달라지지 않는다.
 const FETCH_JOBS = 4;
-// 네트워크 작업(fetch/pull/push)의 실행 상한. 다른 git 명령의 30초와 따로 두는 이유는
-// 이 셋만 인증 헬퍼를 거치기 때문이다 — 2026-09-02 실측으로 사내 GitLab 에 붙는
-// `ls-remote` 한 번이 9.1초였고, 그중 8.7초가 credential helper 프로세스를 띄우는
-// 비용이었다(서버 응답 자체는 66ms). `fetch --all` 은 이 비용을 원격 수만큼 문다.
-// 30초로는 원격이 두세 개만 되어도 정상 동작이 타임아웃으로 실패해 보인다.
-const NETWORK_OP_TIMEOUT_MS = 120000;
-// 네트워크 작업이 진행 중일 때 남의 작업을 기다려 주는 상한. 이 안에 안 끝나면
-// 상대가 멈춘 것으로 보고 직접 실행한다. 실행 상한보다 짧으면 정상적으로 오래 걸리는
-// 작업을 멈춘 것으로 오인해 같은 작업을 중복으로 건다.
-const NETWORK_OP_WAIT_MS = NETWORK_OP_TIMEOUT_MS;
+// Large transfers can spend minutes packing and uploading. The streaming
+// runner owns the deadline; process.exec may cap its timeout at 60 seconds.
+const NETWORK_OP_TIMEOUT_MS = gitProcess.NETWORK_TIMEOUT_MS;
+// A second request waits briefly, then reports busy if the first is still
+// running. It must not assume that a long transfer is stale and duplicate it.
+const NETWORK_OP_WAIT_MS = 120000;
 // fetch는 저장소 전체에 대한 작업이라 다른 인스턴스가 방금 끝냈으면 다시 돌릴 이유가
 // 없다. 사용자가 버튼을 누른 직후 원격이 또 바뀌었을 가능성은 이 창 안에서는 무시한다.
 const FETCH_REUSE_WINDOW_MS = 3000;
 
 // 같은 저장소를 보는 인스턴스들이 네트워크 작업을 동시에 걸지 않도록 조율한다.
-// 진행 중인 작업이 있으면 끝날 때까지 기다렸다가 그 결과를 쓴다 — 락을 두고
-// 경합하는 것보다 빠르고, 호출부 입장에서는 그냥 성공(null)으로 끝난 것과 같다.
+// 진행 중인 작업이 있으면 끝날 때까지 기다린다. 성공한 fetch만 재사용하고,
+// push/pull은 기다린 뒤 자신의 명령을 실행해야 실제 결과를 알 수 있다.
 async function runNetworkOp(op, reuseWindowMs, run) {
   let decision = 'run';
   try {
@@ -935,11 +941,19 @@ async function runNetworkOp(op, reuseWindowMs, run) {
     return null;
   }
   if (decision === 'inflight') {
-    const finished = await coordinate.waitForNetworkOp(NETWORK_OP_WAIT_MS).catch(() => false);
-    await coordinate.endNetworkOp(op, true).catch(() => null);
-    if (finished) return null;
-    // 기다려도 안 끝났다 — 상대가 멈춘 것으로 보고, 진행 기록을 넘겨받아 내가 실행한다.
-    try { await coordinate.claimNetworkOp(op); } catch { /* ignore */ }
+    await coordinate.waitForNetworkOp(NETWORK_OP_WAIT_MS).catch(() => false);
+    // Finishing someone else's operation does not mean OUR push succeeded.
+    // Reuse only a successful fetch of the same kind; otherwise run our command.
+    try { decision = await coordinate.beginNetworkOp(op, reuseWindowMs); }
+    catch { decision = 'inflight'; }
+    if (decision === 'reuse') {
+      await coordinate.endNetworkOp(op, true).catch(() => null);
+      return null;
+    }
+    if (decision === 'inflight') {
+      await coordinate.endNetworkOp(op, false).catch(() => null);
+      return t('git.networkOperationStillRunning');
+    }
   }
 
   let err = null;
@@ -948,7 +962,7 @@ async function runNetworkOp(op, reuseWindowMs, run) {
     err = await run();
   } catch (e) {
     threw = true;
-    throw e;
+    err = formatGitFailure({ error: e, stderr: e && e.stderr, stdout: e && e.stdout }, t('menu.operationFailed'), NETWORK_OP_TIMEOUT_MS);
   } finally {
     await coordinate.endNetworkOp(op, !threw && !err).catch(() => null);
   }

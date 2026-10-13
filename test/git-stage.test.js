@@ -55,7 +55,7 @@ test('stage timeout errors explain recovery instead of returning a bare false', 
   const err = await gitStageMultiple('C:\\repo', ['slow.txt']);
 
   assert.match(err, /process timed out/);
-  assert.match(err, /exceeded 600 seconds/);
+  assert.match(err, /Git command timed out/);
   assert.match(err, /refresh and retry/);
 });
 
