@@ -307,45 +307,48 @@ function encodeSixel(buf, w, h, palette) {
     out += '#' + (i + 1) + ';2;' + Math.round(r * 100 / 255) + ';' + Math.round(g * 100 / 255) + ';' + Math.round(b * 100 / 255);
     slots.push(i + 1);
   }
+  // 스크롤 중에는 그래프를 매 프레임 다시 인코딩한다. 색마다 밴드 전체를 다시 훑으면
+  // (색 수 × 픽셀) QuickJS 에서 프레임당 수십 ms 가 들어 내용이 스크롤을 늦게 따라온다.
+  // 밴드를 한 번만 훑어 색별 비트를 모으고, 그 밴드에 실제로 쓰인 색만 RLE 로 내보낸다.
+  const n = palette.length;
+  const bits = new Uint8Array((n + 1) * w);
+  const used = new Uint8Array(n + 1);
+  const bands = [];
   for (let bandY = 0; bandY < h; bandY += 6) {
     const bandH = Math.min(6, h - bandY);
-    let bandHasData = false;
-    for (let ci = 1; ci <= palette.length; ci++) {
-      let row = '';
-      let runChar = '';
-      let runLen = 0;
-      for (let x = 0; x < w; x++) {
-        let bits = 0;
-        for (let dy = 0; dy < bandH; dy++) {
-          const y = bandY + dy;
-          if (buf[y * w + x] === ci) bits |= (1 << dy);
-        }
-        const ch = String.fromCharCode(63 + bits);
-        if (ch === runChar) {
-          runLen++;
-        } else {
-          if (runLen > 0) {
-            if (runLen >= 4) row += '!' + runLen + runChar;
-            else row += runChar.repeat(runLen);
-          }
-          runChar = ch;
-          runLen = 1;
-        }
-      }
-      if (runLen > 0) {
-        if (runLen >= 4) row += '!' + runLen + runChar;
-        else row += runChar.repeat(runLen);
-      }
-      if (row.replace(/[!0-9]/g, '').replace(/\?/g, '') === '') continue;
-      bandHasData = true;
-      out += '#' + slots[ci - 1] + row + '$';
+    for (let ci = 1; ci <= n; ci++) {
+      if (used[ci]) { bits.fill(0, ci * w, ci * w + w); used[ci] = 0; }
     }
-    if (bandHasData && out.endsWith('$')) out = out.slice(0, -1);
-    out += '-';
+    for (let dy = 0; dy < bandH; dy++) {
+      const rowBase = (bandY + dy) * w;
+      const bit = 1 << dy;
+      for (let x = 0; x < w; x++) {
+        const c = buf[rowBase + x];
+        if (c === 0 || c > n) continue;
+        bits[c * w + x] |= bit;
+        used[c] = 1;
+      }
+    }
+    const rows = [];
+    for (let ci = 1; ci <= n; ci++) {
+      if (!used[ci]) continue;
+      const base = ci * w;
+      let row = '#' + slots[ci - 1];
+      let runV = bits[base];
+      let runLen = 1;
+      for (let x = 1; x <= w; x++) {
+        const v = x < w ? bits[base + x] : -1;
+        if (v === runV) { runLen++; continue; }
+        const ch = String.fromCharCode(63 + runV);
+        row += runLen >= 4 ? '!' + runLen + ch : ch.repeat(runLen);
+        runV = v;
+        runLen = 1;
+      }
+      rows.push(row);
+    }
+    bands.push(rows.join('$'));
   }
-  if (out.endsWith('-')) out = out.slice(0, -1);
-  out += '\x1b\\';
-  return out;
+  return out + bands.join('-') + '\x1b\\';
 }
 
 function encodeSixelClear(w, h) {

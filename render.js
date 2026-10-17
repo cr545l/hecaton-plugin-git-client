@@ -2086,26 +2086,20 @@ function buildDiffCommitPanel(w, h) {
   let numW = 0; let gutterW = 0; let contentW = 0;
   if (!isConflictView && state.diffLines.length > 0 && diffH > 0) {
     if (diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffView === 'side') {
-      sideBySideLayout = buildSideBySideDiffLayout(state.diffLines, innerW);
+      sideBySideLayout = getSideBySideDiffLayout(state.diffLines, innerW);
       if (sideBySideLayout) {
         preMaxScrollX = sideBySideLayout.maxScrollX * 2;
-        sideBySideLayout = buildSideBySideDiffLayout(state.diffLines, innerW + preMaxScrollX);
+        sideBySideLayout = getSideBySideDiffLayout(state.diffLines, innerW + preMaxScrollX);
       }
     }
 
     if (!sideBySideLayout) {
-      annotated = annotateDiffLineNumbers(state.diffLines);
+      const unified = getUnifiedDiffLayout(state.diffLines);
+      annotated = unified.lines;
       numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
       gutterW = numW > 0 ? numW * 2 + 2 : 0;
       contentW = innerW - (gutterW > 0 ? gutterW : 1);
-      let maxLineW = 0;
-      for (const line of state.diffLines) {
-        const plain = line.replace(/[\r\n]/g, '');
-        if (isDiffMetaLine(plain)) continue;
-        const lw = visLen(expandDiffTabs(plain));
-        if (lw > maxLineW) maxLineW = lw;
-      }
-      preMaxScrollX = Math.max(0, maxLineW - contentW);
+      preMaxScrollX = Math.max(0, unified.maxWidth - contentW);
     }
   }
   const canvasW = innerW + preMaxScrollX;
@@ -2205,11 +2199,16 @@ function buildDiffCommitPanel(w, h) {
           }
         }
         const sideHunkOpts = hunkBtnLabel ? { label: hunkBtnLabel, avail: hunkAvail, renderButton: renderHunkButton, idxByRow: sideHunkIdxByRow } : null;
-        const sideBySideLines = renderSideBySideDiffLines(sideBySideLayout, state.currentDiffFile, scrollX, sideHunkOpts);
-        const maxScroll = Math.max(0, sideBySideLines.length - diffH);
+        // 화면과 bank 에 걸리는 줄만 그린다. 파일 전체를 매 프레임 하이라이트하면 긴 diff 에서
+        // 스크롤 한 칸마다 수백 ms 가 들어 내용이 호스트 스크롤을 한참 늦게 따라온다.
+        const sideRowCount = sideBySideLayout.rows.length;
+        const renderSideRow = (i) => renderSideBySideDiffRow(sideBySideLayout, i, state.currentDiffFile, scrollX, sideHunkOpts);
+        const maxScroll = Math.max(0, sideRowCount - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
-        const visible = sideBySideLines.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
+        const visibleEnd = Math.min(sideRowCount, state.diffScrollOffset + diffH);
+        const visible = [];
+        for (let i = state.diffScrollOffset; i < visibleEnd; i++) visible.push(renderSideRow(i));
         for (const line of visible) lines.push(hostScroll.sliceLine(line, state.diffScrollX, innerW));
         if (hunkBtnLabel) {
           for (let vi = 0; vi < visible.length; vi++) {
@@ -2219,9 +2218,10 @@ function buildDiffCommitPanel(w, h) {
             }
           }
         }
-        ui.scrollPct.diff = sideBySideLines.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
+        ui.scrollPct.diff = sideRowCount > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
         for (let i = visible.length; i < diffH; i++) lines.push('');
-        pushDiffRegion(sideBySideLines.length, state.diffScrollOffset, (i) => sideBySideLines[i]);
+        pushDiffRegion(sideRowCount, state.diffScrollOffset, (i) => (i - state.diffScrollOffset >= 0 && i < visibleEnd)
+          ? visible[i - state.diffScrollOffset] : renderSideRow(i));
       } else {
         // 실제로 그려지는 건 annotated 다 — 헤더를 걷어낸 만큼 state.diffLines 보다
         // 짧으므로, 스크롤 한계를 원본 길이로 잡으면 끝을 지나 빈 화면까지 내려간다.
@@ -3664,42 +3664,62 @@ function renderSideBySideCell(rawText, lineNum, numW, contentW, totalW, filePath
   return padRight(gutter + content, totalW);
 }
 
-function renderSideBySideDiffLines(layout, filePath, scrollX, hunkOpts) {
-  const lines = [];
+function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts) {
+  const row = layout.rows[rowIdx];
+  if (!row) return '';
   const gap = colors.border + ' \u2502 ' + ansi.reset;
-  const headerGap = colors.border + ' \u2502 ' + ansi.reset;
-  for (let rowIdx = 0; rowIdx < layout.rows.length; rowIdx++) {
-    const row = layout.rows[rowIdx];
-    if (hunkOpts && row.type === 'hunk') {
-      const base = ' ' + colorizeDiffLine(row.text, hunkOpts.avail - 1, filePath, 0);
-      lines.push(padRight(base, hunkOpts.avail + 1) + hunkOpts.renderButton(hunkOpts.idxByRow.get(rowIdx)));
-      continue;
-    }
-    if (row.type === 'side-title') {
-      lines.push(
-        colors.dim + padRight(t('ui.head'), layout.leftW) + ansi.reset +
-        headerGap +
-        colors.dim + padRight(t('ui.staged'), layout.rightW) + ansi.reset
-      );
-      continue;
-    }
-    if (row.type === 'side-header') {
-      lines.push(
-        colors.border + '\u2500'.repeat(layout.leftW) + ansi.reset +
-        headerGap +
-        colors.border + '\u2500'.repeat(layout.rightW) + ansi.reset
-      );
-      continue;
-    }
-    if (row.type === 'pair') {
-      const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW, layout.leftContentW, layout.leftW, filePath, scrollX);
-      const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW, layout.rightContentW, layout.rightW, filePath, scrollX);
-      lines.push(left + gap + right);
-      continue;
-    }
-    lines.push(' ' + colorizeDiffLine(row.text, layout.innerW - 1, filePath, 0));
+  if (hunkOpts && row.type === 'hunk') {
+    const base = ' ' + colorizeDiffLine(row.text, hunkOpts.avail - 1, filePath, 0);
+    return padRight(base, hunkOpts.avail + 1) + hunkOpts.renderButton(hunkOpts.idxByRow.get(rowIdx));
   }
-  return lines;
+  if (row.type === 'side-title') {
+    return colors.dim + padRight(t('ui.head'), layout.leftW) + ansi.reset +
+      gap +
+      colors.dim + padRight(t('ui.staged'), layout.rightW) + ansi.reset;
+  }
+  if (row.type === 'side-header') {
+    return colors.border + '\u2500'.repeat(layout.leftW) + ansi.reset +
+      gap +
+      colors.border + '\u2500'.repeat(layout.rightW) + ansi.reset;
+  }
+  if (row.type === 'pair') {
+    const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW, layout.leftContentW, layout.leftW, filePath, scrollX);
+    const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW, layout.rightContentW, layout.rightW, filePath, scrollX);
+    return left + gap + right;
+  }
+  return ' ' + colorizeDiffLine(row.text, layout.innerW - 1, filePath, 0);
+}
+
+// refresh.js replaces diffLines when a new patch arrives. Like the log detail,
+// keep the parsed layout per patch (and per width for side-by-side) so scroll
+// frames do not rescan every line of the file.
+let sideBySideLayoutCache = [];
+function getSideBySideDiffLayout(lines, innerW) {
+  const hit = sideBySideLayoutCache.find(c => c.source === lines && c.sourceLength === lines.length && c.innerW === innerW);
+  if (hit) return hit.layout;
+  if (!sideBySideLayoutCache.every(c => c.source === lines && c.sourceLength === lines.length)) sideBySideLayoutCache = [];
+  const layout = buildSideBySideDiffLayout(lines, innerW);
+  // \ud55c \ud504\ub808\uc784\uc774 \ud3ed \ub450 \uac1c(\ub9de\ucda4 \ud3ed, \uac00\ub85c \uc2a4\ud06c\ub864\uc744 \ub354\ud55c \ud3ed)\ub97c \uc4f4\ub2e4. \ucc3d \ud06c\uae30\ub97c \ubc14\uafb8\ub294 \ub3d9\uc548
+  // \ud3ed\uc774 \uacc4\uc18d \ubc14\ub00c\ubbc0\ub85c \ucd5c\uadfc \uac83 \uba87 \uac1c\ub9cc \ub0a8\uae34\ub2e4.
+  sideBySideLayoutCache.push({ source: lines, sourceLength: lines.length, innerW, layout });
+  if (sideBySideLayoutCache.length > 4) sideBySideLayoutCache.shift();
+  return layout;
+}
+
+let unifiedDiffLayoutCache = null;
+function getUnifiedDiffLayout(lines) {
+  const cached = unifiedDiffLayoutCache;
+  if (cached && cached.source === lines && cached.sourceLength === lines.length) return cached;
+  let maxWidth = 0;
+  for (const line of lines) {
+    const plain = line.replace(/[\r\n]/g, '');
+    if (isDiffMetaLine(plain)) continue;
+    const lw = visLen(expandDiffTabs(plain));
+    if (lw > maxWidth) maxWidth = lw;
+  }
+  unifiedDiffLayoutCache = { source: lines, sourceLength: lines.length,
+    lines: annotateDiffLineNumbers(lines), maxWidth };
+  return unifiedDiffLayoutCache;
 }
 
 function annotateDiffLineNumbers(lines) {
