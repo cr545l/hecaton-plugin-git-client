@@ -261,6 +261,69 @@ function reorderForkStyle(commits) {
   return result;
 }
 
+// Branch groups express a display preference, but merges can connect groups in
+// either direction. Emit only commits whose loaded children are already placed,
+// choosing the earliest preferred position among them. All parents (including
+// merge parents) must stay below their children or the graph leaves open lanes
+// pointing at commits it has already drawn.
+function orderChildrenBeforeParents(commits) {
+  const positions = new Map(commits.map((commit, index) => [commit.hash, index]));
+  const childCounts = new Array(commits.length).fill(0);
+  for (const commit of commits) {
+    for (const parent of commit.parents) {
+      const index = positions.get(parent);
+      if (index !== undefined) childCounts[index]++;
+    }
+  }
+
+  // A min-heap keeps the preferred order without repeatedly scanning or sorting
+  // the ready commits in large histories.
+  const ready = [];
+  function addReady(index) {
+    let slot = ready.length;
+    ready.push(index);
+    while (slot > 0) {
+      const parent = (slot - 1) >> 1;
+      if (ready[parent] < index) break;
+      ready[slot] = ready[parent];
+      slot = parent;
+    }
+    ready[slot] = index;
+  }
+  function takeReady() {
+    const index = ready[0];
+    const last = ready.pop();
+    if (ready.length > 0) {
+      let slot = 0;
+      while (slot * 2 + 1 < ready.length) {
+        let child = slot * 2 + 1;
+        if (child + 1 < ready.length && ready[child + 1] < ready[child]) child++;
+        if (last < ready[child]) break;
+        ready[slot] = ready[child];
+        slot = child;
+      }
+      ready[slot] = last;
+    }
+    return index;
+  }
+
+  for (let index = 0; index < commits.length; index++) {
+    if (childCounts[index] === 0) addReady(index);
+  }
+  const result = [];
+  while (ready.length > 0) {
+    const commit = commits[takeReady()];
+    result.push(commit);
+    for (const parent of commit.parents) {
+      const index = positions.get(parent);
+      // Parents outside the loaded page still get an outgoing graph edge; they
+      // do not participate in ordering the commits available on this page.
+      if (index !== undefined && --childCounts[index] === 0) addReady(index);
+    }
+  }
+  return result;
+}
+
 let refreshCount = 0;
 let _diffSeq = 0;
 
@@ -1762,7 +1825,7 @@ function buildLogGraphRows(rawCommits, stashFullHashes) {
   }
 
   // 'date' 모드는 git --date-order 결과를 그대로 쓴다 (커밋 날짜 내림차순 + 토폴로지 제약).
-  if (ui.logSortMode !== 'date') commits = reorderForkStyle(commits);
+  if (ui.logSortMode !== 'date') commits = orderChildrenBeforeParents(reorderForkStyle(commits));
   return calcGraphRows(commits, stashFullHashes, ui.stashMap);
 }
 
