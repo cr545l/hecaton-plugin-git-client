@@ -126,6 +126,22 @@ test('bounded logs retain server errors split across output chunks', async () =>
   assert.ok(result.stderr.length < 100000);
 });
 
+test('Stage All retains a skipped-directory warning between long logs even with exit zero', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  spawn = async () => {
+    const process_id = nextId++;
+    for (const data of ['warning: CRLF conversion\n'.repeat(10000),
+      "warning: could not open directory 'deep/path/': Filename too long\n",
+      'warning: CRLF conversion\n'.repeat(10000)]) {
+      emit('process_output', { process_id, stream: 'stderr', data });
+    }
+    emit('process_exited', { process_id, ok: true, exit_code: 0 });
+    return { ok: true, process_id };
+  };
+  assert.match(await git.gitStageAll('C:/repo'), /Filename too long/);
+});
+
 for (const event of [{ cancelled: true, exit_code: 0 }, { timed_out: true, exit_code: 0 }, {}, { ok: false, exit_code: 0 }]) {
   test('abnormal completion is never success: ' + JSON.stringify(event), async () => {
     spawn = async () => {

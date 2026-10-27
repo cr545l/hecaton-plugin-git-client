@@ -17,7 +17,8 @@ function collector() {
       const lines = (partial + text).split(/\r\n?|\n/);
       partial = lines.pop().slice(-4096);
       for (const line of lines) {
-        if (/^(?:remote:\s*)?(?:error:|fatal:)/i.test(line)) {
+        if (/^(?:remote:\s*)?(?:error:|fatal:)/i.test(line)
+          || /^warning:.*\b(?:filename|file name|path|pathname) (?:is )?too long\b/i.test(line)) {
           reasons = (reasons + line + '\n').slice(0, 16384);
         }
       }

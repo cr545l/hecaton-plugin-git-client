@@ -119,7 +119,7 @@ test('remote menu push also displays thrown process failures', async () => {
 });
 
 for (const failure of ['throw', 'reject', 'false']) {
-  test('host dialog ' + failure + ' leaves a persistent, reopenable error', async () => {
+  test('host dialog ' + failure + ' retains the error for a later API retry', async () => {
     dialogFailure = failure;
     await handleKey(CSI + '112;6u');
     await tick();

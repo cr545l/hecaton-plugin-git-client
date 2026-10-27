@@ -2235,7 +2235,12 @@ function clearPendingTargets() {
 }
 
 async function handleDialogResult(params) {
-  if (require('./operation-error').resolve(params)) return;
+  try { return await handleDialogResultInner(params); }
+  finally { require('./operation-error').showDeferred(); }
+}
+
+async function handleDialogResultInner(params) {
+  if (await require('./operation-error').resolve(params)) return;
   const buttonId = params && params.button_id;
 
   // Name input dialog results (new-branch, new-tag, rename-stash, rename-branch, new-remote, delete-branch)

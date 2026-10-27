@@ -31,6 +31,19 @@ test('Stage All respects ignore rules and allows enough time for a large reposit
   assert.equal(request.timeout_ms, undefined);
 });
 
+test('Stage All reports skipped long directories even when Git exits zero', { skip: process.platform !== 'win32' }, async () => {
+  mockExec(async () => ({
+    ok: true, exit_code: 0,
+    stderr: "warning: could not open directory 'deep/path/': Filename too long\n",
+  }));
+  assert.match(await gitStageAll('C:\\repo'), /Filename too long/);
+});
+
+test('ordinary warnings do not make successful staging fail', async () => {
+  mockExec(async () => ({ ok: true, exit_code: 0, stderr: 'warning: LF will be replaced by CRLF\n' }));
+  assert.equal(await gitStageAll('C:\\repo'), null);
+});
+
 test('stage failures preserve the Git error and actionable index-lock guidance', async () => {
   mockExec(async () => ({
     ok: false,

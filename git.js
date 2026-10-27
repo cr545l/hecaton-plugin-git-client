@@ -68,6 +68,24 @@ function resultText(value) {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
+function isLongPathFailure(message) {
+  // Git for Windows can skip a whole directory with only a warning and exit 0.
+  // Remote errors and Unix filename limits cannot be fixed by core.longpaths.
+  return process.platform === 'win32'
+    && /^(?:warning:|error:|fatal:)[^\n]*\b(?:filename|file name|path|pathname) (?:is )?too long\b/im.test(message);
+}
+
+// git stash 는 intent-to-add(git add -N) 항목을 저장하지 못한다. 내용이 인덱스에 없는 항목을
+// 트리로 옮기다 "not uptodate. Cannot merge." 로 막힌다. 로컬 변경을 먼저 stash 해 두는
+// merge(fast-forward 가 아닐 때)·autostash 도 같은 자리에서 멈추므로 머지 충돌처럼 읽힌다.
+// git 은 첫 항목 하나만 알려 주므로 전체 목록은 gitIntentToAddPaths 로 다시 읽는다.
+function intentToAddFailurePath(message) {
+  const text = String(message || '');
+  if (!/^Cannot save the current worktree state$/m.test(text)) return null;
+  const entry = text.match(/^error: Entry '(.+)' not uptodate\. Cannot merge\.$/m);
+  return entry ? entry[1] : null;
+}
+
 function truncateGitDetail(text) {
   if (text.length <= MAX_GIT_ERROR_DETAIL) return text;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
   const half = Math.floor((MAX_GIT_ERROR_DETAIL - 40) / 2);
@@ -87,12 +105,12 @@ function formatGitFailure(result, fallback) {
     .trim();
 
   let lines = combined.split('\n').map(line => line.trimEnd()).filter(Boolean);
-  const nonWarnings = lines.filter(line => !/^warning:/i.test(line));
+  const nonWarnings = lines.filter(line => !/^warning:/i.test(line) || isLongPathFailure(line));
   if (nonWarnings.length > 0) lines = nonWarnings;
-  // Server rejection lines must survive long transfer logs. Leave short logs
-  // and local multiline diagnostics in their original order (Git wraps them).
+  // Keep actionable errors ahead of long logs so truncation retains the reason.
+  // Leave short and wrapped multiline diagnostics in their original order.
   if (lines.join('\n').length > MAX_GIT_ERROR_DETAIL) {
-    const isReason = line => /^remote:\s*(?:error:|fatal:)/i.test(line);
+    const isReason = line => isLongPathFailure(line) || /^remote:\s*(?:error:|fatal:)/i.test(line);
     lines = [...lines.filter(isReason), ...lines.filter(line => !isReason(line))];
   }
 
@@ -128,7 +146,8 @@ async function gitMutationResult(args, cwd) {
 
 async function gitMutation(args, cwd, fallback) {
   const result = await gitMutationResult(args, cwd);
-  return gitProcessSucceeded(result) ? null : formatGitFailure(result, fallback);
+  const skippedLongPath = isLongPathFailure(resultText(result && result.stderr));
+  return gitProcessSucceeded(result) && !skippedLongPath ? null : formatGitFailure(result, fallback);
 }
 
 function unquoteGitPath(p) {
@@ -1717,6 +1736,14 @@ async function gitGetConfig(cwd, key) { try { return (await git(['config', key],
 async function gitGetConfigLocal(cwd, key) { try { return (await git(['config', '--local', key], cwd)).trim(); } catch { return ''; } }
 async function gitGetConfigGlobal(cwd, key) { try { return (await git(['config', '--global', key], cwd)).trim(); } catch { return ''; } }
 async function gitSetConfig(cwd, key, value) { return gitMutation(['config', key, value], cwd, t('git.configSetFailed')); }
+async function gitEnableLongPaths(cwd) { return gitMutation(['config', '--local', 'core.longpaths', 'true'], cwd, t('git.enableLongPathsFailed')); }
+// 인덱스 → 워킹트리 diff 에서 A(새 파일)로 나오는 것은 intent-to-add 항목뿐이다.
+// 읽지 못하면 null — 호출자는 오류 메시지에 나온 경로로 대신한다.
+async function gitIntentToAddPaths(cwd) {
+  const result = await gitExecChecked(['--no-optional-locks', 'diff', '--ita-invisible-in-index',
+    '--no-ext-diff', '--name-only', '--diff-filter=A', '-z'], cwd, 5000);
+  return result.ok ? result.text.split('\0').filter(Boolean) : null;
+}
 async function gitUnsetConfigLocal(cwd, key) { return gitMutation(['config', '--local', '--unset', key], cwd, t('git.configUnsetFailed')); }
 
 async function gitFreshLog(cwd, days) {
@@ -1917,6 +1944,7 @@ module.exports = {
   gitExec,
   gitExecChecked,
   gitProcessSucceeded,
+  isLongPathFailure, intentToAddFailurePath,
   unquoteGitPath, isUnnameablePath,
   resolveWorkTreeRoot, findGitDirFromDisk,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
@@ -1937,7 +1965,7 @@ module.exports = {
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
   gitStatusSplit, gitStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
-  gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitUnsetConfigLocal,
+  gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitEnableLongPaths, gitIntentToAddPaths, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,
   gitRebaseAsync, gitRebaseContinueAsync, gitRebaseAbortAsync, gitRebaseSkipAsync,

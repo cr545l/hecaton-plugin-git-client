@@ -149,6 +149,7 @@ const ACTION_SCOPES = {
   branch_track: [CONFIG], branch_untrack: [CONFIG],
   'committer-name': [CONFIG], 'committer-email': [CONFIG],
   'reset-committer-name': [CONFIG], 'reset-committer-email': [CONFIG],
+  'enable-long-paths': [CONFIG],
   remote_add: [CONFIG], remote_remove: [CONFIG], remote_set_url: [CONFIG],
   remote_rename: [CONFIG, REMOTE],
 
