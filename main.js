@@ -303,9 +303,9 @@ async function applyGitOptimizations(cwd, gitDir) {
     const val = cur && cur.ok ? (cur.stdout || '').replace(/\r\n/g, '\n').trim().toLowerCase() : '';
     // exit_code != 0 이거나 stdout 비어있으면 미설정 → 자동 활성화
     if (val !== 'true' && val !== 'false') {
-      await perms.execGit({
+      await require('./git-process').run({
         program: 'git', args: ['config', '--local', 'core.untrackedCache', 'true'],
-        cwd, timeout_ms: 3000,
+        cwd,
       });
       console.log('[git-client] enabled core.untrackedCache=true (' + cwd + ')');  // i18n-ok: console 로그(사용자 UI 아님)
     }
@@ -345,9 +345,9 @@ async function applyGitOptimizations(cwd, gitDir) {
     // 미설정만 자동 활성화. true/false/외부 hook 경로가 잡혀 있으면 그대로 둔다.
     if (val !== '' && val !== 'true' && val !== 'false') return;
     if (val === '') {
-      await perms.execGit({
+      await require('./git-process').run({
         program: 'git', args: ['config', '--local', 'core.fsmonitor', 'true'],
-        cwd, timeout_ms: 3000,
+        cwd,
       });
       console.log('[git-client] enabled core.fsmonitor=true (' + verStr + ')');  // i18n-ok: console 로그(사용자 UI 아님)
     }

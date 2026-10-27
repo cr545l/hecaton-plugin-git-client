@@ -25,6 +25,12 @@ function formatProgressStatus() {
   if (state.spinnerActive && state.error) msg = state.error;
   else if (state.refreshing) msg = state.refreshMessage || t('title.refreshing');
   else if (state.logLoadingMore) msg = t('title.loadingMoreCommits');
+  if (state.spinnerActive) {
+    const running = (state.activeOps || []).filter(op => op.phase === 'running');
+    const current = running[running.length - 1];
+    const seconds = current ? Math.floor((Date.now() - current.startedAt) / 1000) : 0;
+    if (seconds >= 10) msg += t('title.elapsedSeconds', { seconds });
+  }
   // 지금 도는 작업 때문에 막혀 예약해 둔 동작 — 무엇이 이어질지를 진행 표시 뒤에
   // 덧붙인다("⠹ Committing... → Push"). 눌린 것이 무시되지 않았다는 신호이므로,
   // 진행 표시가 없는 찰나(작업이 끝나고 예약이 실행되기 직전)에도 남겨 둔다.

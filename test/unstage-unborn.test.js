@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // unstage 통합 테스트 — 실제 git을 돌린다.
 // 커밋이 하나도 없는 저장소(unborn HEAD)에서는 HEAD를 해석할 수 없어
 // 'restore --staged' / 'reset HEAD' 가 fatal로 죽었다. 인자 문자열만 검사해서는

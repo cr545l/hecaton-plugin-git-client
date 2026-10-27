@@ -3,7 +3,6 @@
 const perms = require('./permissions');
 const { t } = require('./i18n');
 
-const NETWORK_TIMEOUT_MS = 30 * 60 * 1000;
 const jobs = new Map();
 const starting = new Set();
 let subscribed = false;
@@ -58,7 +57,9 @@ function apply(output, kind, event) {
 
 async function run(params) {
   if (typeof hecaton.process.spawn !== 'function' || typeof hecaton.on !== 'function') {
-    return perms.execGit(params);
+    // Never fall back to exec: older hosts cap its wait and kill the process,
+    // potentially interrupting an index/worktree update halfway through.
+    return { ok: false, error: t('git.streamingRequired') };
   }
   if (!subscribed) {
     hecaton.on('process_output', event => receive('output', event));
@@ -69,7 +70,8 @@ async function run(params) {
   starting.add(early);
   let spawned;
   try {
-    // Enforce the operation deadline here, rather than the host's exec ceiling.
+    // Mutations have no wall-clock deadline. Even silent filters/hooks can be
+    // doing useful work; only a real exit event releases the caller's write gate.
     const { timeout_ms, ...spawnParams } = params;
     spawned = await perms.spawnGit(spawnParams);
   } finally {
@@ -82,21 +84,17 @@ async function run(params) {
   const id = spawned.process_id;
   const output = early.get(id) || record();
   return new Promise(resolve => {
-    let deadline, cleanupDeadline, timedOut = false, settled = false;
+    let settled = false;
     const finish = event => {
       if (settled) return;
       settled = true;
-      clearTimeout(deadline);
-      clearTimeout(cleanupDeadline);
       jobs.delete(id);
       const code = event.exit_code;
       resolve({
         ...event,
-        timed_out: timedOut || !!event.timed_out,
-        timeout_ms: timedOut ? params.timeout_ms : event.timeout_ms,
-        ok: event.ok !== false && !timedOut && !event.timed_out && !event.cancelled && typeof code === 'number',
-        error: timedOut ? t('git.processDeadline', { seconds: params.timeout_ms / 1000 })
-          : event.error || (event.timed_out ? t('git.processTimedOut')
+        timed_out: !!event.timed_out,
+        ok: event.ok !== false && !event.timed_out && !event.cancelled && typeof code === 'number',
+        error: event.error || (event.timed_out ? t('git.processTimedOut')
             : event.cancelled ? t('git.processCancelled')
               : typeof code !== 'number' ? t('git.processMissingExit') : undefined),
         stdout: output.stdout.text(), stderr: output.stderr.text(),
@@ -104,16 +102,7 @@ async function run(params) {
     };
     jobs.set(id, { output, finish });
     if (output.exit) { finish(output.exit); return; }
-    deadline = setTimeout(() => {
-      timedOut = true;
-      // Kill only this job through the host (including its child processes).
-      // Keep waiting for the exit notification; a lost notification must not
-      // leave the spinner or network coordination record stuck forever.
-      cleanupDeadline = setTimeout(() => finish({}), 10000);
-      Promise.resolve().then(() => hecaton.process.kill({ process_id: id }))
-        .catch(() => {});
-    }, params.timeout_ms);
   });
 }
 
-module.exports = { run, NETWORK_TIMEOUT_MS };
+module.exports = { run };

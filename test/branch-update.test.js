@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 체크아웃하지 않은 브랜치를 upstream까지 끌어올리는 동작 검증 — 실제 git을 돌린다.
 //
 // 배경: 브랜치 메뉴의 Pull / Fast-Forward는 `git pull <remote> <branch>` /

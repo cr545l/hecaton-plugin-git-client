@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 처리상태 표시의 우선순위 검증.
 //
 // refresh는 대개 다른 작업에 딸려 돌고 그 작업보다 오래 걸린다. 같은 자리를 두고 다투면
@@ -151,13 +152,14 @@ test('모든 refresh가 끝나면 처리상태가 사라진다', async () => {
 
 // ── 타이틀 반영 ──
 
-test('applyWindowTitle은 같은 제목을 거듭 내보내지 않는다', () => {
+test('applyWindowTitle은 같은 제목을 거듭 내보내지 않는다', async () => {
   // 중복 제거 캐시는 모듈 전역이라 앞선 테스트가 남긴 제목이 이미 들어 있다.
   // 먼저 제목을 바꿔 알고 있는 상태로 맞춘 뒤, 그다음부터 아끼는지 본다.
   resetState();
   state.spinnerActive = true;
   state.error = 'Rebasing...';
   applyWindowTitle();
+  await new Promise(resolve => setTimeout(resolve, 300));
 
   const emitted = titles.length;
   assert.equal(emitted, 1, '바뀐 제목은 내보내야 한다');
@@ -168,16 +170,18 @@ test('applyWindowTitle은 같은 제목을 거듭 내보내지 않는다', () =>
   assert.equal(titles.length, emitted, '바뀐 게 없으면 RPC를 아껴야 한다');
 });
 
-test('스피너 프레임이 돌면 타이틀도 따라 바뀐다', () => {
+test('스피너 프레임이 돌면 타이틀도 따라 바뀐다', async () => {
   resetState();
   state.spinnerActive = true;
   state.error = 'Fetching...';
 
   state.spinnerFrame = 0;
   applyWindowTitle();
+  await new Promise(resolve => setTimeout(resolve, 300));
   const t0 = titles[titles.length - 1];
   state.spinnerFrame = 1;
   applyWindowTitle();
+  await new Promise(resolve => setTimeout(resolve, 300));
   const t1 = titles[titles.length - 1];
 
   assert.notEqual(t0, t1, '프레임이 바뀌면 새 제목이 나가야 애니메이션이 된다');
@@ -185,14 +189,16 @@ test('스피너 프레임이 돌면 타이틀도 따라 바뀐다', () => {
   assert.equal(t1, BRAILLE_FRAMES[1] + ' Fetching... | main');
 });
 
-test('복합 작업의 단계 변경은 다음 타이머를 기다리지 않고 타이틀에 반영된다', () => {
+test('복합 작업의 단계 변경은 타이틀 갱신 간격 안에 반영된다', async () => {
   resetState();
   startSpinner('Stash & Rebase... (1/3) Stashing');
+  await new Promise(resolve => setTimeout(resolve, 300));
   const emittedBeforeUpdate = titles.length;
 
   updateSpinner('Stash & Rebase... (2/3) Rebasing');
+  await new Promise(resolve => setTimeout(resolve, 300));
 
-  assert.equal(titles.length, emittedBeforeUpdate + 1);
+  assert.ok(titles.length > emittedBeforeUpdate);
   assert.match(titles[titles.length - 1], /\(2\/3\) Rebasing/);
   stopSpinner();
 });

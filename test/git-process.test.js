@@ -18,7 +18,7 @@ const runner = require('../git-process');
 const git = require('../git');
 const coordinate = require('../coordinate');
 require('../spinner').showToast = () => {};
-const params = () => ({ program: 'git', args: ['push'], cwd: 'C:/repo', timeout_ms: runner.NETWORK_TIMEOUT_MS });
+const params = () => ({ program: 'git', args: ['push'], cwd: 'C:/repo', timeout_ms: 30000 });
 
 test.beforeEach(() => {
   calls.length = 0;
@@ -83,37 +83,34 @@ test('concurrent jobs keep their own output and early exit', async () => {
   assert.equal(b.stderr, 'second');
 });
 
-test('deadline kills only the owned process, waits for exit, and reports actual time', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const id = nextId;
-  let killed;
-  kill = async p => { killed = p; return { ok: true }; };
-  let settled = false;
-  const pending = runner.run({ ...params(), timeout_ms: 125000 }).then(r => { settled = true; return r; });
-  await flush();
-  t.mock.timers.tick(125000);
-  await flush();
-  assert.deepEqual(killed, { process_id: id });
-  assert.equal(settled, false);
-  emit('process_exited', { process_id: id, exit_code: 1, cancelled: true });
-  const result = await pending;
-  assert.equal(result.ok, false);
-  assert.equal(result.timed_out, true);
-  assert.equal(result.timeout_ms, 125000);
-});
-
-test('missing exit event after deadline releases the caller even when kill rejects', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  kill = async () => { throw new Error('RPC disconnected'); };
-  const pending = runner.run({ ...params(), timeout_ms: 125000 });
-  await flush();
-  t.mock.timers.tick(125000);
-  await flush();
-  t.mock.timers.tick(10000);
-  const result = await pending;
-  assert.equal(result.ok, false);
-  assert.equal(result.timed_out, true);
-});
+for (const [name, args] of [
+  ['gitRebaseAbortAsync', []], ['gitRebaseContinueAsync', []], ['gitRebaseSkipAsync', []],
+  ['gitRebaseAsync', ['main']], ['gitMergeAbort', []], ['gitCherryPickAbort', []],
+  ['gitRevertAbort', []], ['gitCheckoutRefAsync', ['main']], ['gitStashSave', []],
+  ['gitStashPopAsync', []], ['gitCommit', ['message']], ['gitCommitAsync', ['message']],
+  ['gitStageAll', []], ['gitUnstageAll', []], ['gitResetAsync', ['HEAD']],
+  ['gitWorktreeAdd', ['C:/worktree', 'main']], ['gitCloneAsync', ['url', 'folder']],
+  ['gitPushAsync', []], ['gitPullAsync', []], ['gitFetchAsync', []],
+  ['gitSetConfig', ['core.autocrlf', 'false']],
+]) {
+  test(name + ' stays pending without output past all former deadlines', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const id = nextId;
+    let settled = false, killed = false;
+    kill = async () => { killed = true; };
+    const pending = git[name]('C:/repo', ...args).then(r => { settled = true; return r; });
+    await flush();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].cwd, 'C:/repo');
+    assert.equal(calls[0].timeout_ms, undefined);
+    t.mock.timers.tick(2 * 60 * 60 * 1000);
+    await flush();
+    assert.equal(killed, false);
+    assert.equal(settled, false);
+    emit('process_exited', { process_id: id, exit_code: 0 });
+    assert.equal(await pending, null);
+  });
+}
 
 test('bounded logs retain server errors split across output chunks', async () => {
   spawn = async () => {
@@ -155,14 +152,13 @@ test('denied Git permission prevents spawning', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('legacy exec timeout reports the host 60-second limit, not the requested deadline', async () => {
+test('unsupported hosts do not fall back to exec with a destructive deadline', async () => {
   const saved = hecaton.process.spawn;
   delete hecaton.process.spawn;
   try {
-    exec = async () => ({ ok: false, error: 'Process timed out after 60000ms' });
-    const error = await git.gitPushAsync('C:/repo');
-    assert.match(error, /exceeded 60 seconds/);
-    assert.doesNotMatch(error, /exceeded (120|1800) seconds/);
+    const error = await git.gitRebaseAbortAsync('C:/repo');
+    assert.match(error, /Update Hecaton/);
+    assert.equal(calls.length, 0);
   } finally { hecaton.process.spawn = saved; }
 });
 
@@ -197,6 +193,58 @@ test('real Git push retains a rejecting hook result after 65 seconds', {
   } finally {
     // Only remove the exact temporary directory created for this test.
     assert.equal(path.dirname(root), path.resolve(require('node:os').tmpdir()));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('real rebase abort waits for a 32-second smudge filter and restores the repository', {
+  skip: !process.env.HECATON_LONG_PROCESS_TEST, timeout: 90000,
+}, async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cp = require('node:child_process');
+  const temp = require('node:os').tmpdir();
+  const root = fs.mkdtempSync(path.join(temp, 'hecaton-abort-'));
+  const runGit = (...args) => cp.execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+  try {
+    runGit('init', '-b', 'main');
+    runGit('config', 'user.name', 'Test');
+    runGit('config', 'user.email', 'test@example.invalid');
+    runGit('config', 'commit.gpgsign', 'false');
+    runGit('config', 'core.autocrlf', 'false');
+    fs.writeFileSync(path.join(root, '.gitattributes'), 'payload filter=slow\n');
+    fs.writeFileSync(path.join(root, 'payload'), 'base\n');
+    runGit('add', '.');
+    runGit('commit', '-m', 'base');
+    runGit('branch', 'topic');
+    fs.writeFileSync(path.join(root, 'payload'), 'main\n');
+    runGit('commit', '-am', 'main');
+    const original = runGit('rev-parse', 'HEAD').trim();
+    runGit('checkout', 'topic');
+    fs.writeFileSync(path.join(root, 'payload'), 'topic\n');
+    runGit('commit', '-am', 'topic');
+    runGit('checkout', 'main');
+    assert.throws(() => runGit('rebase', 'topic'));
+    runGit('config', 'filter.slow.smudge', 'sleep 32; cat');
+    spawn = async p => {
+      const process_id = nextId++;
+      const child = cp.spawn(p.program, p.args, { cwd: p.cwd, windowsHide: true });
+      child.stdout.on('data', data => emit('process_output', { process_id, stream: 'stdout', data: data.toString() }));
+      child.stderr.on('data', data => emit('process_output', { process_id, stream: 'stderr', data: data.toString() }));
+      child.on('close', exit_code => emit('process_exited', { process_id, exit_code }));
+      return { ok: true, process_id };
+    };
+    const started = Date.now();
+    assert.equal(await git.gitRebaseAbortAsync(root), null);
+    assert.ok(Date.now() - started >= 32000);
+    assert.equal(runGit('rev-parse', 'HEAD').trim(), original);
+    assert.equal(runGit('branch', '--show-current').trim(), 'main');
+    assert.equal(runGit('status', '--porcelain').trim(), '');
+    assert.equal(fs.readFileSync(path.join(root, 'payload'), 'utf8'), 'main\n');
+    assert.equal(fs.existsSync(path.join(root, '.git', 'index.lock')), false);
+    assert.equal(fs.existsSync(path.join(root, '.git', 'rebase-merge')), false);
+  } finally {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(temp));
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

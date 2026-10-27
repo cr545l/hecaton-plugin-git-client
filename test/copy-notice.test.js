@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 클립보드 복사처럼 되돌릴 것도 읽을 것도 없는 성공 알림은 확인창을 띄우지 않는다.
 //
 // 배경: 복사 성공 안내가 showError 로 나가고 있었다. 제목이 'Error' 인 창이 뜨고

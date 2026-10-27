@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 쓰기 작업 중 인터렉션 분리 검증.
 //
 // 배경: 예전에는 spinnerActive 가 stdin 전체를 막아, 커밋/페치/푸시가 도는 동안

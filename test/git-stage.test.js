@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -27,7 +28,7 @@ test('Stage All respects ignore rules and allows enough time for a large reposit
 
   assert.equal(err, null);
   assert.deepEqual(request.args, ['add', '-A']);
-  assert.equal(request.timeout_ms, 600000);
+  assert.equal(request.timeout_ms, undefined);
 });
 
 test('stage failures preserve the Git error and actionable index-lock guidance', async () => {
@@ -98,7 +99,7 @@ for (const [name, run] of [['stage', gitStageMultiple], ['unstage', gitUnstageMu
     assert.ok(command.args.includes('--literal-pathspecs'));
     assert.ok(command.args.includes('--pathspec-file-nul'));
     assert.ok(command.args.includes('--pathspec-from-file=' + host.writes[0].path));
-    assert.equal(command.timeout_ms, 600000);
+    assert.equal(command.timeout_ms, undefined);
     assert.deepEqual(host.deletes, [{ path: host.writes[0].path }]);
   });
 }

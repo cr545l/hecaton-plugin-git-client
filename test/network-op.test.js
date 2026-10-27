@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const nodePath = require('path');

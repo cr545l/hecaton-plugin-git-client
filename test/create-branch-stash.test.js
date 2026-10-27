@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 브랜치 생성이 로컬 변경에 막히는 경우 — 실제 git 을 돌린다.
 //
 // `git checkout -b <name> <start>` 는 브랜치 생성과 체크아웃을 함께 한다. 기준점이 HEAD 와

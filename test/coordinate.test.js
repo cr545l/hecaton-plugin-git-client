@@ -205,28 +205,38 @@ test('내 작업이 도는 동안에는 폴링이 억제된다', async () => {
   assert.equal(await coordinate.isNetworkOpInFlight(), false);
 });
 
-test('응답이 돌아오지 않은 내 작업이 폴링을 영구히 막지 않는다', async () => {
+test('local operation remains in flight after two hours until actual completion', async () => {
   reset();
-  // exec 응답이 끝내 오지 않아 endNetworkOp가 불리지 못한 상태를 만든다.
   await coordinate.beginNetworkOp('fetch', 3000);
-  assert.equal(await coordinate.isNetworkOpInFlight(), true, '작업 직후에는 억제가 맞다');
-
-  // 진행 기록도 함께 낡게 만든다(같은 인스턴스가 멈춘 상황).
-  const rec = readRaw('netop.json');
-  rec.startedAt = Date.now() - 31 * 60000;
-  writeRaw('netop.json', rec);
-  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 31 * 60000);
-
-  assert.equal(await coordinate.isNetworkOpInFlight(), false,
-    '억제가 안 풀리면 이 인스턴스의 폴링이 영영 멈춘다');
+  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 2 * 60 * 60000);
+  assert.equal(await coordinate.isNetworkOpInFlight(), true);
+  await coordinate.endNetworkOp('fetch', true);
+  assert.equal(await coordinate.isNetworkOpInFlight(), false);
 });
 
-test('만료된 로컬 작업은 새 작업 판정을 막지 않는다', async () => {
+test('fresh heartbeat keeps an old remote operation in flight', async () => {
   reset();
-  await coordinate.beginNetworkOp('fetch', 3000);
-  coordinate.__setLocalNetworkOpStartedAt(Date.now() - 31 * 60000);
-  await coordinate.isNetworkOpInFlight();   // 여기서 만료 처리
-  assert.equal(await coordinate.isNetworkOpInFlight(), false);
+  writeRaw('netop.json', { op: 'push', owner: 'other', startedAt: Date.now() - 2 * 60 * 60000,
+    heartbeatAt: Date.now(), finishedAt: 0 });
+  assert.equal(await coordinate.isNetworkOpInFlight(), true);
+  assert.equal(await coordinate.beginNetworkOp('push', 0), 'inflight');
+  await coordinate.endNetworkOp('push', false);
+});
+
+test('heartbeat refreshes while running and cannot overwrite completion', async t => {
+  reset();
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  await coordinate.beginNetworkOp('push', 0);
+  const stop = coordinate.keepNetworkOpAlive();
+  t.mock.timers.tick(10000);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.ok(readRaw('netop.json').heartbeatAt > 0);
+  await stop();
+  await coordinate.endNetworkOp('push', true);
+  t.mock.timers.tick(10000);
+  const rec = readRaw('netop.json');
+  assert.equal(rec.ok, true);
+  assert.ok(rec.finishedAt >= rec.startedAt);
 });
 
 test('남의 작업이 도는 동안에도 폴링이 억제된다', async () => {

@@ -1,3 +1,4 @@
+const { readRebaseProgress } = require('./rebase-progress');
 const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
 const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
@@ -1432,26 +1433,17 @@ async function refreshAsync(options = {}) {
     ]);
 
     if (rmStat && rmStat.exists && rmStat.is_dir) {
-      const [stepRes, totalRes, headNameRes, ontoRes] = await Promise.all([
-        hecaton.fs.read_file({ path: rebaseMerge + sep + 'msgnum' }),
-        hecaton.fs.read_file({ path: rebaseMerge + sep + 'end' }),
+      const [progress, headNameRes, ontoRes] = await Promise.all([
+        readRebaseProgress(rebaseMerge),
         hecaton.fs.read_file({ path: rebaseMerge + sep + 'head-name' }),
         hecaton.fs.read_file({ path: rebaseMerge + sep + 'onto' }),
       ]);
-      const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
-      const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
       let headName = (headNameRes && headNameRes.content) ? headNameRes.content.trim() : '';
       if (headName.startsWith('refs/heads/')) headName = headName.substring('refs/heads/'.length);
       const ontoHash = (ontoRes && ontoRes.content) ? ontoRes.content.trim().substring(0, 7) : '';
-      state.operationState = { type: 'rebase-merge', step: parseInt(step), total: parseInt(total), headName, ontoHash };
+      state.operationState = { type: 'rebase-merge', ...progress, headName, ontoHash };
     } else if (raStat && raStat.exists && raStat.is_dir) {
-      const [stepRes, totalRes] = await Promise.all([
-        hecaton.fs.read_file({ path: rebaseApply + sep + 'next' }),
-        hecaton.fs.read_file({ path: rebaseApply + sep + 'last' }),
-      ]);
-      const step = (stepRes && stepRes.content) ? stepRes.content.trim() : '0';
-      const total = (totalRes && totalRes.content) ? totalRes.content.trim() : '0';
-      state.operationState = { type: 'rebase-apply', step: parseInt(step), total: parseInt(total) };
+      state.operationState = { type: 'rebase-apply', ...await readRebaseProgress(rebaseApply, true) };
     } else if (mhStat && mhStat.exists) {
       state.operationState = { type: 'merge' };
     } else if (chStat && chStat.exists) {

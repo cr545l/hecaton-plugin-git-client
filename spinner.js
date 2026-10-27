@@ -63,7 +63,7 @@ let _ops = [];
 // 읽기 작업(히스토리 조회, diff 로드, 백그라운드 refresh)은 이 등록부를 쓰지 않고
 // state.refreshing / logLoading 계열로만 표시해, 진행 중에도 화면 탐색을 막지 않는다.
 function beginOp(label, scopes, phase) {
-  const op = { label: label || '', scopes: scopes || null, phase: phase || 'running' };
+  const op = { label: label || '', scopes: scopes || null, phase: phase || 'running', startedAt: Date.now() };
   _ops.push(op);
   syncOpState(false);
   return op;

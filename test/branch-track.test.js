@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 브랜치별 추적 상태(upstream, ahead/behind, gone) 파싱 검증.
 //
 // Status 힌트바가 push/pull 대기 수를 보여주려면 브랜치 목록 조회에서 그 값이 함께

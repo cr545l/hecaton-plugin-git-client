@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 진행 중인 작업이 "무엇을 붙잡고 있는가"에 따른 차단 범위 검증.
 //
 // 배경: 예전에는 진행 여부가 불리언 하나(spinnerActive)였다. 그래서 브랜치 리네임처럼

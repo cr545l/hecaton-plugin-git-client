@@ -568,9 +568,11 @@ function renderBody() {
           // Rebase progress bar (Fork-style)
           const branch = state.branch || 'HEAD';
           const rebasedStep = Math.max(0, (op.step || 1) - 1);
-          const totalSteps = op.total || '?';
+          const totalSteps = op.total;
           const rebaseBranch = op.headName || branch;
-          progressLabel = t('ui.rebasingPrefix') + rebaseBranch + t('ui.rebasedMiddle') + rebasedStep + '/' + totalSteps + t('ui.commitsSuffix');
+          progressLabel = t('ui.rebasingPrefix') + rebaseBranch + t('ui.rebasedMiddle') + (Number.isInteger(op.step) && Number.isInteger(totalSteps)
+            ? rebasedStep + '/' + totalSteps + t('ui.commitsSuffix')
+            : t('ui.rebaseProgressUnavailable'));
         } else {
           const opName = op.type === 'merge' ? t('ui.merging') : op.type === 'cherry-pick' ? t('ui.cherryPicking') : t('ui.reverting');
           progressLabel = ' ' + opName + ' ';

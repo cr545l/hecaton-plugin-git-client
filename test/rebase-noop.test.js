@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 이전 리비전(= 이미 HEAD 의 조상)으로 rebase 할 때의 동작 — 실제 git 을 돌린다.
 // git 은 이 경우 옮길 커밋이 없다고 판단해 "Current branch X is up to date." 를
 // stdout 에 찍고 exit 0 으로 끝낸다. 종료 코드만 보면 성공과 구분되지 않아

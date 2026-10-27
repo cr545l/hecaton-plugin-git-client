@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 상황별 동작 활성/비활성 판정 검증.
 //
 // 배경: 예전에는 "다른 쓰기 작업이 도는 중인가" 하나만 봤다. 그래서 rebase 진행 중

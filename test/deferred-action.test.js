@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 확인창을 거쳐 미뤄진 동작의 재검사 검증.
 //
 // 배경: 확인 다이얼로그를 여는 시점에는 guardAction 이 걸렸지만, 사용자가 확인 버튼을

@@ -12,6 +12,15 @@ const assert = require('node:assert/strict');
 const { state } = require('../state');
 const { formatWindowTitle, BRAILLE_FRAMES } = require('../title');
 
+test('long writes show elapsed time without changing the operation label', () => {
+  resetState();
+  state.spinnerActive = true;
+  state.error = 'Rebasing...';
+  state.activeOps = [{ phase: 'running', startedAt: Date.now() - 65000 }];
+  assert.match(formatWindowTitle(), /Rebasing\.\.\. \(65s elapsed\)/);
+  state.activeOps = [];
+});
+
 function resetState() {
   state.branch = 'main';
   state.staged = [{ status: 'M', file: 'a.txt' }];

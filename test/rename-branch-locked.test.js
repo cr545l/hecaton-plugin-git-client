@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 브랜치 리네임의 부분 성공 처리 — 실제 git 을 돌린다.
 // `git branch -m` 은 ref 를 옮긴 뒤 마지막에 config 의 branch.<old>.* 섹션을 옮기는데,
 // 이 단계에서만 .git/config.lock 을 잡는다. 다른 클라이언트가 config 를 쓰는 중이거나

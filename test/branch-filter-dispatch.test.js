@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 브랜치 Filter / Hide 의 실행 경로 검증 — 메뉴 항목을 만들어 놓고 핸들러를 빠뜨리면
 // 눌러도 아무 일이 안 일어난다. 여기서는 handleContextMenuAction 을 실제로 태워
 // 지정이 바뀌고 히스토리 목록까지 다시 그려지는지 본다.

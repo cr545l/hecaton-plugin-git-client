@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 실제 git 저장소에 linked worktree를 만들어 gitWorktrees 파싱을 검증한다.
 // hecaton.process.exec만 child_process로 대체하고 나머지는 플러그인 코드 그대로 사용.
 const test = require('node:test');

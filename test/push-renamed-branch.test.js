@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // 리네임된 브랜치의 푸시 통합 테스트 — 실제 git을 돌린다.
 // `git branch -m` 은 branch.<name>.merge 를 옛 이름 그대로 남기므로, 인자 없는
 // `git push` 는 push.default=simple 정책에 걸려 fatal 로 죽는다. 인자 문자열만

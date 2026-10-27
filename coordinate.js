@@ -25,15 +25,8 @@ const INSTANCE_ID = (function () {
 
 let _shareDir = '';       // 공유 파일 디렉터리 (빈 문자열이면 조율 비활성)
 let _cwdKey = '';         // 워크트리 구분용 키 — 같은 저장소라도 워크트리가 다르면 스냅샷은 공유 불가
-let _dirReady = false;    // mkdir 완료 여부
-
-// 로컬 인스턴스가 네트워크 작업 중인지. { op, startedAt } 또는 null.
-// 공유 파일을 읽지 않고도 판정할 수 있는 빠른 경로 — 자기 자신이 fetch/pull/push
-// 중이면 폴링을 돌릴 이유가 없다.
-//
-// 시작 시각을 함께 두는 게 중요하다. exec 응답이 끝내 돌아오지 않으면 작업을 닫는
-// 코드가 실행되지 않아 이 플래그가 영원히 남고, 그러면 그 인스턴스의 폴링이 영구히
-// 멈춘다. 억제는 어디까지나 한시적이어야 한다.
+let _dirReady = false;
+// Local ownership lasts until completion; elapsed time is not evidence of exit.
 let _localNetworkOp = null;
 
 function hashKey(text) {
@@ -126,11 +119,29 @@ async function publishSharedSnapshot(kind, value) {
 // 갱신하는 편이 빠르다.
 
 const NETOP_KIND = 'netop';
-// 인스턴스가 비정상 종료하면 finishedAt이 영영 안 찍힌다. 이 시간을 넘긴 inflight는
-// 죽은 것으로 보고 무시한다 — git 쪽 네트워크 작업 타임아웃(git.js의
-// NETWORK_TIMEOUT_MS)보다 넉넉하게 잡는다. 그보다 짧으면 정상적으로 오래
-// 걸리는 fetch를 죽은 것으로 오인해, 기다리던 인스턴스가 같은 작업을 또 건다.
-const NETOP_STALE_MS = require('./git-process').NETWORK_TIMEOUT_MS + 30000;
+// Shared records expire by heartbeat, not by total operation duration.
+const NETOP_STALE_MS = 30 * 60 * 1000 + 30000;
+
+function keepNetworkOpAlive() {
+  const target = isEnabled() ? sharedPath(NETOP_KIND, false) : '';
+  let pending = Promise.resolve(), stopped = false;
+  const timer = target ? setInterval(() => {
+    pending = pending.then(async () => {
+      if (stopped) return;
+      const data = await readJson(target);
+      if (!data || data.owner !== INSTANCE_ID || data.finishedAt) return;
+      data.heartbeatAt = Date.now();
+      await writeJson(target, data);
+    }).catch(() => {});
+  }, 10000) : null;
+  if (timer && timer.unref) timer.unref();
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    // Drain the heartbeat before publishing completion.
+    await pending;
+  };
+}
 
 async function readNetOp() {
   if (!isEnabled() || !await ensureDir()) return null;
@@ -144,17 +155,13 @@ async function isRemoteNetworkOpInFlight() {
   if (!data || typeof data.startedAt !== 'number') return false;
   if (data.owner === INSTANCE_ID) return false;
   if (data.finishedAt && data.finishedAt >= data.startedAt) return false;
-  return (Date.now() - data.startedAt) < NETOP_STALE_MS;
+  return (Date.now() - (data.heartbeatAt || data.startedAt)) < NETOP_STALE_MS;
 }
 
 // 이 저장소에서 네트워크 작업이 도는 중인지. 폴링 억제 판단에 쓴다.
 // 남의 작업뿐 아니라 내가 실행/대기 중인 경우도 폴링을 멈춰야 하므로 로컬 플래그를 함께 본다.
 async function isNetworkOpInFlight() {
-  if (_localNetworkOp) {
-    if (Date.now() - _localNetworkOp.startedAt < NETOP_STALE_MS) return true;
-    // 응답이 돌아오지 않은 작업이다. 여기서 놓아주지 않으면 폴링이 영영 멈춘다.
-    _localNetworkOp = null;
-  }
+  if (_localNetworkOp) return true; // Only real completion releases our operation.
   return await isRemoteNetworkOpInFlight();
 }
 
@@ -171,7 +178,7 @@ async function beginNetworkOp(op, reuseWindowMs) {
   const now = Date.now();
   if (data && typeof data.startedAt === 'number') {
     const running = (!data.finishedAt || data.finishedAt < data.startedAt)
-      && (now - data.startedAt) < NETOP_STALE_MS
+      && (now - (data.heartbeatAt || data.startedAt)) < NETOP_STALE_MS
       && data.owner !== INSTANCE_ID;
     if (running) return 'inflight';
     const reusable = reuseWindowMs > 0
@@ -223,6 +230,7 @@ async function waitForNetworkOp(timeoutMs) {
 
 module.exports = {
   INSTANCE_ID,
+  keepNetworkOpAlive,
   // 테스트용: 응답이 돌아오지 않은 작업을 흉내내기 위해 시작 시각만 되돌린다.
   __setLocalNetworkOpStartedAt(ms) { if (_localNetworkOp) _localNetworkOp.startedAt = ms; },
   configure,

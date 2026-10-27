@@ -1,3 +1,4 @@
+require('./helpers/git-mutation-host');
 // Push 단축키(Ctrl+Shift+P)가 upstream 이름 불일치를 감지해 선택 다이얼로그를
 // 띄우는지 검증. git 은 실행하지 않고 exec 호출 인자만 기록한다.
 const test = require('node:test');
