@@ -2,10 +2,15 @@
   "id": "dev.hecaton.git-client",
   "name": { "en": "Git Client", "ko": "Git 클라이언트" },
   "icon": "terminal-git-bash",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "entry": "main.js",
-  "apiVersion": "1.15",
+  "apiVersion": "1.19",
+  "service": { "entry": "service.js", "idle_timeout_ms": 10000 },
   "permission_usage_descriptions": {
+    "service_run": {
+      "en": "Share Git status polling across Git Client windows to reduce Git process creation.",
+      "ko": "Git 프로세스 생성을 줄이기 위해 Git 클라이언트 창들의 상태 조회를 공유합니다."
+    },
     "process_exec": {
       "en": "Run git to read the status, history and diffs of the repository you opened, and to carry out the actions you pick from the menu.",
       "ko": "연 저장소의 상태·이력·변경 내용을 읽고 메뉴에서 고른 작업을 수행하기 위해 git 을 실행합니다."

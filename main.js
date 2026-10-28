@@ -35,6 +35,8 @@ const coordinate = require('./coordinate');
 const reap = require('./reap');
 const perms = require('./permissions');
 const path = require('path');
+const { createPollingClient } = require('./polling-client');
+const { buildWorktreeSnapshot: collectWorktreeSnapshot } = require('./worktree-snapshot');
 
 async function main() {
   // 언어부터 정한다 - HECA_LOCALE 이 initialState.locale 로 이미 와 있으므로
@@ -458,53 +460,10 @@ async function setupGitWatcher() {
     } catch { return 0; }
   }
 
-  function splitNul(raw) {
-    return (raw || '').split('\0').filter(Boolean);
-  }
-
-  async function statWorktreeEntry(file) {
-    try {
-      const r = await hecaton.fs.stat({ path: path.join(state.cwd, file) });
-      if (!r || !r.exists) return file + "\tmissing";  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
-      const type = r.is_dir ? 'd' : 'f';
-      const mtime = r.mtime_ms || 0;
-      const size = r.size || 0;
-      return file + '\t' + type + '\t' + mtime + '\t' + size;
-    } catch {
-      return file + "\tmissing";  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
-    }
-  }
-
-  // status 한 번이면 변경된 추적 파일과 untracked를 함께 준다. 예전에는 diff-files와
-  // ls-files를 따로 걸어 폴링 한 틱마다 프로세스를 두 개 썼다 — 3초마다 상시 도는
-  // 경로라, 프로세스 생성이 비싼 환경에서는 여기서 아끼는 하나가 가장 크게 남는다.
+  const pollingClient = createPollingClient(hecaton);
   async function buildWorktreeSnapshot() {
-    const result = await perms.execGit({
-      program: 'git',
-      args: ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],
-      cwd: state.cwd,
-      timeout_ms: 5000,
-    });
-    if (!result || !result.ok) return null;
-    const raw = result.stdout || '';
-    const files = new Set();
-    const records = splitNul(raw);
-    for (let i = 0; i < records.length; i++) {
-      const rec = records[i];
-      if (!rec || rec.length < 4) continue;
-      const x = rec[0];
-      // -z porcelain v1에서 rename/copy는 "XY new\0old\0" — 뒤따르는 원본 경로를 건너뛴다.
-      if (x === 'R' || x === 'C') i++;
-      // 작업 트리 쪽(Y)이 깨끗한 항목은 stat 하지 않는다. 그 파일을 다시 고치면 Y 가 바뀌어
-      // status 문자열이 먼저 달라진다. mtime 이 필요한 건 이미 고쳐진 파일을 또 고친 경우뿐이다.
-      // 스테이징만 수천 개인 워크트리에서 매 틱 수천 번의 stat RPC 가 입력 처리를 밀어내던 곳이다.
-      if (rec[1] === ' ') continue;
-      let file = rec.substring(3);
-      if (file.endsWith('/')) file = file.slice(0, -1);
-      if (file) files.add(file);
-    }
-    const stats = await Promise.all(Array.from(files).sort().map(statWorktreeEntry));
-    return raw + '\x1e' + stats.join('\x1e');
+    return pollingClient.snapshot(state.cwd, () =>
+      collectWorktreeSnapshot(state.cwd, hecaton, perms.execGit));
   }
 
   let lastRefsSig = '';
@@ -616,6 +575,7 @@ async function setupGitWatcher() {
     clearTimeout(reapTimer);
     clearInterval(pollInterval);
     clearInterval(statusPollInterval);
+    pollingClient.close().catch(() => null);
   };
 }
 

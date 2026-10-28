@@ -168,9 +168,9 @@ test('plugin.json 이 쓰는 권한마다 기본 설명을 선언한다', () => 
 
   const CANONICAL = new Set(['terminal_input', 'clipboard_write', 'clipboard_read', 'fs_read', 'fs_write',
     'fs_delete', 'fs_rename', 'process_exec', 'open_tab', 'list_plugins', 'network_serve', 'notification',
-    'terminal_list', 'cross_terminal', 'terminal_status']);
+    'terminal_list', 'cross_terminal', 'terminal_status', 'service_run']);
   // 실제로 쓰는 권한 — 선언이 빠지면 그 팝업만 목적 없이 뜬다.
-  for (const permission of ['process_exec', 'fs_read', 'fs_write', 'clipboard_read', 'clipboard_write', 'open_tab']) {
+  for (const permission of ['process_exec', 'fs_read', 'fs_write', 'clipboard_read', 'clipboard_write', 'open_tab', 'service_run']) {
     assert.ok(descriptions[permission], permission + ' 설명이 없다');
   }
   for (const [permission, text] of Object.entries(descriptions)) {
@@ -186,6 +186,7 @@ test('plugin.json 이 쓰는 권한마다 기본 설명을 선언한다', () => 
   // 1.15 미만을 선언하면 이 필드를 쓸 수 없다.
   const [major, minor] = manifest.apiVersion.split('.').map(Number);
   assert.ok(major > 1 || minor >= 15, 'permission_usage_descriptions 는 API 1.15 필드다');
+  assert.ok(major > 1 || minor >= 19, 'service 선언은 API 1.19 필드다');
 });
 
 test('권한 문구는 두 로케일에 모두 있다', () => {
