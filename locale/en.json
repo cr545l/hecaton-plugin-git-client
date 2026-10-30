@@ -644,6 +644,7 @@
   "ui.gitSetup": " Git Setup ",
   "ui.gone": "[gone]",
   "ui.head": " HEAD",
+  "ui.diffWrap": "  Wrap: ",
   "ui.hintAbort": "[a]bort",
   "ui.hintCancel": "[Esc]cancel",
   "ui.hintContinue": "[c]ontinue",

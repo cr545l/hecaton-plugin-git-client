@@ -15,6 +15,7 @@ function setup(lines) {
     rightView: 'log', logItems: [{ type: 'commit', hash: '1234567', subject: 'test', decoration: '' }],
     logSelectables: [0], logCursor: 0, logScrollOffset: 0, logDetailLines: lines,
     diffScrollOffset: 0, diffScrollX: 0, logDetailLoading: false,
+    diffWrap: false,
   });
   ui.termCols = 120; ui.termRows = 40;
   ui.collapsedDetailFiles.clear();
@@ -99,4 +100,29 @@ test('appending patch lines invalidates the cached layout', () => {
   frame();
   assert.equal(ui.filteredDetailCount, count + 1);
   assert.ok(ui.logDetailMaxScrollX > 200);
+});
+
+test('history detail wraps long patch lines and keeps the title toggle available', () => {
+  const lines = patch('long.txt', 'abcdef'.repeat(1000));
+  setup(lines);
+  frame();
+  assert.ok(ui.logDetailMaxScrollX > 0);
+  assert.ok(ui.titleClickZones.some(z => z.action === 'toggleDiffWrap'));
+  const before = ui.filteredDetailCount;
+  state.diffWrap = true;
+  state.diffScrollX = 40;
+  frame();
+  assert.equal(ui.logDetailMaxScrollX, 0);
+  assert.equal(state.diffScrollX, 0);
+  assert.ok(ui.filteredDetailCount > before);
+  assert.ok(ui.logDetailMaxScroll > 0);
+  assert.deepEqual(state.logDetailLines, lines);
+  const count = ui.filteredDetailCount;
+  state.diffScrollOffset = ui.logDetailMaxScroll;
+  frame();
+  assert.equal(ui.filteredDetailCount, count);
+  state.diffWrap = false;
+  frame();
+  assert.equal(ui.filteredDetailCount, before);
+  assert.ok(ui.logDetailMaxScrollX > 0);
 });

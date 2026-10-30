@@ -1869,6 +1869,12 @@ async function handleMouseData(data) {
               setFileTreeView(!ui.fileTreeView);
               render();
               handled = true;
+            } else if (zone.action === 'toggleDiffWrap') {
+              state.diffWrap = !state.diffWrap;
+              state.diffScrollOffset = 0;
+              state.diffScrollX = 0;
+              render();
+              handled = true;
             } else if (zone.action === 'toggleDiff') {
               state.diffView = state.diffView === 'side' ? 'unified' : 'side';
               state.diffScrollOffset = 0;

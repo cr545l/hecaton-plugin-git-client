@@ -38,6 +38,7 @@ const DIFF = [
 ];
 
 function setup(diffView) {
+  state.diffWrap = false;
   state.loading = false; state.isGitRepo = true; state.gitNotFound = false;
   state.minimized = false; state.operationState = null; state.conflictView = null;
   state.branch = 'main';
@@ -124,4 +125,39 @@ test('원본 diffLines의 탭은 그대로 남는다 (hunk 패치용)', () => {
   setup('side');
   captureRender();
   assert.deepEqual(state.diffLines, DIFF, '렌더가 원본을 바꾸면 git apply가 컨텍스트를 못 맞춘다');
+});
+
+test('side diff wraps long Unicode and tab lines without changing the patch', () => {
+  setup('side');
+  state.diffLines = ['@@ -1 +1 @@', '-\t' + '가나다abc'.repeat(400), '+\t' + '문서xyz'.repeat(500)];
+  const original = state.diffLines.slice();
+  captureRender();
+  assert.ok(ui.diffMaxScrollX > 0);
+  const originalMaxScroll = ui.diffMaxScroll;
+
+  state.diffWrap = true;
+  state.diffScrollX = 20;
+  const frame = captureRender();
+  assert.equal(ui.diffMaxScrollX, 0);
+  assert.equal(state.diffScrollX, 0);
+  assert.ok(ui.diffMaxScroll > originalMaxScroll);
+  assert.deepEqual(overflowingSegments(frame), []);
+  assert.deepEqual(state.diffLines, original);
+  state.diffWrap = false;
+  captureRender();
+  assert.ok(ui.diffMaxScrollX > 0);
+  assert.equal(ui.diffMaxScroll, originalMaxScroll);
+});
+
+test('unified diff supports wrapping from the title options', () => {
+  setup('unified');
+  state.diffLines = ['diff --git a/long.txt b/long.txt', '@@ -1 +1 @@', '-' + 'abc'.repeat(1000), '+' + 'def'.repeat(1000)];
+  captureRender();
+  assert.ok(ui.diffMaxScrollX > 0);
+  assert.ok(ui.titleClickZones.some(z => z.action === 'toggleDiffWrap'));
+  state.diffWrap = true;
+  const frame = captureRender();
+  assert.equal(ui.diffMaxScrollX, 0);
+  assert.ok(ui.diffMaxScroll > 0);
+  assert.deepEqual(overflowingSegments(frame), []);
 });

@@ -18,6 +18,7 @@ const state = {
   diffView: 'side',  // 'side' | 'unified' (staged/unstaged 양쪽에 적용)
   diffScrollOffset: 0,
   diffScrollX: 0,
+  diffWrap: false,
   filesScrollX: 0,
   currentDiffFile: null, // Current file being viewed in diff panel
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'

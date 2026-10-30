@@ -506,6 +506,7 @@ function renderBody() {
       rightParts.push({ label: t('ui.diff'), value: state.diffView === 'side' ? 'side' : 'unified', action: 'toggleDiff', collapsed: false, group: 'option' });
     }
     // 폴딩 묶음과 옵션 묶음 사이에 세울 구분선(' │')의 폭까지 미리 세어야 오른쪽 끝에 맞는다.
+    if (state.rightView !== 'fresh') rightParts.push({ label: t('ui.diffWrap'), value: state.diffWrap ? 'on' : 'off', action: 'toggleDiffWrap', collapsed: !state.diffWrap, group: 'option' });
     const rightGroupBreaks = rightParts.filter((p, i) => i > 0 && p.group !== rightParts[i - 1].group).length;
     let rightTotalW = rightGroupBreaks * 2;
     for (const p of rightParts) rightTotalW += visLen(p.label) + visLen(p.value || '');
@@ -2090,7 +2091,7 @@ function buildDiffCommitPanel(w, h) {
     if (diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffView === 'side') {
       sideBySideLayout = getSideBySideDiffLayout(state.diffLines, innerW);
       if (sideBySideLayout) {
-        preMaxScrollX = sideBySideLayout.maxScrollX * 2;
+        preMaxScrollX = state.diffWrap ? 0 : sideBySideLayout.maxScrollX * 2;
         sideBySideLayout = getSideBySideDiffLayout(state.diffLines, innerW + preMaxScrollX);
       }
     }
@@ -2101,7 +2102,8 @@ function buildDiffCommitPanel(w, h) {
       numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
       gutterW = numW > 0 ? numW * 2 + 2 : 0;
       contentW = innerW - (gutterW > 0 ? gutterW : 1);
-      preMaxScrollX = Math.max(0, unified.maxWidth - contentW);
+      if (state.diffWrap) annotated = wrapDiffEntries(annotated, contentW);
+      preMaxScrollX = state.diffWrap ? 0 : Math.max(0, unified.maxWidth - contentW);
     }
   }
   const canvasW = innerW + preMaxScrollX;
@@ -2615,9 +2617,11 @@ function buildLogPanel(w, h) {
   const detailSpin = panelLoadingLabel('logDetail', t('ui.loadingDiff'));
   const detail = getLogDetailLayout(state.logDetailLines, ui.collapsedDetailFiles);
   // Animation is presentation state; it must not invalidate the parsed patch.
-  const filteredDetail = detailSpin ? detail.lines.concat([
+  const detailGutterW = detail.lines.maxLine > 0 ? String(detail.lines.maxLine).length * 2 + 2 : 0;
+  const detailLines = state.diffWrap ? wrapDiffEntries(detail.lines, innerW - (detailGutterW || 1)) : detail.lines;
+  const filteredDetail = detailSpin ? detailLines.concat([
     { text: '', inDiff: false }, { text: detailSpin, inDiff: false },
-  ]) : detail.lines;
+  ]) : detailLines;
   ui.filteredDetailCount = filteredDetail.length;
 
   // Pre-calculate detail scroll pct for separator. Display only — the
@@ -2712,7 +2716,7 @@ function buildLogPanel(w, h) {
       const logDetailGutterW = detail.lines.maxLine > 0 ? String(detail.lines.maxLine).length * 2 + 2 : 0;
       const logDetailContentW = innerW - (logDetailGutterW > 0 ? logDetailGutterW : 1);
       const logDetailMaxLineW = Math.max(detail.maxWidth, detailSpin ? visLen(detailSpin) : 0);
-      const logDetailMaxScrollX = Math.max(0, logDetailMaxLineW - logDetailContentW);
+      const logDetailMaxScrollX = state.diffWrap ? 0 : Math.max(0, logDetailMaxLineW - logDetailContentW);
       const canvasW = innerW + logDetailMaxScrollX;
       ui.logDetailMaxScrollX = logDetailMaxScrollX;
       if (state.diffScrollX > logDetailMaxScrollX) state.diffScrollX = logDetailMaxScrollX;
@@ -3628,7 +3632,7 @@ function buildSideBySideDiffLayout(rawLines, innerW) {
   const rightW = availableW - leftW;
   if (leftW < 24 || rightW < 24) return null;
 
-  const rows = buildSideBySideDiffRows(rawLines);
+  let rows = buildSideBySideDiffRows(rawLines);
   const numW = rows.maxLine > 0 ? String(rows.maxLine).length : 1;
   const gutterW = numW + 1;
   const leftContentW = Math.max(1, leftW - gutterW);
@@ -3644,6 +3648,35 @@ function buildSideBySideDiffLayout(rawLines, innerW) {
 
   rows.unshift({ type: 'side-header' });
   rows.unshift({ type: 'side-title' });
+
+  if (state.diffWrap) {
+    const wrapCell = (raw, width) => {
+      if (!raw) return [''];
+      const expanded = expandDiffTabs(raw);
+      const marker = expanded[0];
+      const chunks = [];
+      let chunk = marker;
+      let used = 1;
+      for (const ch of expanded.substring(1)) {
+        const size = visLen(ch);
+        if (used + size > width) { chunks.push(chunk); chunk = marker; used = 1; }
+        chunk += ch; used += size;
+      }
+      chunks.push(chunk);
+      return chunks;
+    };
+    const wrapped = [];
+    for (const row of rows) {
+      if (row.type !== 'pair') { wrapped.push(row); continue; }
+      const left = wrapCell(row.leftText, leftContentW);
+      const right = wrapCell(row.rightText, rightContentW);
+      for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        wrapped.push({ ...row, leftText: left[i] || '', rightText: right[i] || '',
+          oldNum: i === 0 ? row.oldNum : null, newNum: i === 0 ? row.newNum : null });
+      }
+    }
+    rows = wrapped;
+  }
 
   return {
     rows,
@@ -3697,15 +3730,43 @@ function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts) {
 // frames do not rescan every line of the file.
 let sideBySideLayoutCache = [];
 function getSideBySideDiffLayout(lines, innerW) {
-  const hit = sideBySideLayoutCache.find(c => c.source === lines && c.sourceLength === lines.length && c.innerW === innerW);
+  const hit = sideBySideLayoutCache.find(c => c.source === lines && c.sourceLength === lines.length && c.innerW === innerW && c.wrap === state.diffWrap);
   if (hit) return hit.layout;
   if (!sideBySideLayoutCache.every(c => c.source === lines && c.sourceLength === lines.length)) sideBySideLayoutCache = [];
   const layout = buildSideBySideDiffLayout(lines, innerW);
   // \ud55c \ud504\ub808\uc784\uc774 \ud3ed \ub450 \uac1c(\ub9de\ucda4 \ud3ed, \uac00\ub85c \uc2a4\ud06c\ub864\uc744 \ub354\ud55c \ud3ed)\ub97c \uc4f4\ub2e4. \ucc3d \ud06c\uae30\ub97c \ubc14\uafb8\ub294 \ub3d9\uc548
   // \ud3ed\uc774 \uacc4\uc18d \ubc14\ub00c\ubbc0\ub85c \ucd5c\uadfc \uac83 \uba87 \uac1c\ub9cc \ub0a8\uae34\ub2e4.
-  sideBySideLayoutCache.push({ source: lines, sourceLength: lines.length, innerW, layout });
+  sideBySideLayoutCache.push({ source: lines, sourceLength: lines.length, innerW, wrap: state.diffWrap, layout });
   if (sideBySideLayoutCache.length > 4) sideBySideLayoutCache.shift();
   return layout;
+}
+
+// Cache visual rows separately; patch entries and line numbers remain unchanged.
+const wrappedEntryCache = new WeakMap();
+function wrapDiffEntries(entries, width) {
+  width = Math.max(3, width);
+  const cached = wrappedEntryCache.get(entries);
+  if (cached && cached.width === width) return cached.rows;
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry.inDiff || entry.isFileHeader || entry.text.startsWith('@@') ||
+        !/^[ +\-]/.test(entry.text)) { rows.push(entry); continue; }
+    const text = expandDiffTabs(entry.text);
+    const marker = text[0];
+    let chunk = marker, used = 1, first = true;
+    const push = () => {
+      rows.push({ ...entry, text: chunk, oldNum: first ? entry.oldNum : null, newNum: first ? entry.newNum : null });
+      first = false;
+    };
+    for (const ch of text.substring(1)) {
+      const size = visLen(ch);
+      if (used + size > width) { push(); chunk = marker; used = 1; }
+      chunk += ch; used += size;
+    }
+    push();
+  }
+  wrappedEntryCache.set(entries, { width, rows });
+  return rows;
 }
 
 let unifiedDiffLayoutCache = null;
