@@ -506,7 +506,8 @@ function renderBody() {
       rightParts.push({ label: t('ui.diff'), value: state.diffView === 'side' ? 'side' : 'unified', action: 'toggleDiff', collapsed: false, group: 'option' });
     }
     // 폴딩 묶음과 옵션 묶음 사이에 세울 구분선(' │')의 폭까지 미리 세어야 오른쪽 끝에 맞는다.
-    if (state.rightView !== 'fresh') rightParts.push({ label: t('ui.diffWrap'), value: state.diffWrap ? 'on' : 'off', action: 'toggleDiffWrap', collapsed: !state.diffWrap, group: 'option' });
+    const diffWrap = state.rightView === 'diff' && state.diffView === 'side' ? state.sideDiffWrap : state.diffWrap;
+    if (state.rightView !== 'fresh') rightParts.push({ label: t('ui.diffWrap'), value: diffWrap ? 'on' : 'off', action: 'toggleDiffWrap', collapsed: !diffWrap, group: 'option' });
     const rightGroupBreaks = rightParts.filter((p, i) => i > 0 && p.group !== rightParts[i - 1].group).length;
     let rightTotalW = rightGroupBreaks * 2;
     for (const p of rightParts) rightTotalW += visLen(p.label) + visLen(p.value || '');
@@ -2072,6 +2073,7 @@ function buildDiffCommitPanel(w, h) {
   const innerW = w - 1;
   const isConflictView = !!(state.conflictView && state.conflictView.file === state.currentDiffFile);
   const diffItem = selectedItem();
+  const diffWrap = state.diffView === 'side' ? state.sideDiffWrap : state.diffWrap;
 
   let msgLineCount = 1;
   if (state.mode === 'commit') {
@@ -2091,7 +2093,7 @@ function buildDiffCommitPanel(w, h) {
     if (diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffView === 'side') {
       sideBySideLayout = getSideBySideDiffLayout(state.diffLines, innerW);
       if (sideBySideLayout) {
-        preMaxScrollX = state.diffWrap ? 0 : sideBySideLayout.maxScrollX * 2;
+        preMaxScrollX = diffWrap ? 0 : sideBySideLayout.maxScrollX * 2;
         sideBySideLayout = getSideBySideDiffLayout(state.diffLines, innerW + preMaxScrollX);
       }
     }
@@ -2102,8 +2104,8 @@ function buildDiffCommitPanel(w, h) {
       numW = annotated.maxLine > 0 ? String(annotated.maxLine).length : 0;
       gutterW = numW > 0 ? numW * 2 + 2 : 0;
       contentW = innerW - (gutterW > 0 ? gutterW : 1);
-      if (state.diffWrap) annotated = wrapDiffEntries(annotated, contentW);
-      preMaxScrollX = state.diffWrap ? 0 : Math.max(0, unified.maxWidth - contentW);
+      if (diffWrap) annotated = wrapDiffEntries(annotated, contentW);
+      preMaxScrollX = diffWrap ? 0 : Math.max(0, unified.maxWidth - contentW);
     }
   }
   const canvasW = innerW + preMaxScrollX;
@@ -3649,7 +3651,7 @@ function buildSideBySideDiffLayout(rawLines, innerW) {
   rows.unshift({ type: 'side-header' });
   rows.unshift({ type: 'side-title' });
 
-  if (state.diffWrap) {
+  if (state.sideDiffWrap) {
     const wrapCell = (raw, width) => {
       if (!raw) return [''];
       const expanded = expandDiffTabs(raw);
@@ -3730,13 +3732,13 @@ function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts) {
 // frames do not rescan every line of the file.
 let sideBySideLayoutCache = [];
 function getSideBySideDiffLayout(lines, innerW) {
-  const hit = sideBySideLayoutCache.find(c => c.source === lines && c.sourceLength === lines.length && c.innerW === innerW && c.wrap === state.diffWrap);
+  const hit = sideBySideLayoutCache.find(c => c.source === lines && c.sourceLength === lines.length && c.innerW === innerW && c.wrap === state.sideDiffWrap);
   if (hit) return hit.layout;
   if (!sideBySideLayoutCache.every(c => c.source === lines && c.sourceLength === lines.length)) sideBySideLayoutCache = [];
   const layout = buildSideBySideDiffLayout(lines, innerW);
   // \ud55c \ud504\ub808\uc784\uc774 \ud3ed \ub450 \uac1c(\ub9de\ucda4 \ud3ed, \uac00\ub85c \uc2a4\ud06c\ub864\uc744 \ub354\ud55c \ud3ed)\ub97c \uc4f4\ub2e4. \ucc3d \ud06c\uae30\ub97c \ubc14\uafb8\ub294 \ub3d9\uc548
   // \ud3ed\uc774 \uacc4\uc18d \ubc14\ub00c\ubbc0\ub85c \ucd5c\uadfc \uac83 \uba87 \uac1c\ub9cc \ub0a8\uae34\ub2e4.
-  sideBySideLayoutCache.push({ source: lines, sourceLength: lines.length, innerW, wrap: state.diffWrap, layout });
+  sideBySideLayoutCache.push({ source: lines, sourceLength: lines.length, innerW, wrap: state.sideDiffWrap, layout });
   if (sideBySideLayoutCache.length > 4) sideBySideLayoutCache.shift();
   return layout;
 }

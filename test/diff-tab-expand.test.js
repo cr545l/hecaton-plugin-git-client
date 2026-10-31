@@ -18,6 +18,10 @@ const { state, ui } = require('../state');
 const { render } = require('../render');
 const { visLen, expandTabs, stripAnsi } = require('../text');
 
+test('side wrapping defaults to on', () => {
+  assert.equal(state.sideDiffWrap, true);
+});
+
 const COLS = 160, ROWS = 32;
 const FILE = 'src/session-room.ts';
 
@@ -39,6 +43,7 @@ const DIFF = [
 
 function setup(diffView) {
   state.diffWrap = false;
+  state.sideDiffWrap = true;
   state.loading = false; state.isGitRepo = true; state.gitNotFound = false;
   state.minimized = false; state.operationState = null; state.conflictView = null;
   state.branch = 'main';
@@ -131,11 +136,12 @@ test('side diff wraps long Unicode and tab lines without changing the patch', ()
   setup('side');
   state.diffLines = ['@@ -1 +1 @@', '-\t' + '가나다abc'.repeat(400), '+\t' + '문서xyz'.repeat(500)];
   const original = state.diffLines.slice();
+  state.sideDiffWrap = false;
   captureRender();
   assert.ok(ui.diffMaxScrollX > 0);
   const originalMaxScroll = ui.diffMaxScroll;
 
-  state.diffWrap = true;
+  state.sideDiffWrap = true;
   state.diffScrollX = 20;
   const frame = captureRender();
   assert.equal(ui.diffMaxScrollX, 0);
@@ -143,7 +149,7 @@ test('side diff wraps long Unicode and tab lines without changing the patch', ()
   assert.ok(ui.diffMaxScroll > originalMaxScroll);
   assert.deepEqual(overflowingSegments(frame), []);
   assert.deepEqual(state.diffLines, original);
-  state.diffWrap = false;
+  state.sideDiffWrap = false;
   captureRender();
   assert.ok(ui.diffMaxScrollX > 0);
   assert.equal(ui.diffMaxScroll, originalMaxScroll);
@@ -160,4 +166,48 @@ test('unified diff supports wrapping from the title options', () => {
   assert.equal(ui.diffMaxScrollX, 0);
   assert.ok(ui.diffMaxScroll > 0);
   assert.deepEqual(overflowingSegments(frame), []);
+});
+
+
+test('side wrapping starts on and toggles independently of unified and log views', async () => {
+  setup('side');
+  state.diffLines = ['@@ -1 +1 @@', '-' + 'abc'.repeat(1000), '+' + 'def'.repeat(1000)];
+  captureRender();
+  assert.equal(ui.diffMaxScrollX, 0);
+  assert.equal(state.diffWrap, false);
+  const { handleMouseData } = require('../input');
+  async function clickWrap() {
+    const zone = ui.titleClickZones.find(z => z.action === 'toggleDiffWrap');
+    assert.ok(zone);
+    assert.notEqual(zone.enabled, false);
+    const write = process.stdout.write;
+    process.stdout.write = () => true;
+    try { await handleMouseData(`\x1b[<0;${zone.colStart};${zone.row}M`); }
+    finally { process.stdout.write = write; }
+  }
+  await clickWrap();
+  assert.equal(state.sideDiffWrap, false);
+  assert.equal(state.diffWrap, false);
+  assert.ok(ui.diffMaxScrollX > 0);
+  await clickWrap();
+  assert.equal(state.sideDiffWrap, true);
+  assert.equal(ui.diffMaxScrollX, 0);
+
+  state.diffView = 'unified';
+  captureRender();
+  assert.ok(ui.diffMaxScrollX > 0);
+  await clickWrap();
+  assert.equal(state.diffWrap, true);
+  assert.equal(state.sideDiffWrap, true);
+  assert.equal(ui.diffMaxScrollX, 0);
+
+  state.rightView = 'log';
+  captureRender();
+  await clickWrap();
+  assert.equal(state.diffWrap, false);
+  assert.equal(state.sideDiffWrap, true);
+
+  state.rightView = 'diff'; state.diffView = 'side';
+  captureRender();
+  assert.equal(ui.diffMaxScrollX, 0);
 });

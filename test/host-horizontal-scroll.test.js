@@ -30,6 +30,7 @@ function setup(diffView) {
   state.unstaged = []; state.untracked = []; state.ignored = [];
   state.selectedFiles = new Set();
   state.rightView = 'diff'; state.diffView = diffView;
+  state.sideDiffWrap = false;
   state.currentDiffFile = FILE;
   state.diffLines = DIFF.slice();
   state.cursor = 0; state.scrollOffset = 0;

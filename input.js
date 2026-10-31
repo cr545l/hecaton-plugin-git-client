@@ -1870,7 +1870,8 @@ async function handleMouseData(data) {
               render();
               handled = true;
             } else if (zone.action === 'toggleDiffWrap') {
-              state.diffWrap = !state.diffWrap;
+              if (state.rightView === 'diff' && state.diffView === 'side') state.sideDiffWrap = !state.sideDiffWrap;
+              else state.diffWrap = !state.diffWrap;
               state.diffScrollOffset = 0;
               state.diffScrollX = 0;
               render();
