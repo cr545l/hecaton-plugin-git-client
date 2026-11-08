@@ -19,6 +19,7 @@ const state = {
   diffScrollOffset: 0,
   diffScrollX: 0,
   diffWrap: false,
+  sideDiffWrap: true,  // Side mode starts wrapped, independently of other views.
   filesScrollX: 0,
   currentDiffFile: null, // Current file being viewed in diff panel
   rightView: 'diff',     // 'diff' | 'log' | 'fresh'

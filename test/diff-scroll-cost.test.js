@@ -37,6 +37,7 @@ function setup(lines, diffView) {
     loading: false, isGitRepo: true, gitNotFound: false, minimized: false,
     branch: 'main', branches: [{ name: 'main', isCurrent: true }],
     worktrees: [{ path: 'repo', branch: 'main', isMain: true, isCurrent: true }],
+    sideDiffWrap: false,
     rightView: 'diff', diffView, unstaged: [{ status: 'M', file: 'x.js' }], staged: [], untracked: [],
     cursor: 0, currentDiffFile: 'x.js', diffLines: lines, diffScrollOffset: 0, diffScrollX: 0,
   });

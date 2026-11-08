@@ -430,14 +430,66 @@ async function gitStatusPorcelain(cwd, opts = {}) {
     return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
   }
   const snapshot = parseStatusPorcelain((result.stdout || '').replace(/\r\n/g, '\n'), includeIgnored);
+  let truncated = false;
   if (maxFiles > 0) {
     const trackedCount = snapshot.staged.length + snapshot.unstaged.length;
     const untrackedLimit = Math.max(0, maxFiles - trackedCount);
     if (snapshot.untracked.length > untrackedLimit) {
       snapshot.untracked = snapshot.untracked.slice(0, untrackedLimit);
+      truncated = true;
     }
   }
+  // 목록이 저장소의 "전부"인지 — Stage All 이 경로를 지정해도 되는지 판단한다.
+  snapshot.untrackedComplete = showUntracked && !truncated;
   return snapshot;
+}
+
+// 정해진 파일들의 상태만 읽는다. 스테이징·언스테이지 직후의 갱신용이다 — 바뀐 것은 방금
+// 건드린 경로뿐이라 저장소 전체를 다시 훑을 이유가 없다. 무시 패턴 5,447개 워크트리에서
+// 전체 status 3.1초, 같은 82개 파일만 44ms(실측).
+// 폴더 항목(dir/)은 받지 않는다: 폴더를 넘기면 git 이 그 안을 무시 패턴과 대조해 전체
+// 조회만큼 걸린다(같은 워크트리 폴더 24개 3.9초). 명령줄 한 번에 다 실리지 않으면 스테이징
+// (gitAddExplicitFiles)과 같은 예산으로 나눠 읽는다 — 82개가 두 번에 나뉘었다. 그래도 너무
+// 많으면 null(전체 조회가 낫다).
+const STATUS_PATH_MAX_BATCHES = 8;
+
+function statusPathBatches(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return null;
+  const batches = [];
+  let current = [], size = 256;
+  for (const file of paths) {
+    if (typeof file !== 'string' || !file || file.endsWith('/')) return null;
+    const cost = file.length * 4 + 3;
+    if (current.length > 0 && size + cost > PATHSPEC_ARG_BUDGET) { batches.push(current); current = []; size = 256; }
+    current.push(file);
+    size += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches.length <= STATUS_PATH_MAX_BATCHES ? batches : null;
+}
+
+function statusPathsFit(paths) {
+  return statusPathBatches(paths) !== null;
+}
+
+async function gitStatusPaths(cwd, paths, opts = {}) {
+  const batches = statusPathBatches(paths);
+  if (!batches) return null;
+  const merged = { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
+  for (const batch of batches) {
+    const result = await perms.execGit({
+      program: 'git',
+      args: ['--no-optional-locks', '--literal-pathspecs', 'status', '--porcelain=v1', '-z', '--untracked-files=normal', '--', ...batch],
+      cwd,
+      timeout_ms: opts.timeout || 15000,
+    });
+    if (!gitProcessSucceeded(result)) return null;
+    const part = parseStatusPorcelain((result.stdout || '').replace(/\r\n/g, '\n'), false);
+    merged.staged.push(...part.staged);
+    merged.unstaged.push(...part.unstaged);
+    merged.untracked.push(...part.untracked);
+  }
+  return merged;
 }
 
 async function gitStatusSplit(cwd, opts = {}) {
@@ -452,33 +504,38 @@ async function gitStatusSplit(cwd, opts = {}) {
 
   // 1단계: 빠른 명령 병렬 실행
   const promises = [
-    gitExec(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd, statusTimeout),
-    gitExec(['--no-optional-locks', 'diff-files', '-z'], cwd, statusTimeout),
+    gitExecChecked(['--no-optional-locks', 'diff-index', '--cached', '-z', diffTarget], cwd, statusTimeout),
+    gitExecChecked(['--no-optional-locks', 'diff-files', '-z'], cwd, statusTimeout),
   ];
   // untracked/ignored는 조건부
   if (showUntracked) {
-    promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
+    promises.push(gitExecChecked(['--no-optional-locks', 'ls-files', '--others', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
     if (includeIgnored) {
-      promises.push(gitExec(['--no-optional-locks', 'ls-files', '--others', '--ignored', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
+      promises.push(gitExecChecked(['--no-optional-locks', 'ls-files', '--others', '--ignored', '--directory', '--no-empty-directory', '-z', '--exclude-standard'], cwd, statusTimeout));
     }
   }
 
-  const results = await Promise.all(promises);
+  const checked = await Promise.all(promises);
+  // 실패·시간 초과한 명령의 빈 출력을 "변경 없음"으로 읽지 않는다.
+  if (opts.nullOnError && checked.some(r => !r.ok)) return null;
+  const results = checked.map(r => r.text);
   const staged = parseDiffOutput(results[0]);
   const unstaged = parseDiffOutput(results[1]);
   let untracked = showUntracked ? parseLsFilesOutput(results[2]) : [];
   let ignored = showUntracked && includeIgnored ? parseLsFilesOutput(results[3]) : [];
 
   // maxFilesDisplayed 적용 — git-gui처럼 untracked 파일부터 제한
+  let truncated = false;
   if (maxFiles > 0) {
     const trackedCount = staged.length + unstaged.length;
     const untrackedLimit = Math.max(0, maxFiles - trackedCount);
     if (untracked.length > untrackedLimit) {
       untracked = untracked.slice(0, untrackedLimit);
+      truncated = true;
     }
   }
 
-  return { staged, unstaged, untracked, ignored };
+  return { staged, unstaged, untracked, ignored, untrackedComplete: showUntracked && !truncated };
 }
 
 // 하위 호환: 기존 gitStatus도 유지 (git-gui 방식으로 내부 변경)
@@ -517,7 +574,16 @@ async function gitUnstage(cwd, file) {
   return await gitIndexPaths(cwd, [file], false, t('git.couldNotUnstage') + file);
 }
 
-async function gitStageAll(cwd) {
+// paths 는 상태 목록에 보이는 변경 전부(추적 파일 변경 + 추적하지 않는 항목)다. 경로 없이
+// `add -A` 를 부르면 git 이 워크트리 전체를 끝까지 훑는다. 무시 패턴에 예외(!)가 많고
+// 무시된 파일이 많은 워크트리(5,447개 예외 패턴, 무시 파일 약 12만 개)에서는 그 탐색만
+// 21.8초였고, 같은 변경 82개 경로로 제한하면 40ms 였다(실측). 목록이 전부라고 확신할 수
+// 없으면(추적하지 않는 파일을 숨기거나 목록 상한에서 잘린 경우) paths 를 주지 않고 예전처럼
+// git 이 직접 찾게 한다.
+async function gitStageAll(cwd, paths) {
+  if (Array.isArray(paths) && paths.length > 0) {
+    return await gitIndexPaths(cwd, paths, 'all', t('git.couldNotStageAllFiles'));
+  }
   // Never force ignored files into the index. `-f -A` can unexpectedly walk
   // large ignored trees such as node_modules/.venv and make Stage All needlessly slow.
   return await gitMutation(['add', '-A'], cwd, t('git.couldNotStageAllFiles'));
@@ -1178,10 +1244,13 @@ async function gitUnstageAsync(cwd, file) {
 // delimited pathspec file, so argv size is bounded and Git takes the index lock
 // only once. Batching add/reset would repeatedly read/write the growing index
 // and could leave a partially processed selection after a later batch fails.
-async function gitIndexPaths(cwd, files, isStage, fallback) {
+// mode: true = 고른 파일 담기(add -f, 명시적으로 고른 ignored 도 담는다), false = 내리기,
+// 'all' = Stage All(add -A, ignored 는 담지 않는다 — 폴더 항목 안의 무시 파일까지 끌려 들어가면 안 된다).
+async function gitIndexPaths(cwd, files, mode, fallback) {
   const paths = [...new Set(files)];
   if (paths.length === 0) return null;
-  const args = ['--literal-pathspecs', ...(isStage ? ['add', '-f'] : ['reset', '--quiet', '--no-refresh'])];
+  const command = mode === 'all' ? ['add', '-A'] : mode ? ['add', '-f'] : ['reset', '--quiet', '--no-refresh'];
+  const args = ['--literal-pathspecs', ...command];
   // Upper bound for UTF-8 bytes / Windows quoting, with room for the executable.
   const argSize = paths.reduce((size, file) => size + file.length * 4 + 3, 256);
   if (paths.length < PATHSPEC_FILE_THRESHOLD && argSize < PATHSPEC_ARG_BUDGET) {
@@ -1215,6 +1284,51 @@ async function gitIndexPaths(cwd, files, isStage, fallback) {
       try { await hecaton.fs.delete({ path: pathspecPath }); } catch { /* best effort */ }
     }
   }
+}
+
+// 이미 무시 판정이 끝난 추적하지 않는 파일을 담는다. git add 와 달리 경로마다 무시 패턴을
+// 다시 대조하지 않고, 그 사이 지워진 파일은 조용히 건너뛴다(--remove). git add 는 없어진
+// 경로 하나에 "pathspec did not match" 로 전체가 실패한다. 표준 입력을 넘길 수 없어
+// 명령줄 묶음으로 나누고, 묶음이 너무 많으면 add -A 의 경로 파일로 넘긴다.
+const UPDATE_INDEX_MAX_BATCHES = 8;
+async function gitAddExplicitFiles(cwd, files, fallback) {
+  const paths = [...new Set(files)].filter(file => file && !file.endsWith('/'));
+  if (paths.length === 0) return null;
+  const batches = [];
+  let current = [], size = 256;
+  for (const file of paths) {
+    const cost = file.length * 4 + 3;
+    if (current.length > 0 && size + cost > PATHSPEC_ARG_BUDGET) { batches.push(current); current = []; size = 256; }
+    current.push(file);
+    size += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  if (batches.length > UPDATE_INDEX_MAX_BATCHES) return gitIndexPaths(cwd, paths, 'all', fallback);
+  for (const batch of batches) {
+    const err = await gitMutation(['update-index', '--add', '--remove', '--', ...batch], cwd, fallback);
+    if (err) return err;
+  }
+  return null;
+}
+
+// 상태 목록의 종류별로 담는다.
+//   tracked        — 추적 파일의 변경(수정·삭제·충돌): add -A, 인덱스에 있는 경로라 탐색이 없다
+//   untrackedFiles — 무시 판정이 끝난 추적하지 않는 파일: update-index
+//   untrackedDirs  — 안의 파일을 아직 모르는 폴더 항목: add -A(-f 없이 — 안의 무시 파일은 담지 않는다)
+//   ignored        — 무시 목록에서 명시적으로 고른 항목만 add -f
+async function gitStageEntries(cwd, groups, fallback) {
+  const steps = [
+    [groups.tracked, paths => gitIndexPaths(cwd, paths, 'all', fallback)],
+    [groups.untrackedFiles, paths => gitAddExplicitFiles(cwd, paths, fallback)],
+    [groups.untrackedDirs, paths => gitIndexPaths(cwd, paths, 'all', fallback)],
+    [groups.ignored, paths => gitIndexPaths(cwd, paths, true, fallback)],
+  ];
+  for (const [paths, run] of steps) {
+    if (!Array.isArray(paths) || paths.length === 0) continue;
+    const err = await run(paths);
+    if (err) return err;
+  }
+  return null;
 }
 
 async function gitStageMultiple(cwd, files) {
@@ -1953,7 +2067,7 @@ module.exports = {
   unquoteGitPath, isUnnameablePath,
   resolveWorkTreeRoot, findGitDirFromDisk,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
-  gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitCommit,
+  gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitStageEntries, gitAddExplicitFiles, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
   gitRebaseState, gitOperationState, gitRebase, gitRebaseContinue, gitRebaseAbort, gitRebaseSkip,
   gitCheckoutOurs, gitCheckoutTheirs,
@@ -1969,7 +2083,7 @@ module.exports = {
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
-  gitStatusSplit, gitStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
+  gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitEnableLongPaths, gitIntentToAddPaths, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,

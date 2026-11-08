@@ -23,7 +23,8 @@
 const { t } = require('./i18n');
 const i18n = require('./i18n');
 const { state, ui, init: initState } = require('./state');
-const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, computeRefsTreeSignature } = require('./refresh');
+const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, computeRefsTreeSignature, statusOutputMatchesState, updateDiff } = require('./refresh');
+const gitProcess = require('./git-process');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
@@ -483,6 +484,19 @@ async function setupGitWatcher() {
     return { sig: mtimes.join('|') + '\x1e' + refsSig, shareable: !refsFailed };
   }
 
+  // 이 창의 쓰기 명령(스테이징 등)이 끝난 횟수. 인덱스 시각만 바뀌었고 그 사이 이 창이
+  // 쓰기를 끝냈다면 그 변경은 이 창이 만든 것이다 — 쓰기 뒤 갱신이 이미 목록을 맞췄으므로
+  // 전체 refresh 를 또 걸지 않는다(무거운 워크트리에서 status 한 번에 3초). 밖에서 같은
+  // 틱에 인덱스를 바꿨다면 아래 워크트리 폴링이 목록 차이로 잡는다.
+  const writesDone = () => (typeof gitProcess.completedWrites === 'function' ? gitProcess.completedWrites() : -1);
+  const onlyIndexChanged = (before, after) => {
+    const [beforeTimes, ...beforeRest] = before.split('\x1e');
+    const [afterTimes, ...afterRest] = after.split('\x1e');
+    if (beforeRest.join('\x1e') !== afterRest.join('\x1e')) return false;
+    const a = beforeTimes.split('|'), b = afterTimes.split('|');
+    return a.length === b.length && a[0] !== b[0] && a.slice(1).join('|') === b.slice(1).join('|');
+  };
+  let metaPollWrites = writesDone();
   let lastMetaSig = (await computeMetaSignature()).sig;
   let metaPolling = false;
   let metaPollingSince = 0;
@@ -498,6 +512,8 @@ async function setupGitWatcher() {
       // 작업이 끝나면 그쪽에서 새로고침을 걸어주므로 이 틱은 건너뛴다.
       if (await coordinate.isNetworkOpInFlight()) return;
 
+      // 시그니처보다 먼저 읽는다 — 쓰기가 그 사이 끝나면 다음 틱이 refresh 를 거는 쪽으로 기운다.
+      const writes = writesDone();
       // 같은 워크트리를 보는 다른 인스턴스가 방금 계산해 둔 값이 있으면 그대로 쓴다.
       let sig;
       const shared = await coordinate.readSharedSnapshot('meta', SHARED_META_MAX_AGE_MS);
@@ -510,9 +526,11 @@ async function setupGitWatcher() {
       }
 
       if (sig !== lastMetaSig) {
+        const ownIndexWrite = writes >= 0 && writes !== metaPollWrites && onlyIndexChanged(lastMetaSig, sig);
         lastMetaSig = sig;
-        triggerRefresh();
+        if (!ownIndexWrite) triggerRefresh();
       }
+      metaPollWrites = writes;
     } finally {
       metaPolling = false;
     }
@@ -562,7 +580,16 @@ async function setupGitWatcher() {
         }
         if (snapshot !== null && snapshot !== lastStatusSnapshot) {
           lastStatusSnapshot = snapshot;
-          triggerRefresh({ statusOnly: true });
+          // 스냅샷 앞부분은 status 출력 그대로다. 목록이 이미 그와 같으면(이 창의 쓰기 뒤
+          // 갱신이 맞춰 둔 경우 등) 같은 status 를 다시 돌리지 않는다 — 이미 바뀐 파일이 또
+          // 고쳐졌을 수 있으니 diff 만 다시 읽는다.
+          const raw = typeof snapshot === 'string' ? snapshot.split('\x1e', 1)[0] : null;
+          if (raw !== null && statusOutputMatchesState(raw)) {
+            updateDiff();
+            render();
+          } else {
+            triggerRefresh({ statusOnly: true });
+          }
         }
       }
     } catch { /* ignore */ } finally {

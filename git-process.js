@@ -1,11 +1,29 @@
 // Long Git operations must not occupy process.exec's synchronous host RPC.
 // spawn returns immediately; output and completion arrive through host events.
 const perms = require('./permissions');
+const timing = require('./timing');
 const { t } = require('./i18n');
 
 const jobs = new Map();
 const starting = new Set();
 let subscribed = false;
+// 끝난 쓰기 명령의 수. 이보다 먼저 시작한 status 결과는 그 쓰기 이전의 저장소일 수 있다 —
+// refresh.js 는 그런 결과를 적용하지 않고 다시 조회한다.
+let completedWrites = 0;
+
+// Git 은 commit·fetch·pull·merge·rebase·cherry-pick 끝에 자동 정리(maintenance run
+// --auto, 옛 git 은 gc --auto)를 붙인다. 정리가 필요하다고 판단되면 Windows 의 git 은
+// 이를 떼어 내지 못하고, 원래 명령이 정리가 끝날 때까지 돌아오지 않는다(관측: 로컬
+// 원격으로의 push 가 받는 쪽 정리 77초를 기다렸고, 정리가 밀린 저장소 사본에서 커밋
+// 한 번이 139초였다 — 같은 상태의 다른 사본에서는 정리가 돌지 않아 0.2초였다). 그동안
+// 이 작업은 인덱스와 ref 를 쥐고 있어 스테이징·푸시까지 막는다. 사용자 동작 안에서는
+// 정리를 돌리지 않는다. 쓰기 명령 경로에만 붙인다 — 읽기 명령은 자동 정리를 부르지 않는다.
+const NO_AUTO_MAINTENANCE = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
+
+function withoutAutoMaintenance(params) {
+  if (!params || params.program !== 'git' || !Array.isArray(params.args)) return params;
+  return { ...params, args: [...NO_AUTO_MAINTENANCE, ...params.args] };
+}
 
 function collector() {
   let head = '', tail = '', reasons = '', partial = '';
@@ -69,16 +87,22 @@ async function run(params) {
   }
   const early = new Map();
   starting.add(early);
+  const startedAt = Date.now();
+  const cmd = timing.gitCommandOf(params && params.args);
   let spawned;
   try {
     // Mutations have no wall-clock deadline. Even silent filters/hooks can be
     // doing useful work; only a real exit event releases the caller's write gate.
     const { timeout_ms, ...spawnParams } = params;
-    spawned = await perms.spawnGit(spawnParams);
+    spawned = await perms.spawnGit(withoutAutoMaintenance(spawnParams));
   } finally {
     starting.delete(early);
   }
-  if (!spawned || !spawned.ok || spawned.error || spawned.error_code || spawned.__rpcError) return spawned;
+  const spawnMs = Date.now() - startedAt;
+  if (!spawned || !spawned.ok || spawned.error || spawned.error_code || spawned.__rpcError) {
+    timing.record('git', { via: 'spawn', cmd, spawnMs, ms: spawnMs, failed: 'spawn' });
+    return spawned;
+  }
   if (spawned.process_id === undefined || spawned.process_id === null) {
     return { ok: false, error: t('git.processMissingId') };
   }
@@ -90,7 +114,9 @@ async function run(params) {
       if (settled) return;
       settled = true;
       jobs.delete(id);
+      completedWrites++;
       const code = event.exit_code;
+      timing.record('git', { via: 'spawn', cmd, spawnMs, ms: Date.now() - startedAt, exit: code });
       resolve({
         ...event,
         timed_out: !!event.timed_out,
@@ -106,4 +132,4 @@ async function run(params) {
   });
 }
 
-module.exports = { run };
+module.exports = { run, NO_AUTO_MAINTENANCE, completedWrites: () => completedWrites };
