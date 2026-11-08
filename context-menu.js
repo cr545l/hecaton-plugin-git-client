@@ -88,7 +88,7 @@ const {
   gitInit, gitCloneAsync, gitCleanUntrackedAsync, gitDiscardAllChangesAsync,
   resolveWorkTreeRoot, splitUpstreamRef,
 } = require('./git');
-const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, applyStageToState, applyUnstageToState, removeIndexLock, invalidateCommitterCache, expandFileTargets, setFileTreeView } = require('./refresh');
+const { refreshAsync, refreshLog, rebuildLogGraphRows, selectedLogRef, updateLogDetail, refreshFresh, updateFreshDetail, updateDiff, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, removeIndexLock, invalidateCommitterCache, expandFileTargets, setFileTreeView } = require('./refresh');
 const { render } = require('./render');
 const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinner');
 // read/write 분류와 상황별 가능 여부 판정은 actions.js 한 곳에 모여 있다.
@@ -1315,7 +1315,7 @@ untrackedCount + t('menu.untracked'),
             const stageFlow = require('./stage-targets');
             const fallback = files.length === 1 ? t('git.couldNotStage') + files[0]
               : t('git.couldNotStagePrefix') + files.length + t('git.selectedFilesSuffix');
-            const { err, expandedDirs } = await stageFlow.stageTargets(state.cwd, files, fallback);
+            const { err, expandedDirs, touched } = await stageFlow.stageTargets(state.cwd, files, fallback);
             if (err) {
               stopSpinner(stageOp);
               showError(err);
@@ -1323,8 +1323,8 @@ untrackedCount + t('menu.untracked'),
             } else {
               stopSpinner(stageOp);
               applyStageToState(files);
-              refreshInBackground({ statusOnly: true });
-              stageFlow.catchUpExpanded(state.cwd, expandedDirs, () => refreshInBackground({ statusOnly: true }));
+              refreshTouchedInBackground(touched, expandedDirs);
+              stageFlow.catchUpExpanded(state.cwd, expandedDirs, late => refreshTouchedInBackground(late));
             }
           }
         }
@@ -1342,7 +1342,7 @@ untrackedCount + t('menu.untracked'),
             } else {
               stopSpinner(unstageOp);
               applyUnstageToState(files);
-              refreshInBackground({ statusOnly: true });
+              refreshTouchedInBackground(files);
             }
           }
         }
@@ -1421,8 +1421,8 @@ untrackedCount + t('menu.untracked'),
         const stageAllOp = startSpinner(t('menu.stagingAll'), [INDEX]);
         const stageAllPaths = require('./refresh').stageAllPaths();
         const stageFlow = require('./stage-targets');
-        let err = null, expandedDirs = [];
-        if (stageAllPaths) ({ err, expandedDirs } = await stageFlow.stageTargets(state.cwd, stageAllPaths, t('git.couldNotStageAllFiles')));
+        let err = null, expandedDirs = [], touched = null;
+        if (stageAllPaths) ({ err, expandedDirs, touched } = await stageFlow.stageTargets(state.cwd, stageAllPaths, t('git.couldNotStageAllFiles')));
         else err = await gitStageAll(state.cwd);
         if (err) {
           stopSpinner(stageAllOp);
@@ -1431,8 +1431,10 @@ untrackedCount + t('menu.untracked'),
         } else {
           stopSpinner(stageAllOp);
           applyStageToState(allFiles);
-          refreshInBackground({ statusOnly: true });
-          stageFlow.catchUpExpanded(state.cwd, expandedDirs, () => refreshInBackground({ statusOnly: true }));
+          // 경로를 모르고 git 이 직접 찾은 경우(touched 없음)는 전체를 다시 읽는다.
+          if (touched) refreshTouchedInBackground(touched, expandedDirs);
+          else refreshInBackground({ statusOnly: true });
+          stageFlow.catchUpExpanded(state.cwd, expandedDirs, late => refreshTouchedInBackground(late));
         }
         break;
       }

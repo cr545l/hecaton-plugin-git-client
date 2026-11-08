@@ -444,6 +444,54 @@ async function gitStatusPorcelain(cwd, opts = {}) {
   return snapshot;
 }
 
+// 정해진 파일들의 상태만 읽는다. 스테이징·언스테이지 직후의 갱신용이다 — 바뀐 것은 방금
+// 건드린 경로뿐이라 저장소 전체를 다시 훑을 이유가 없다. 무시 패턴 5,447개 워크트리에서
+// 전체 status 3.1초, 같은 82개 파일만 44ms(실측).
+// 폴더 항목(dir/)은 받지 않는다: 폴더를 넘기면 git 이 그 안을 무시 패턴과 대조해 전체
+// 조회만큼 걸린다(같은 워크트리 폴더 24개 3.9초). 명령줄 한 번에 다 실리지 않으면 스테이징
+// (gitAddExplicitFiles)과 같은 예산으로 나눠 읽는다 — 82개가 두 번에 나뉘었다. 그래도 너무
+// 많으면 null(전체 조회가 낫다).
+const STATUS_PATH_MAX_BATCHES = 8;
+
+function statusPathBatches(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return null;
+  const batches = [];
+  let current = [], size = 256;
+  for (const file of paths) {
+    if (typeof file !== 'string' || !file || file.endsWith('/')) return null;
+    const cost = file.length * 4 + 3;
+    if (current.length > 0 && size + cost > PATHSPEC_ARG_BUDGET) { batches.push(current); current = []; size = 256; }
+    current.push(file);
+    size += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches.length <= STATUS_PATH_MAX_BATCHES ? batches : null;
+}
+
+function statusPathsFit(paths) {
+  return statusPathBatches(paths) !== null;
+}
+
+async function gitStatusPaths(cwd, paths, opts = {}) {
+  const batches = statusPathBatches(paths);
+  if (!batches) return null;
+  const merged = { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
+  for (const batch of batches) {
+    const result = await perms.execGit({
+      program: 'git',
+      args: ['--no-optional-locks', '--literal-pathspecs', 'status', '--porcelain=v1', '-z', '--untracked-files=normal', '--', ...batch],
+      cwd,
+      timeout_ms: opts.timeout || 15000,
+    });
+    if (!gitProcessSucceeded(result)) return null;
+    const part = parseStatusPorcelain((result.stdout || '').replace(/\r\n/g, '\n'), false);
+    merged.staged.push(...part.staged);
+    merged.unstaged.push(...part.unstaged);
+    merged.untracked.push(...part.untracked);
+  }
+  return merged;
+}
+
 async function gitStatusSplit(cwd, opts = {}) {
   const showUntracked = opts.displayUntracked !== false;
   const includeIgnored = opts.includeIgnored === true;
@@ -2030,7 +2078,7 @@ module.exports = {
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
-  gitStatusSplit, gitStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
+  gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitEnableLongPaths, gitIntentToAddPaths, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,

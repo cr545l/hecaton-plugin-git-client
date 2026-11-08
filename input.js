@@ -26,7 +26,7 @@ const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
 const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
-const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
+const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildBranchesContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -399,15 +399,15 @@ async function runStageSelection(isStage, files) {
   if (!files || files.length === 0) return;
   const op = startSpinner(isStage ? t('menu.staging') : t('menu.unstaging'), [INDEX]);
   if (!isStage) {
-    finishStageOp(false, files, await gitUnstageMultiple(state.cwd, files), op);
+    finishStageOp(false, files, await gitUnstageMultiple(state.cwd, files), op, { paths: files });
     return;
   }
   const stageFlow = require('./stage-targets');
   const fallback = files.length === 1 ? t('git.couldNotStage') + files[0]
     : t('git.couldNotStagePrefix') + files.length + t('git.selectedFilesSuffix');
-  const { err, expandedDirs } = await stageFlow.stageTargets(state.cwd, files, fallback);
-  finishStageOp(true, files, err, op);
-  if (!err) stageFlow.catchUpExpanded(state.cwd, expandedDirs, () => refreshInBackground({ statusOnly: true }));
+  const { err, expandedDirs, touched } = await stageFlow.stageTargets(state.cwd, files, fallback);
+  finishStageOp(true, files, err, op, { paths: touched, dropEntries: expandedDirs });
+  if (!err) stageFlow.catchUpExpanded(state.cwd, expandedDirs, late => refreshTouchedInBackground(late));
 }
 
 // ── 스테이징 요청 ──
@@ -441,7 +441,7 @@ async function runStageAll(isStage) {
   state.selectedFiles.clear();
   const op = startSpinner(isStage ? t('menu.stagingAll') : t('input.unstagingAll'), [INDEX]);
   if (!isStage) {
-    finishStageOp(false, files, await gitUnstageAll(state.cwd), op);
+    finishStageOp(false, files, await gitUnstageAll(state.cwd), op, { paths: files });
     return;
   }
   // 목록이 전부라고 확신할 수 있으면 그 경로를 종류별로 담는다(stage-targets). 아니면 git 이 직접 찾는다.
@@ -451,9 +451,9 @@ async function runStageAll(isStage) {
     return;
   }
   const stageFlow = require('./stage-targets');
-  const { err, expandedDirs } = await stageFlow.stageTargets(state.cwd, paths, t('git.couldNotStageAllFiles'));
-  finishStageOp(true, files, err, op);
-  if (!err) stageFlow.catchUpExpanded(state.cwd, expandedDirs, () => refreshInBackground({ statusOnly: true }));
+  const { err, expandedDirs, touched } = await stageFlow.stageTargets(state.cwd, paths, t('git.couldNotStageAllFiles'));
+  finishStageOp(true, files, err, op, { paths: touched, dropEntries: expandedDirs });
+  if (!err) stageFlow.catchUpExpanded(state.cwd, expandedDirs, late => refreshTouchedInBackground(late));
 }
 
 // 전부 담기/내리기는 대상이 "그때의 전부"라 들고 갈 목록이 없다 — 실행하는 순간의
@@ -464,7 +464,8 @@ function requestStageAll(isStage) {
 
 // op 은 startSpinner 가 돌려준 작업 표다 — 인덱스만 붙잡는 스테이징은 fetch 같은 다른
 // 작업과 겹쳐 돌 수 있으므로, 끝낼 때 자기 것을 지목해야 상대를 대신 끝내지 않는다.
-function finishStageOp(isStage, files, err, op) {
+// touched 는 git 에 넘긴 경로다. 있으면 뒤따르는 갱신이 그 파일만 다시 읽는다 — 없으면 전체.
+function finishStageOp(isStage, files, err, op, touched) {
   stopSpinner(op);
   if (err) {
     showErrorDialog(err);
@@ -473,7 +474,8 @@ function finishStageOp(isStage, files, err, op) {
   }
   if (isStage) applyStageToState(files);
   else applyUnstageToState(files);
-  refreshInBackground({ statusOnly: true });
+  if (touched && Array.isArray(touched.paths)) refreshTouchedInBackground(touched.paths, touched.dropEntries);
+  else refreshInBackground({ statusOnly: true });
 }
 
 // diff 패널의 [Stage hunk]/[Unstage hunk] 버튼 동작

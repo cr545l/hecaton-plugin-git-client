@@ -24,7 +24,10 @@ async function stageTargets(cwd, files, fallback) {
     untrackedDirs: resolved.unresolvedDirs,
     ignored: ignoredPicked,
   }, fallback);
-  return { err, expandedDirs: err ? [] : resolved.expandedDirs };
+  // touched: git 에 넘긴 경로 그대로 — 쓰기 뒤 갱신이 이것만 다시 읽는다(refreshTouchedInBackground).
+  // 폴더로 남은 항목(unresolvedDirs)이 섞이면 그쪽이 알아서 전체 조회로 돌아간다.
+  const touched = [...tracked, ...resolved.files, ...resolved.unresolvedDirs, ...ignoredPicked];
+  return { err, expandedDirs: err ? [] : resolved.expandedDirs, touched };
 }
 
 // 미리 구한 목록으로 폴더를 담은 뒤 그 사이 생긴 파일을 따라 담는다. 다른 쓰기 작업이
@@ -42,7 +45,7 @@ async function catchUpExpanded(cwd, expandedDirs, onDone) {
     await gitAddExplicitFiles(cwd, late, require('./i18n').t('git.couldNotStageAllFiles'));
   } finally {
     spinner.stopSpinner(op);
-    if (typeof onDone === 'function') onDone();
+    if (typeof onDone === 'function') onDone(late);
   }
 }
 

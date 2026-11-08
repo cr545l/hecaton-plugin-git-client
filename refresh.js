@@ -1,7 +1,7 @@
 const { readRebaseProgress } = require('./rebase-progress');
 const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
-const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
+const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { get label() { return t('refresh.pending'); }, days: 0 },
@@ -738,15 +738,29 @@ function completedWrites() {
 // status 를 한 번 더 예약한다 — 쓰기 뒤의 저장소를 본 조회만 목록을 바꾼다.
 function supersededByWrite(writesAtStart) {
   if (completedWrites() === writesAtStart) return false;
+  queueStatusRefresh();
+  return true;
+}
+
+// 지금 도는 refresh 가 끝나면 전체 status 를 한 번 더 돌린다.
+function queueStatusRefresh() {
   _refreshQueuedOpts = _refreshQueued
     ? mergeRefreshOptions(_refreshQueuedOpts, { statusOnly: true, silent: true })
     : { statusOnly: true, silent: true };
   _refreshQueued = true;
-  return true;
 }
 
 function mergeRefreshOptions(existing, incoming) {
   const merged = { ...existing, ...incoming };
+  // 경로 한정 조회(paths)는 합치는 양쪽이 다 경로 한정일 때만 남긴다. 하나라도 전체 조회면
+  // 전체 조회가 그 경로들까지 읽으므로 따로 둘 이유가 없다.
+  if (Array.isArray(existing.paths) && Array.isArray(incoming.paths)) {
+    merged.paths = [...new Set([...existing.paths, ...incoming.paths])];
+    merged.dropEntries = [...new Set([...(existing.dropEntries || []), ...(incoming.dropEntries || [])])];
+  } else {
+    delete merged.paths;
+    delete merged.dropEntries;
+  }
   const needsStatus = refreshNeedsStatus(existing) || refreshNeedsStatus(incoming);
   const needsMeta = refreshNeedsMeta(existing) || refreshNeedsMeta(incoming);
 
@@ -779,6 +793,9 @@ function mergeRefreshOptions(existing, incoming) {
 let _cachedUntrackedFlag = '-unormal';
 let _cachedMaxFilesDisplayed = 5000;
 let _guiConfigLoaded = false;
+let _guiConfigCwd = '';
+let _guiConfigAt = 0;
+const GUI_CONFIG_TTL_MS = 60000;
 
 // 메타 데이터 캐시 — .git 내부 mtime fingerprint가 동일하면 재호출 생략.
 // 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees, ahead/behind.
@@ -1048,6 +1065,60 @@ function applyStatusSnapshot(snapshot, includeIgnored) {
   updateDiff();
 }
 
+// 경로 한정 status 결과를 목록에 합친다. 건드린 경로(와 펼쳐 담은 폴더 항목)의 옛 줄은
+// 지우고 새 결과로 바꾼다 — 결과에 없는 경로는 이제 바뀐 것이 없는 파일이다. 나머지 줄은
+// 이 쓰기와 상관이 없으므로 그대로 둔다(밖에서 생긴 변경은 감시 폴링이 잡는다).
+function compareStatusPath(a, b) {
+  return a.file < b.file ? -1 : (a.file > b.file ? 1 : 0);
+}
+
+function applyPathsSnapshot(snapshot, paths, dropEntries) {
+  const touched = new Set([...(paths || []), ...(dropEntries || [])]);
+  for (const list of [snapshot.staged, snapshot.unstaged, snapshot.untracked]) {
+    for (const entry of list) touched.add(entry.file);
+  }
+  const keep = list => (list || []).filter(entry => !touched.has(entry.file));
+  state._prevFileList = buildFileList();
+  state.staged = keep(state.staged).concat(snapshot.staged).sort(compareStatusPath);
+  state.unstaged = keep(state.unstaged).concat(snapshot.unstaged).sort(compareStatusPath);
+  state.untracked = keep(state.untracked).concat(snapshot.untracked).sort(compareStatusPath);
+  state.ignored = keep(state.ignored);
+  applyWindowTitle();
+  remapSelectedFiles();
+  clampCursor();
+  updateDiff();
+}
+
+// 스테이징·언스테이지 직후의 갱신. 바뀐 것은 방금 git 에 넘긴 경로뿐이라 그 파일만 다시
+// 읽는다(무거운 워크트리에서 전체 3.1초 → 44ms). 폴더 항목이 섞였거나 명령줄에 다 실리지
+// 않으면 예전처럼 전체를 읽는다. dropEntries 는 파일로 펼쳐 담은 폴더 항목(dir/)이다.
+function refreshTouchedInBackground(paths, dropEntries) {
+  const files = [...new Set((paths || []).filter(Boolean))];
+  if (!statusPathsFit(files)) return refreshInBackground({ statusOnly: true });
+  return refreshInBackground({ statusOnly: true, paths: files, dropEntries: [...new Set(dropEntries || [])] });
+}
+
+// 감시 폴링이 읽은 status 출력(--untracked-files=normal, --ignored 없음)이 지금 목록과 같은지.
+// 같으면 같은 status 를 다시 돌릴 이유가 없다 — 무거운 워크트리에서 한 번에 3초다. 다르거나
+// 판단할 수 없으면 false(예전처럼 refresh). 낡은 출력이 와도 지금 목록과 다르면 false 라
+// 목록을 낡은 값으로 바꾸는 일은 없다.
+function statusOutputMatchesState(raw) {
+  if (typeof raw !== 'string' || !state.isGitRepo) return false;
+  if (_cachedUntrackedFlag === '-uno' || ui.collapsedSections.ignored === false) return false;
+  const snapshot = parseStatusPorcelain(raw.replace(/\r\n/g, '\n'), false);
+  if (_cachedMaxFilesDisplayed > 0) {
+    const untrackedLimit = Math.max(0, _cachedMaxFilesDisplayed - snapshot.staged.length - snapshot.unstaged.length);
+    if (snapshot.untracked.length > untrackedLimit) return false;
+  }
+  const keys = (staged, unstaged, untracked) => [
+    ...staged.map(e => 'S' + e.status + ' ' + e.file),
+    ...unstaged.map(e => 'U' + e.status + ' ' + e.file),
+    ...untracked.map(e => '? ' + e.file),
+  ].sort().join('\0');
+  return keys(snapshot.staged, snapshot.unstaged, snapshot.untracked)
+    === keys(state.staged || [], state.unstaged || [], state.untracked || []);
+}
+
 // .git/index.lock 경로 — worktree에서는 per-worktree git dir에 위치하므로 gitDir 우선 사용
 function indexLockPath() {
   const sep = (process.platform === 'win32') ? '\\' : '/';
@@ -1221,7 +1292,11 @@ async function refreshAsync(options = {}) {
 
   // gui 설정 읽기 — 전체 refresh 시에만 갱신 (거의 변경되지 않으므로 캐싱)
   // 두 키를 --get-regexp '^gui\.' 한 번의 spawn으로 가져온다
-  if ((!metadataOnly && (!statusOnly || !_guiConfigLoaded)) || (options.loadGuiConfig && !_guiConfigLoaded)) {
+  // 전체 refresh 마다 다시 읽던 것을 TTL 로 묶는다 — 창마다 갱신 수만큼 git 을 띄웠다(실사용
+  // 기록: 창 하나가 5시간에 72번). 바뀌는 일이 드문 표시 설정이라 committer 와 같은 창을 쓴다.
+  const guiConfigStale = !_guiConfigLoaded || _guiConfigCwd !== state.cwd
+    || (Date.now() - _guiConfigAt) >= GUI_CONFIG_TTL_MS;
+  if (guiConfigStale && ((!metadataOnly && (!statusOnly || !_guiConfigLoaded)) || (options.loadGuiConfig && !_guiConfigLoaded))) {
     const guiRaw = await gitExec(['--no-optional-locks', 'config', '--get-regexp', '^gui\\.'], state.cwd);
     let duVal = '';
     let mfVal = '';
@@ -1242,9 +1317,27 @@ async function refreshAsync(options = {}) {
     // gui.maxfilesdisplayed (기본: 5000) — 초과 시 untracked부터 제외
     _cachedMaxFilesDisplayed = parseInt(mfVal) || 5000;
     _guiConfigLoaded = true;
+    _guiConfigCwd = state.cwd;
+    _guiConfigAt = Date.now();
   }
   const untrackedFlag = _cachedUntrackedFlag;
   const maxFilesDisplayed = _cachedMaxFilesDisplayed;
+
+  if (statusOnly && Array.isArray(options.paths)) {
+    // ── 쓰기 직후 refresh: 방금 건드린 파일만 읽는다 ──
+    const pathsSnapshot = statusPathsFit(options.paths)
+      ? await gitStatusPaths(state.cwd, options.paths, { timeout: statusTimeout })
+      : null;
+    if (!pathsSnapshot) {
+      // 경로로 읽지 못했으면 예전처럼 전체를 읽는다 — 목록을 추측으로 두지 않는다.
+      queueStatusRefresh();
+      return;
+    }
+    if (!state.spinnerActive) state.error = null;
+    if (supersededByWrite(writesAtStart)) return;
+    applyPathsSnapshot(pathsSnapshot, options.paths, options.dropEntries);
+    return;
+  }
 
   if (statusOnly) {
     // ── 경량 refresh: git status만 실행 ──
@@ -2148,6 +2241,23 @@ function selectedLogRef() {
   return state.logItems[idx] || null;
 }
 
+// 커밋 상세(본문+패치) 캐시 — 최근 것 몇 개만, 큰 패치가 메모리를 붙잡지 않게 총량도 묶는다.
+const COMMIT_DETAIL_CACHE_MAX = 16;
+const COMMIT_DETAIL_CACHE_CHARS = 8 * 1024 * 1024;
+const _commitDetailCache = new Map();
+function rememberCommitDetail(key, raw) {
+  if (raw.length > COMMIT_DETAIL_CACHE_CHARS / 4) return;
+  _commitDetailCache.delete(key);
+  _commitDetailCache.set(key, raw);
+  let total = 0;
+  for (const value of _commitDetailCache.values()) total += value.length;
+  while (_commitDetailCache.size > COMMIT_DETAIL_CACHE_MAX || total > COMMIT_DETAIL_CACHE_CHARS) {
+    const [oldestKey, oldest] = _commitDetailCache.entries().next().value;
+    _commitDetailCache.delete(oldestKey);
+    total -= oldest.length;
+  }
+}
+
 function updateLogDetail(options = {}) {
   ui.collapsedDetailFiles.clear();
   state.diffScrollX = 0;
@@ -2197,9 +2307,19 @@ function updateLogDetail(options = {}) {
   // 본문/패치가 도착할 때까지 상세 끝에 스피너를 붙인다.
   beginPanelLoading('logDetail');
   const stashRef = ui.stashMap.get(item.ref);
-  const promise = stashRef
-    ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)
-    : gitExec(['show', '--format=%B%x00', '--patch', item.ref], state.cwd, 30000);
+  // 커밋은 해시가 같으면 내용도 같다. 로그 갱신마다 같은 커밋의 패치를 다시 읽고 있었다
+  // (실사용 기록: 창 하나가 5시간에 72번). 스태시는 stash@{n} 의 뜻이 바뀌므로 담지 않는다.
+  const detailKey = !stashRef && item.ref && /^[0-9a-f]{40,64}$/.test(item.hash || '')
+    ? item.ref + ' ' + item.hash : '';
+  const cachedDetail = detailKey ? _commitDetailCache.get(detailKey) : undefined;
+  const promise = cachedDetail !== undefined
+    ? Promise.resolve(cachedDetail)
+    : stashRef
+      ? gitExec(['stash', 'show', '-p', stashRef], state.cwd, 30000)
+      : gitExec(['show', '--format=%B%x00', '--patch', item.ref], state.cwd, 30000).then(raw => {
+        if (detailKey && raw) rememberCommitDetail(detailKey, raw);
+        return raw;
+      });
   promise.then(raw => {
     if (_logDetailSeq !== seq) return;
     endPanelLoading('logDetail');
@@ -2463,6 +2583,8 @@ module.exports = {
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
+  refreshTouchedInBackground,
+  statusOutputMatchesState,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
   removeIndexLock,
   invalidateCommitterCache,
