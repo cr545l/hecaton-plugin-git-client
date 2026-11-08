@@ -75,7 +75,7 @@ const {
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
   gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync, gitFetchRemoteAsync,
   gitCheckRebaseConflicts, gitIsRebaseNoop,
   gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
   gitExec, gitResetModeAsync, gitRewordCommitAsync, gitSquashIntoParentAsync,
@@ -553,6 +553,10 @@ function buildBranchesContextMenuItems(target) {
     { id: 'branch_rename', label: t('menu.rename2', { branchName }), icon: 'edit', shortcut: 'F2', enabled: !multiple && allLocal },
     { id: 'branch_delete', label: t('menu.deleteLocal', { branchName }), icon: 'trash', shortcut: t('menu.delete2'), enabled: can('delete') },
     { id: prefix + 'delete_remote', label: allRemote ? t('menu.deleteRemote3', { remoteBranchName: branchName }) : t('menu.deleteRemote2', { upstream: upstream || branchName }), icon: 'warning', enabled: can('delete_remote') },
+    // 삭제 항목은 잘리는 창에서도 닿아야 해서 앞쪽(13행 안)에 고정돼 있다 — 새 항목은 그 뒤에 둔다.
+    { type: 'separator' },
+    { id: 'branch_fetch_ff', label: t('menu.fetchFastForward', { upstream: upstream || branchName }), icon: 'cloud-download', enabled: !multiple && allLocal && state.remotes.length > 0 },
+    { id: prefix + 'reset', label: t('menu.resetCurrentTo', { branchName }), icon: 'warning', enabled: !multiple && !first.current },
     { type: 'separator' },
     { id: allRemote ? 'remotebranch_new_branch' : 'branch_new_branch', label: allRemote ? t('menu.newBranchFromHere') : t('menu.newBranch'), icon: 'add', shortcut: 'Ctrl+Shift+B', enabled: !multiple },
     { id: 'branch_new_tag', label: t('menu.newTag'), icon: 'tag', shortcut: 'Ctrl+Shift+T', enabled: !multiple },
@@ -847,6 +851,50 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
   return buildBranchesContextMenuItems({ cwd: state.cwd, refs: [remoteRefKey(remoteBranchName)] });
 }
 
+// 사이드 메뉴에서 고른 브랜치 하나에 대한 동작 — 일괄 처리 경로(handleBranchesAction)를 타지 않는다.
+//  branch_fetch_ff : 현재 브랜치의 리모트를 페치한 뒤 upstream 으로 merge --ff-only.
+//                    branch_ff 는 이미 받아 둔 리모트 추적 ref 까지만 옮긴다.
+//  *_reset         : 현재 브랜치를 고른 브랜치(로컬/리모트 추적)가 가리키는 커밋으로 리셋한다.
+//                    커밋 리셋과 같은 soft/mixed/hard 선택 창을 쓴다.
+async function runSingleBranchAction(actionId, entry) {
+  if (!guardAction(actionId)) return;
+  if (actionId === 'branch_fetch_ff') {
+    // 페치로 알아내려는 버튼이라 활성화는 로컬 지식(upstream)에 기대지 않는다.
+    // 추적 설정이 없으면 같은 이름의 리모트 브랜치를 페치한 뒤 찾는다.
+    const parts = splitUpstreamRef(entry.upstream, state.remotes);
+    const remote = parts.remote || (state.remotes.includes('origin') ? 'origin' : state.remotes[0]) || 'origin';
+    const op = startSpinner(t('menu.fetchFastForwarding'), PULL_SCOPES);
+    // 체크아웃하지 않은 브랜치는 merge 가 HEAD 로 들어가 버리므로, 페치와 ref 이동을
+    // refspec fetch 한 번으로 한다(작업 트리는 건드리지 않는다).
+    if (!entry.current) {
+      const err = await gitFetchIntoBranchAsync(state.cwd, remote, parts.branch || entry.name, entry.name);
+      await afterGitOp(err, t('menu.fastForward'), {}, op);
+      return;
+    }
+    let err = await gitFetchRemoteAsync(state.cwd, remote);
+    if (!err) {
+      const target = entry.upstream || remote + '/' + entry.name;
+      const found = await require('./git').gitExecChecked(['rev-parse', '--verify', '--quiet', 'refs/remotes/' + target], state.cwd, 10000);
+      err = found.ok ? await gitMergeFastForwardAsync(state.cwd, target) : t('menu.noRemoteBranchToFastForward', { target });
+    }
+    await afterGitOp(err, t('menu.fastForward'), {}, op);
+    return;
+  }
+  hecaton.dialog.show({
+    type: 'message',
+    title: 'Reset',
+    message: t('menu.resetSoftKeepChangesStagedMixed', { value: state.branch || 'HEAD', substring: entry.name }),
+    buttons: [
+      { id: 'reset_soft', label: t('menu.soft') },
+      { id: 'reset_mixed', label: t('menu.mixed'), default: true },
+      { id: 'reset_hard', label: t('menu.hard'), style: 'danger' },
+      { id: 'cancel', label: t('menu.cancel') },
+    ],
+  });
+  state.pendingDialogAction = 'reset-confirm';
+  state.pendingDialogTarget = entry.name;
+}
+
 async function handleContextMenuAction(actionId) {
   const selectedBranches = ui.contextMenuBranches;
   if (selectedBranches && (actionId.startsWith('branch_') || actionId.startsWith('remotebranch_') || actionId === 'worktree_new')) {
@@ -857,6 +905,10 @@ async function handleContextMenuAction(actionId) {
       (actionId.startsWith('branch_track:') || actionId.startsWith('branch_tracking_page:') || actionId === 'branch_untrack');
     if (!items.length || (item && !item.enabled) || (!item && !trackingFollowup)) {
       showError(t('menu.branches.changed'));
+      return;
+    }
+    if (!multiple && (actionId === 'branch_fetch_ff' || actionId === 'branch_reset' || actionId === 'remotebranch_reset')) {
+      await runSingleBranchAction(actionId, branchSelection.resolve(selectedBranches)[0]);
       return;
     }
     const batch = branchMenuBatchAction(actionId, selectedBranches);

@@ -1319,6 +1319,11 @@ async function gitFetchIntoBranchAsync(cwd, remote, remoteBranch, localBranch) {
   // 특정 ref만 끌어오는 fetch라 남의 fetch 결과로 대체할 수 없다 — reuse 창은 0.
   return await runNetworkOp('fetch', 0, () => gitAsyncWrap(['fetch', remote, remoteBranch + ':' + localBranch], cwd));
 }
+// 리모트 하나만 페치한다 — 현재 브랜치를 upstream 최신으로 패스트포워드하기 전에 쓴다.
+// 다른 리모트까지 --all 로 받을 이유가 없고, 그 리모트의 결과를 재사용할 수도 없다(reuse 0).
+async function gitFetchRemoteAsync(cwd, remote) {
+  return await runNetworkOp('fetch', 0, () => gitAsyncWrap(['fetch', remote], cwd));
+}
 async function gitPullRebaseAsync(cwd, remote, branch) {
   return await runNetworkOp('pull', 0, () => gitAsyncWrap(['pull', '--rebase', remote, branch], cwd));
 }
@@ -1977,7 +1982,7 @@ module.exports = {
   gitRewordCommitAsync, gitSquashIntoParentAsync, gitDropCommitAsync, gitEditCommitAsync,
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync,
+  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync, gitFetchRemoteAsync,
   gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync, gitPushBranchToRemoteAsync,
   splitUpstreamRef,
   gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,

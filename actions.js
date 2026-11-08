@@ -198,7 +198,10 @@ const ACTION_SCOPES = {
   rebase: REWRITE_WITH_STASH, branch_rebase_onto: REWRITE_WITH_STASH,
 
   // ── 리모트를 거쳐 워킹트리까지 옮긴다 ──
-  'git-pull': PULL, branch_pull: PULL, branch_pull_rebase: PULL, branch_ff: PULL,
+  'git-pull': PULL, branch_pull: PULL, branch_pull_rebase: PULL, branch_ff: PULL, branch_fetch_ff: PULL,
+
+  // 현재 브랜치를 고른 브랜치로 리셋 — 커밋 리셋('reset')과 같은 범위를 건드린다.
+  branch_reset: REWRITE, remotebranch_reset: REWRITE,
 
   // ── 별도 워크트리 ──
   // 다른 디렉터리를 만들고 지운다 — 지금 저장소의 인덱스도 워킹트리도 건드리지 않는다.
@@ -470,7 +473,8 @@ const BLOCKED_DURING_OPERATION = new Set([
   'worktree_open', 'worktree_new', 'worktree_remove', 'worktree_prune', 'tab_change_repo',
   // 새 통합 작업 — 이미 하나가 돌고 있다
   'merge', 'rebase', 'reset', 'cherry_pick', 'revert',
-  'branch_merge_into', 'branch_rebase_onto', 'branch_ff', 'branch_pull', 'branch_pull_rebase',
+  'branch_merge_into', 'branch_rebase_onto', 'branch_ff', 'branch_fetch_ff', 'branch_pull', 'branch_pull_rebase',
+  'branch_reset', 'remotebranch_reset',
   'git-pull',
   // 히스토리 재작성
   'amend_commit', 'reword_commit', 'squash_commit', 'fixup_commit', 'edit_commit', 'drop_commit',
@@ -495,7 +499,7 @@ const REQUIRES_OPERATION = new Set(['op-abort', 'op-skip', 'op-menu']);
 
 // 리모트가 하나도 없으면 성립하지 않는 동작
 const REQUIRES_REMOTE = new Set([
-  'git-fetch', 'git-pull', 'git-push',
+  'git-fetch', 'git-pull', 'git-push', 'branch_fetch_ff',
   'branch_push', 'branch_push_pr', 'branch_force_push', 'branch_delete_remote',
   'remotebranch_delete_remote', 'remote_push_tags', 'remote_prune',
   'branch_network_batch',
