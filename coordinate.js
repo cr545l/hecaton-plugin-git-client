@@ -90,6 +90,16 @@ async function writeJson(path, value) {
   } catch { return false; }
 }
 
+// 동작 시간 기록(timing.js)의 저장. 인스턴스마다 한 파일(suffix 'prev' 는 직전 묶음)이다.
+async function writeTimingLog(content, suffix) {
+  if (!isEnabled() || !await ensureDir()) return false;
+  const name = 'timing-' + INSTANCE_ID + (suffix ? '.' + suffix : '') + '.log';
+  try {
+    await hecaton.fs.write_file({ path: nodePath.join(_shareDir, name), content });
+    return true;
+  } catch { return false; }
+}
+
 // 다른 인스턴스가 maxAgeMs 안에 올려둔 폴링 결과가 있으면 그대로 쓴다.
 // 반환값이 null이면 호출부가 직접 git을 돌려야 한다는 뜻이다.
 async function readSharedSnapshot(kind, maxAgeMs) {
@@ -242,4 +252,5 @@ module.exports = {
   endNetworkOp,
   isNetworkOpInFlight,
   waitForNetworkOp,
+  writeTimingLog,
 };

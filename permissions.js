@@ -142,8 +142,15 @@ async function exec(params, reasonKey, opts) {
 
 // git 실행은 모두 같은 사유를 쓴다 — 어느 하위 명령이든 사용자가 연 저장소를 읽거나 바꾼다.
 // 사유를 호출부마다 적지 않는 편이 문구를 한 곳에서 고칠 수 있어 낫다.
-function execGit(params) {
-  return exec(params, 'permission.reason.gitExec', { deniedKey: 'permission.denied.gitExec' });
+async function execGit(params) {
+  const startedAt = Date.now();
+  const result = await exec(params, 'permission.reason.gitExec', { deniedKey: 'permission.denied.gitExec' });
+  const timing = require('./timing');
+  timing.record('git', {
+    via: 'exec', cmd: timing.gitCommandOf(params && params.args), ms: Date.now() - startedAt,
+    exit: result && result.exit_code !== undefined ? result.exit_code : (result && result.ok === false ? 'failed' : null),
+  });
+  return result;
 }
 
 async function spawnGit(params) {

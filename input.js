@@ -398,10 +398,16 @@ function enterAmendCommitMode() {
 async function runStageSelection(isStage, files) {
   if (!files || files.length === 0) return;
   const op = startSpinner(isStage ? t('menu.staging') : t('menu.unstaging'), [INDEX]);
-  const err = isStage
-    ? await gitStageMultiple(state.cwd, files)
-    : await gitUnstageMultiple(state.cwd, files);
-  finishStageOp(isStage, files, err, op);
+  if (!isStage) {
+    finishStageOp(false, files, await gitUnstageMultiple(state.cwd, files), op);
+    return;
+  }
+  const stageFlow = require('./stage-targets');
+  const fallback = files.length === 1 ? t('git.couldNotStage') + files[0]
+    : t('git.couldNotStagePrefix') + files.length + t('git.selectedFilesSuffix');
+  const { err, expandedDirs } = await stageFlow.stageTargets(state.cwd, files, fallback);
+  finishStageOp(true, files, err, op);
+  if (!err) stageFlow.catchUpExpanded(state.cwd, expandedDirs, () => refreshInBackground({ statusOnly: true }));
 }
 
 // ── 스테이징 요청 ──
@@ -434,8 +440,20 @@ async function runStageAll(isStage) {
   if (files.length === 0) return;
   state.selectedFiles.clear();
   const op = startSpinner(isStage ? t('menu.stagingAll') : t('input.unstagingAll'), [INDEX]);
-  const err = isStage ? await gitStageAll(state.cwd) : await gitUnstageAll(state.cwd);
-  finishStageOp(isStage, files, err, op);
+  if (!isStage) {
+    finishStageOp(false, files, await gitUnstageAll(state.cwd), op);
+    return;
+  }
+  // 목록이 전부라고 확신할 수 있으면 그 경로를 종류별로 담는다(stage-targets). 아니면 git 이 직접 찾는다.
+  const paths = require('./refresh').stageAllPaths();
+  if (!paths) {
+    finishStageOp(true, files, await gitStageAll(state.cwd), op);
+    return;
+  }
+  const stageFlow = require('./stage-targets');
+  const { err, expandedDirs } = await stageFlow.stageTargets(state.cwd, paths, t('git.couldNotStageAllFiles'));
+  finishStageOp(true, files, err, op);
+  if (!err) stageFlow.catchUpExpanded(state.cwd, expandedDirs, () => refreshInBackground({ statusOnly: true }));
 }
 
 // 전부 담기/내리기는 대상이 "그때의 전부"라 들고 갈 목록이 없다 — 실행하는 순간의

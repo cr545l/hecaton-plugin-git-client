@@ -542,6 +542,15 @@ function buildFileListUncached() {
   return out;
 }
 
+// Stage All 이 넘길 경로 — 상태 목록의 변경 전부(추적 파일 변경 + 추적하지 않는 항목).
+// 화면 목록(buildFileList)이 아니라 상태 원본을 쓴다: 트리 모드에서 접힌 폴더의 파일도
+// 빠지면 안 된다. 목록이 전부라고 확신할 수 없으면 null — 그때는 git 이 직접 찾는다.
+function stageAllPaths() {
+  if (state.untrackedComplete !== true) return null;
+  const paths = [...(state.unstaged || []), ...(state.untracked || [])].map(e => e && e.file).filter(Boolean);
+  return paths.length > 0 ? paths : null;
+}
+
 // 폴더 줄이 가리키는 것은 그 아래 파일 전부다. 스테이징·discard 처럼 파일 단위로 도는
 // 동작은 전부 여기를 거쳐 폴더를 펼친 뒤 다룬다 — 그래야 폴더에 커서를 두고 's' 를
 // 눌러도 뜻대로 움직인다. 겹치는 파일(폴더와 그 안의 파일을 함께 고른 경우)은 한 번만.
@@ -716,6 +725,24 @@ function refreshNeedsStatus(options) {
 
 function refreshNeedsMeta(options) {
   return options.statusOnly !== true;
+}
+
+function completedWrites() {
+  const counter = require('./git-process').completedWrites;
+  return typeof counter === 'function' ? counter() : 0;
+}
+
+// 이 조회가 시작된 뒤 쓰기 명령이 끝났으면, 조회 결과는 그 쓰기 이전의 저장소일 수 있다.
+// 무시 패턴이 무거운 워크트리에서 20초 걸린 status 가 스테이징 직후에 도착해, 방금 담은
+// 33개를 다시 Unstaged 로 되돌려 20초 동안 보여 줬다(실측). 그런 결과는 적용하지 않고
+// status 를 한 번 더 예약한다 — 쓰기 뒤의 저장소를 본 조회만 목록을 바꾼다.
+function supersededByWrite(writesAtStart) {
+  if (completedWrites() === writesAtStart) return false;
+  _refreshQueuedOpts = _refreshQueued
+    ? mergeRefreshOptions(_refreshQueuedOpts, { statusOnly: true, silent: true })
+    : { statusOnly: true, silent: true };
+  _refreshQueued = true;
+  return true;
 }
 
 function mergeRefreshOptions(existing, incoming) {
@@ -1008,6 +1035,10 @@ function applyStatusSnapshot(snapshot, includeIgnored) {
   state.staged = snapshot.staged || [];
   state.unstaged = snapshot.unstaged || [];
   state.untracked = snapshot.untracked || [];
+  state.untrackedComplete = snapshot.untrackedComplete === true;
+  // 묶인 폴더(dir/)의 실제 파일을 백그라운드에서 미리 구해 둔다 — 스테이징이 폴더째 넘기면
+  // git 이 폴더 안 전부를 무시 패턴과 대조한다(untracked-expand.js).
+  if (state.untrackedComplete) require('./untracked-expand').prefetch(state.cwd, state.untracked.map(entry => entry.file));
   state.ignored = includeIgnored ? (snapshot.ignored || []) : [];
   state.ignoredLoaded = includeIgnored;
   state.ignoredLoading = false;
@@ -1069,7 +1100,10 @@ async function refreshAsync(options = {}) {
   const statusOnly = !!options.statusOnly;
   const metadataOnly = !!options.metadataOnly;
   const showSpinner = options.silent !== true;
-  const statusTimeout = options.statusTimeout || 15000;
+  // 무시 패턴이 무거운 워크트리(예외 5,447개 + 무시 파일 약 12만 개)에서는 status 가 20초
+  // 넘게 걸린다. 15초 시한으로는 결과를 끝내 받지 못하고 같은 시도를 되풀이했다 — 첫 화면과
+  // 같은 60초를 쓴다. 실패한 조회는 목록을 비우지 않는다(아래 nullOnError).
+  const statusTimeout = options.statusTimeout || 60000;
 
   // 동시 실행 방지 — 이미 실행 중이면 대기열에 넣고 리턴
   if (_refreshRunning) {
@@ -1085,6 +1119,7 @@ async function refreshAsync(options = {}) {
   _refreshRunning = true;
   _refreshQueued = false;
   _refreshQueuedOpts = {};
+  const writesAtStart = completedWrites();
 
   if (!options.silent) _lastUserRefreshTime = Date.now();
 
@@ -1110,7 +1145,8 @@ async function refreshAsync(options = {}) {
       state.isGitRepo = true;
       if (options.loadBranch) state.branch = statusSnapshot.branch || t('git.headDetached');
       if (!state.spinnerActive) state.error = null;
-      applyStatusSnapshot(statusSnapshot, includeIgnored);
+      if (!supersededByWrite(writesAtStart)) applyStatusSnapshot(statusSnapshot, includeIgnored);
+      else state.ignoredLoading = false;
       return;
     }
     state.ignoredLoading = false;
@@ -1215,15 +1251,16 @@ async function refreshAsync(options = {}) {
     const includeIgnored = shouldIncludeIgnored(options);
     state.ignoredLoading = includeIgnored;
     const statusReader = options.singleProcessStatus === false ? gitStatusSplit : gitStatusPorcelain;
+    // 실패·시간 초과한 조회를 빈 목록으로 받으면 변경이 있는데 "Working tree clean" 으로
+    // 보이고, 그 사이 Stage All 도 대상이 사라진다(실측: 스테이징 직후 15초 시한 두 번). 실패는
+    // null 로 받아 이전 목록을 그대로 둔다.
     const statusOptions = {
       displayUntracked: untrackedFlag !== '-uno',
       includeIgnored,
       maxFilesDisplayed,
       timeout: statusTimeout,
+      nullOnError: true,
     };
-    if (options.fastFirstPaint && statusReader === gitStatusPorcelain) {
-      statusOptions.nullOnError = true;
-    }
     const statusPromise = statusReader(state.cwd, {
       ...statusOptions,
     });
@@ -1241,6 +1278,10 @@ async function refreshAsync(options = {}) {
       return;
     }
     if (!state.spinnerActive) state.error = null;
+    if (supersededByWrite(writesAtStart)) {
+      state.ignoredLoading = false;
+      return;
+    }
 
     applyStatusSnapshot(statusSnapshot, includeIgnored);
     return; // 경량 refresh 완료 — 나머지 skip
@@ -1304,6 +1345,7 @@ async function refreshAsync(options = {}) {
         includeIgnored,
         maxFilesDisplayed,
         timeout: statusTimeout,
+        nullOnError: true,
       });
   const committerConfigPromise = readCommitterConfig(state.cwd);
   let committerConfig;
@@ -1382,8 +1424,11 @@ async function refreshAsync(options = {}) {
     if (headName) state.branch = headName;
     else if (!state.branch) state.branch = t('git.headDetached');
   }
-  if (!metadataOnly) {
+  // 실패한 status(null)는 이전 목록을 그대로 둔다 — 빈 목록으로 덮으면 변경이 사라져 보인다.
+  if (!metadataOnly && statusSnapshot && !supersededByWrite(writesAtStart)) {
     applyStatusSnapshot(statusSnapshot, includeIgnored);
+  } else if (!metadataOnly) {
+    state.ignoredLoading = false;
   }
 
   // stashes
@@ -2413,7 +2458,7 @@ function updateFreshDetail() {
 
 module.exports = {
   buildFileList, selectedItem, clampCursor,
-  expandFileTargets, sectionRangeAt, setFileTreeView, toggleFileDir,
+  expandFileTargets, stageAllPaths, sectionRangeAt, setFileTreeView, toggleFileDir,
   refreshAsync, refreshLog, loadMoreLog, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,

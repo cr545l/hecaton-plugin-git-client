@@ -264,3 +264,53 @@ test('real rebase abort waits for a 32-second smudge filter and restores the rep
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Windows 의 git 은 commit·fetch 뒤의 자동 정리가 돌기로 하면 떼어 내지 못하고 원래
+// 명령이 그 정리를 기다린다(관측: 커밋 한 번 139초). 쓰기 명령은 자동 정리를 켜지 않은
+// 채로 실행돼야 한다.
+test('mutations reach Git with automatic maintenance turned off, ahead of the subcommand', async () => {
+  const pending = git.gitCommitAsync('C:/repo', 'message');
+  await flush();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args.slice(0, 4), ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false']);
+  assert.deepEqual(calls[0].args.slice(4), ['commit', '-m', 'message']);
+  emit('process_exited', { process_id: nextId - 1, exit_code: 0 });
+  assert.equal(await pending, null);
+});
+
+test('real Git commit through the mutation path does not start automatic maintenance', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cp = require('node:child_process');
+  const temp = require('node:os').tmpdir();
+  const root = fs.mkdtempSync(path.join(temp, 'hecaton-no-auto-maintenance-'));
+  const plainTrace = path.join(root, 'plain-trace.txt'), pluginTrace = path.join(root, 'plugin-trace.txt');
+  const runGit = (args, env) => cp.execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe', env: { ...process.env, ...env } });
+  try {
+    runGit(['init', '-b', 'main']);
+    runGit(['config', 'user.name', 'Test']);
+    runGit(['config', 'user.email', 'test@example.invalid']);
+    runGit(['config', 'commit.gpgsign', 'false']);
+    // Precondition: an ordinary commit asks Git to run maintenance afterwards.
+    runGit(['commit', '--allow-empty', '-m', 'plain'], { GIT_TRACE: plainTrace });
+    assert.match(fs.readFileSync(plainTrace, 'utf8'), /run_command: git maintenance run --auto/);
+    spawn = async p => {
+      const process_id = nextId++;
+      const child = cp.spawn(p.program, p.args, { cwd: p.cwd, windowsHide: true, env: { ...process.env, GIT_TRACE: pluginTrace } });
+      child.stdout.on('data', data => emit('process_output', { process_id, stream: 'stdout', data: data.toString() }));
+      child.stderr.on('data', data => emit('process_output', { process_id, stream: 'stderr', data: data.toString() }));
+      child.on('close', exit_code => emit('process_exited', { process_id, exit_code }));
+      return { ok: true, process_id };
+    };
+    fs.writeFileSync(path.join(root, 'file.txt'), 'content\n');
+    runGit(['add', 'file.txt']);
+    assert.equal(await git.gitCommitAsync(root, 'through plugin'), null);
+    assert.equal(runGit(['log', '-1', '--format=%s']).trim(), 'through plugin');
+    const traced = fs.readFileSync(pluginTrace, 'utf8');
+    assert.match(traced, /commit/);
+    assert.doesNotMatch(traced, /maintenance run|gc --auto/);
+  } finally {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(temp));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

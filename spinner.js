@@ -66,6 +66,7 @@ function beginOp(label, scopes, phase) {
   const op = { label: label || '', scopes: scopes || null, phase: phase || 'running', startedAt: Date.now() };
   _ops.push(op);
   syncOpState(false);
+  require('./timing').record('op-begin', { label: op.label, phase: op.phase, scopes: op.scopes || 'all' });
   return op;
 }
 
@@ -76,6 +77,7 @@ function endOp(op) {
   const idx = _ops.indexOf(op);
   if (idx < 0) return false;
   const wasRunning = _ops[idx].phase === 'running';
+  require('./timing').record('op-end', { label: op.label, phase: op.phase, ms: Date.now() - op.startedAt });
   _ops.splice(idx, 1);
   syncOpState(wasRunning);
   // 자원이 하나 풀렸다 — 그것 때문에 막혀 예약된 동작이 있으면 이제 될 수도 있다.

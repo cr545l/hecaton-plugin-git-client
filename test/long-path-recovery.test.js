@@ -12,8 +12,17 @@ const diagnostic = 'error: open("' + file + '"): Filename too long\n'
   + 'error: unable to index file ' + file + '\nfatal: adding files failed\n';
 const emit = (name, value) => handlers.get(name)(value);
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+// Writes reach Git with automatic maintenance turned off ahead of the subcommand
+// (git-process.test.js covers that). These cases compare the Git command itself.
+const { NO_AUTO_MAINTENANCE } = require('../git-process');
+function withoutMaintenancePrefix(params) {
+  const args = params.args || [];
+  const prefixed = NO_AUTO_MAINTENANCE.every((value, i) => args[i] === value);
+  return { ...params, args: prefixed ? args.slice(NO_AUTO_MAINTENANCE.length) : args };
+}
 
-function failedSpawn(params) {
+function failedSpawn(raw) {
+  const params = withoutMaintenancePrefix(raw);
   calls.push({ kind: 'spawn', ...params });
   const process_id = String(++nextId);
   // The recovery's config write is streamed like every other write.
@@ -135,7 +144,7 @@ test('a delayed staging failure automatically calls the Hecaton message dialog A
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let process_id;
   hecaton.process.spawn = async params => {
-    calls.push({ kind: 'spawn', ...params });
+    calls.push({ kind: 'spawn', ...withoutMaintenancePrefix(params) });
     process_id = String(++nextId);
     return { ok: true, process_id };
   };

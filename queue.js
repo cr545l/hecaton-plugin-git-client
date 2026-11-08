@@ -194,6 +194,7 @@ function drain() {
       if (stale) {
         _queue.splice(i, 1);
         changed = true;
+        require('./timing').record('dequeued', { id: entry.id, result: 'expired', waitedMs: now - entry.at });
         notifyCancelled(entry, stale);
         continue;
       }
@@ -206,6 +207,7 @@ function drain() {
       }
       _queue.splice(i, 1);
       changed = true;
+      require('./timing').record('dequeued', { id: entry.id, result: reason === null ? 'run' : 'cancelled', waitedMs: now - entry.at });
       if (reason !== null) {
         notifyCancelled(entry, reason);
         continue;

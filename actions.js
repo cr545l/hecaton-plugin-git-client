@@ -792,9 +792,16 @@ function reportBlocked(reason) {
   return false;
 }
 
+function recordGate(id, result, reason) {
+  const timing = require('./timing');
+  timing.record('action', reason === undefined ? { id, result }
+    : { id, result, reason: String(reason), busy: timing.blockingOps() });
+}
+
 function guardAction(id, extra) {
   const reason = disabledReason(id, extra);
-  if (reason === null) return true;
+  if (reason === null) { recordGate(id, 'run'); return true; }
+  recordGate(id, 'blocked', reason);
   return reportBlocked(reason);
 }
 
@@ -824,17 +831,22 @@ function guardOrQueue(id, retry, opts) {
   if (queued) {
     if (rules && rules.merge && payload !== undefined) queue.mergePayload(queued, payload, rules.merge);
     else queue.cancel(queued.id);
+    recordGate(id, rules && rules.merge && payload !== undefined ? 'merged' : 'unqueued');
     return false;
   }
 
   const s = snapshot();
   const reason = disabledReason(id, extra, s);
-  if (reason === null) return true;
+  if (reason === null) { recordGate(id, 'run'); return true; }
   // 자원 겹침만 예약한다. 나머지 사유(리모트 없음, 스테이지 없음 …)는 기다린다고
   // 풀리는 것이 아니므로 예전처럼 알리고 버린다.
   if (reason === REASON.BUSY && typeof retry === 'function') {
-    if (rules && canQueueNow(id, rules, s) && queue.enqueue(id, retry, rules, payload)) return false;
+    if (rules && canQueueNow(id, rules, s) && queue.enqueue(id, retry, rules, payload)) {
+      recordGate(id, 'queued', reason);
+      return false;
+    }
   }
+  recordGate(id, 'blocked', reason);
   return reportBlocked(reason);
 }
 
