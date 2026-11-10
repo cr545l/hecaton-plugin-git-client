@@ -595,6 +595,8 @@ async function handleKey(key) {
   // 오래 걸리는 히스토리 조회를 끊는다. 경과 시간과 "Esc: 중단" 안내가 화면에 나온 뒤에만
   // 먹는다 — 안내가 없는 짧은 조회를 Esc 한 번으로 조용히 죽이지 않는다.
   if (key === ESC && require('./refresh').cancelLogLoad()) return;
+  // 그 밖의 오래 걸리는 조회(새로고침의 status·메타, diff 등)도 같은 키로 끊는다.
+  if (key === ESC && require('./refresh').cancelSlowReads()) return;
 
   // 저장소 밖에서 연 첫 화면의 설정 단축키. 일반 저장소에서는 기존 키 의미를 유지한다.
   if (!state.loading && !state.isGitRepo) {
@@ -872,6 +874,8 @@ async function handleKey(key) {
     }
     case 'r':
     case 'R': {
+      // 직접 누른 새로고침은 diff 캐시도 비운다 — 아래 log 와 같은 이유다.
+      require('./refresh').invalidateDiffCache();
       refreshAsync().then(() => {
         // 사용자가 직접 누른 새로고침은 캐시를 건너뛴다 — 화면이 이상해 보여서 눌렀을 때
         // 지문이 같다는 이유로 아무것도 다시 읽지 않으면 손쓸 방법이 없어진다.

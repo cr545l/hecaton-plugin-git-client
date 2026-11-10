@@ -51,7 +51,23 @@ function configure(gitCommonDir, cwd) {
   const next = nodePath.join(common, SHARE_DIR_NAME);
   if (next !== _shareDir) _dirReady = false;
   _shareDir = next;
-  _cwdKey = hashKey(normalizePath(cwd));
+  const nextKey = hashKey(normalizePath(cwd));
+  if (nextKey !== _cwdKey) { _peerSeenAt = {}; _lastPublishAt = {}; }
+  _cwdKey = nextKey;
+}
+
+// 폴링 스냅샷은 "같은 워크트리를 보는 다른 창"이 있을 때만 쓸모가 있다. 그런데 워크트리마다
+// 창을 하나씩 띄우는 쓰임에서는 받아 갈 상대가 없는데도 틱마다 파일을 다시 썼다(2026-11-10
+// 실측: 창 9개가 2초마다 각자 12KB). 파일 쓰기 하나하나가 보안 제품 검사를 거치는
+// 환경이라 그 자체가 부하다. 그래서 상대를 본 적이 없으면 드문드문만 쓴다 — 그 드문 쓰기가
+// 새로 뜬 창에게 "여기 누가 있다"를 알리는 신호가 되고, 서로를 보면 예전처럼 매번 쓴다.
+const PEER_WINDOW_MS = 60000;
+const SOLO_PUBLISH_INTERVAL_MS = 30000;
+let _peerSeenAt = {};
+let _lastPublishAt = {};
+
+function peerRecentlySeen(kind) {
+  return !!_peerSeenAt[kind] && (Date.now() - _peerSeenAt[kind]) < PEER_WINDOW_MS;
 }
 
 function isEnabled() {
@@ -90,6 +106,18 @@ async function writeJson(path, value) {
   } catch { return false; }
 }
 
+// 저장소 단위(워크트리 공통) JSON 파일. 히스토리 캐시처럼 같은 저장소의 모든 창이 함께
+// 쓰는 것을 둔다. 읽기 실패·깨진 내용은 null, 쓰기 실패는 false — 호출부는 캐시 없이 간다.
+async function readRepoJson(kind) {
+  if (!isEnabled() || !await ensureDir()) return null;
+  return await readJson(sharedPath(kind, false));
+}
+
+async function writeRepoJson(kind, value) {
+  if (!isEnabled() || !await ensureDir()) return false;
+  return await writeJson(sharedPath(kind, false), value);
+}
+
 // 동작 시간 기록(timing.js)의 저장. 인스턴스마다 한 파일(suffix 'prev' 는 직전 묶음)이다.
 async function writeTimingLog(content, suffix) {
   if (!isEnabled() || !await ensureDir()) return false;
@@ -107,14 +135,22 @@ async function readSharedSnapshot(kind, maxAgeMs) {
   const data = await readJson(sharedPath(kind, true));
   if (!data || typeof data.publishedAt !== 'number') return null;
   const age = Date.now() - data.publishedAt;
+  // 쓰기에는 너무 낡았더라도, 남이 최근에 올린 것이면 같은 워크트리에 다른 창이 있다는 뜻이다.
+  if (data.owner && data.owner !== INSTANCE_ID && age >= 0 && age < PEER_WINDOW_MS) _peerSeenAt[kind] = Date.now();
   // 시계 역행이나 남의 저장소에서 복사된 파일 같은 이상값은 신선한 것으로 오인하지 않는다.
   if (age < 0 || age > maxAgeMs) return null;
   if (data.value === undefined) return null;
   return { value: data.value, ageMs: age, owner: data.owner || '' };
 }
 
-async function publishSharedSnapshot(kind, value) {
+// opts.soloThrottle: 받아 갈 상대를 본 적이 없으면 SOLO_PUBLISH_INTERVAL_MS 에 한 번만 쓴다.
+async function publishSharedSnapshot(kind, value, opts) {
   if (!isEnabled() || !await ensureDir()) return false;
+  if (opts && opts.soloThrottle && !peerRecentlySeen(kind)
+      && _lastPublishAt[kind] && (Date.now() - _lastPublishAt[kind]) < SOLO_PUBLISH_INTERVAL_MS) {
+    return false;
+  }
+  _lastPublishAt[kind] = Date.now();
   return await writeJson(sharedPath(kind, true), {
     publishedAt: Date.now(),
     owner: INSTANCE_ID,
@@ -247,6 +283,8 @@ module.exports = {
   isEnabled,
   readSharedSnapshot,
   publishSharedSnapshot,
+  readRepoJson,
+  writeRepoJson,
   beginNetworkOp,
   claimNetworkOp,
   endNetworkOp,

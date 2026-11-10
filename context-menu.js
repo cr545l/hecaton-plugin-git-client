@@ -75,7 +75,7 @@ const {
   gitMergeAsync, gitRebaseAsync, gitResetAsync, gitCheckoutRefAsync,
   gitCherryPickAsync, gitCherryPickNoCommitAsync, gitRevertAsync, gitStashSaveAsync, gitStashPopAsync,
   gitStageAsync, gitUnstageAsync, gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync, gitFetchRemoteAsync,
+  gitMergeFastForwardAsync, gitPullFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync, gitFetchRemoteAsync,
   gitCheckRebaseConflicts, gitIsRebaseNoop,
   gitCheckoutOurs, gitCheckoutTheirs, gitCommitMessage,
   gitExec, gitResetModeAsync, gitRewordCommitAsync, gitSquashIntoParentAsync,
@@ -856,6 +856,15 @@ function buildRemoteBranchContextMenuItems(remoteBranchName) {
 //                    branch_ff 는 이미 받아 둔 리모트 추적 ref 까지만 옮긴다.
 //  *_reset         : 현재 브랜치를 고른 브랜치(로컬/리모트 추적)가 가리키는 커밋으로 리셋한다.
 //                    커밋 리셋과 같은 soft/mixed/hard 선택 창을 쓴다.
+// 패스트포워드가 성공했다면 변경 파일 목록은 그대로다 — git 은 손댄 파일이나 추적하지 않는
+// 파일을 덮어써야 하는 패스트포워드를 거절하고, 다른 브랜치를 옮기는 경우는 작업 트리를
+// 아예 건드리지 않는다. 그래서 뒷정리에서 status(이 환경에서 15~19초)를 다시 읽지 않고
+// 브랜치·리모트·ahead/behind 같은 메타만 갱신한다. 혹시 어긋난 것이 있으면 워크트리 폴링이
+// 바로잡는다. 실패했을 때는 무엇이 바뀌었는지 모르므로 종전대로 전부 읽는다.
+function fastForwardRefresh(err) {
+  return err ? {} : { metadataOnly: true, forceMeta: true };
+}
+
 async function runSingleBranchAction(actionId, entry) {
   if (!guardAction(actionId)) return;
   if (actionId === 'branch_fetch_ff') {
@@ -868,16 +877,15 @@ async function runSingleBranchAction(actionId, entry) {
     // refspec fetch 한 번으로 한다(작업 트리는 건드리지 않는다).
     if (!entry.current) {
       const err = await gitFetchIntoBranchAsync(state.cwd, remote, parts.branch || entry.name, entry.name);
-      await afterGitOp(err, t('menu.fastForward'), {}, op);
+      await afterGitOp(err, t('menu.fastForward'), fastForwardRefresh(err), op);
       return;
     }
-    let err = await gitFetchRemoteAsync(state.cwd, remote);
-    if (!err) {
-      const target = entry.upstream || remote + '/' + entry.name;
-      const found = await require('./git').gitExecChecked(['rev-parse', '--verify', '--quiet', 'refs/remotes/' + target], state.cwd, 10000);
-      err = found.ok ? await gitMergeFastForwardAsync(state.cwd, target) : t('menu.noRemoteBranchToFastForward', { target });
+    // 현재 브랜치: 페치와 패스트포워드를 git 한 번(pull --ff-only)으로 한다.
+    let err = await gitPullFastForwardAsync(state.cwd, remote, parts.branch || entry.name);
+    if (err && /couldn't find remote ref/i.test(err)) {
+      err = t('menu.noRemoteBranchToFastForward', { target: entry.upstream || remote + '/' + entry.name });
     }
-    await afterGitOp(err, t('menu.fastForward'), {}, op);
+    await afterGitOp(err, t('menu.fastForward'), fastForwardRefresh(err), op);
     return;
   }
   hecaton.dialog.show({
@@ -1660,7 +1668,7 @@ untrackedCount + t('menu.untracked'),
         const ffPromise = branch && branch.isCurrent
           ? gitMergeFastForwardAsync(state.cwd, upstream)
           : gitFetchIntoBranchAsync(state.cwd, remote, splitUpstreamRef(upstream, state.remotes).branch, branchName);
-        ffPromise.then(async err => { await afterGitOp(err, t('menu.fastForward'), {}, ffOp); });
+        ffPromise.then(async err => { await afterGitOp(err, t('menu.fastForward'), fastForwardRefresh(err), ffOp); });
         break;
       }
       case 'branch_pull':
@@ -2373,7 +2381,7 @@ async function handleDialogResultInner(params) {
       if (buttonId === 'ff') {
         const otherFfOp = startSpinner(t('menu.fastForwarding'), PULL_SCOPES);
         const err = await gitFetchIntoBranchAsync(state.cwd, remote, remoteBranch, target);
-        await afterGitOp(err, t('menu.fastForward'), {}, otherFfOp);
+        await afterGitOp(err, t('menu.fastForward'), fastForwardRefresh(err), otherFfOp);
         return;
       }
       // Checkout & Pull — 체크아웃부터 실패하면(로컬 수정 등) pull은 시도하지 않는다.

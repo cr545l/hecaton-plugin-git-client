@@ -5,7 +5,9 @@ async function buildWorktreeSnapshot(cwd, api, execGit) {
   const result = await execGit({
     program: 'git',
     args: ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],
-    cwd, timeout_ms: 5000,
+    // 스트리밍을 못 쓰는 호스트에서 exec 로 내려갈 때의 마감. 5초로는 status 가 7초를 넘는
+    // 저장소에서 한 번도 끝나지 못했다.
+    cwd, timeout_ms: 60000,
   });
   if (!result || !result.ok || result.error || result.error_code || result.timed_out
       || (result.exit_code !== undefined && result.exit_code !== 0)) return null;

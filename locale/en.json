@@ -42,6 +42,8 @@
   "git.commandTimedOutUnknown": "\n\nThe Git command timed out. Wait for any active Git process to finish, then refresh and retry.",
   "git.streamingRequired": "This host cannot safely run Git writes asynchronously. Update Hecaton to a version supporting process.spawn and process events.",
   "title.elapsedSeconds": " ({seconds}s elapsed)",
+  "title.elapsedSecondsCancellable": " ({seconds}s elapsed, Esc: stop)",
+  "ui.readsCancelled": "Stopped the queries in progress",
   "ui.rebaseProgressUnavailable": "progress unavailable)",
   "git.processMissingId": "The host did not return a Git process ID.",
   "git.processMissingExit": "The host did not return a Git exit code.",

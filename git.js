@@ -19,8 +19,15 @@ function gitProcessSucceeded(result) {
   return exitCode === null || exitCode === 0;
 }
 
+// 이 파일의 모든 읽기는 여기를 지난다. 마감 없이 돌고, 같은 조회는 합쳐지고, 끊을 수 있다
+// (git-process.js "읽기 실행의 단일 창구"). 호출부가 넘기는 timeout_ms 는 스트리밍을 못 쓰는
+// 호스트에서 exec 로 내려갈 때만 쓰인다.
+function readGit(params) {
+  return gitProcess.read(params);
+}
+
 async function gitExec(args, cwd, timeout) {
-  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const result = await readGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (result && result.ok) {
     return (result.stdout || '').replace(/\r\n/g, '\n');
   } else {
@@ -32,7 +39,7 @@ async function gitExec(args, cwd, timeout) {
 // "명령이 실패해 아무것도 못 읽었다"를 구분해야 하는 호출자는 이 쪽을 쓴다.
 // 예: for-each-ref가 실패했을 때 브랜치 목록을 빈 배열로 덮어쓰면 브랜치가 통째로 사라진다.
 async function gitExecChecked(args, cwd, timeout) {
-  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const result = await readGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   const ok = gitProcessSucceeded(result);
   const exitCode = result && result.exit_code !== undefined
     ? result.exit_code
@@ -52,18 +59,10 @@ async function gitExecChecked(args, cwd, timeout) {
 // 스트리밍을 못 쓰는 호스트에서는 종전의 exec 로 내려간다 — 읽기는 도중에 끊겨도 남는 것이
 // 없어 쓰기와 달리 폴백이 안전하다. 그때의 마감은 legacyTimeout 이고 cancel 은 아무 일도 않는다.
 function gitReadJob(args, cwd, legacyTimeout) {
-  const startedAt = Date.now();
-  if (!gitProcess.canStream()) {
-    return {
-      startedAt,
-      cancel() {},
-      promise: gitExecChecked(args, cwd, legacyTimeout).then(res => ({ ...res, cancelled: false })),
-    };
-  }
-  const job = gitProcess.startRead({ program: 'git', args, cwd });
+  const job = gitProcess.readJob({ program: 'git', args, cwd, timeout_ms: legacyTimeout || 5000 });
   return {
-    startedAt,
-    cancel: job.cancel,
+    startedAt: job.startedAt,
+    cancel: () => job.cancel(),
     promise: job.promise.then(result => {
       const ok = gitProcessSucceeded(result);
       const exitCode = result && result.exit_code !== undefined ? result.exit_code : null;
@@ -78,7 +77,7 @@ function gitReadJob(args, cwd, legacyTimeout) {
 }
 
 async function git(args, cwd, timeout) {
-  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  const result = await readGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (!result || !result.ok) {
     const err = new Error(result ? result.error || 'git failed' : t('git.execProcessFailed'));
     err.stderr = result ? (result.stderr || '') : '';
@@ -90,7 +89,7 @@ async function git(args, cwd, timeout) {
 }
 
 async function gitResult(args, cwd, timeout) {
-  return await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
+  return await readGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
 }
 
 const PATHSPEC_ARG_BUDGET = 16000;
@@ -319,7 +318,7 @@ async function resolveWorkTreeRoot(cwd) {
 }
 
 async function gitIsRepo(cwd) {
-  const result = await perms.execGit({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout_ms: 5000 });
+  const result = await readGit({ program: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd, timeout_ms: 5000 });
   if (gitProcessSucceeded(result)) return true;
   // Provide diagnostic detail for troubleshooting
   const detail = {};
@@ -461,7 +460,7 @@ async function gitStatusPorcelain(cwd, opts = {}) {
   if (opts.includeBranch === true) args.push('--branch');
   if (showUntracked && includeIgnored) args.push('--ignored');
 
-  const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: statusTimeout });
+  const result = await readGit({ program: 'git', args, cwd, timeout_ms: statusTimeout });
   if (!gitProcessSucceeded(result)) {
     if (opts.nullOnError) return null;
     return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
@@ -514,7 +513,7 @@ async function gitStatusPaths(cwd, paths, opts = {}) {
   if (!batches) return null;
   const merged = { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
   for (const batch of batches) {
-    const result = await perms.execGit({
+    const result = await readGit({
       program: 'git',
       args: ['--no-optional-locks', '--literal-pathspecs', 'status', '--porcelain=v1', '-z', '--untracked-files=normal', '--', ...batch],
       cwd,
@@ -1475,6 +1474,13 @@ async function gitFetchIntoBranchAsync(cwd, remote, remoteBranch, localBranch) {
 async function gitFetchRemoteAsync(cwd, remote) {
   return await runNetworkOp('fetch', 0, () => gitAsyncWrap(['fetch', remote], cwd));
 }
+// 현재 브랜치의 "페치 후 패스트포워드"를 git 한 번으로 한다. 예전에는 fetch <remote> →
+// rev-parse → merge --ff-only 로 프로세스를 셋 띄웠는데, 프로세스 하나를 띄우는 데만 1.5초가
+// 드는 환경에서는 그 차이가 그대로 대기 시간이다. 리모트 전체가 아니라 그 브랜치만 받는다.
+// --no-rebase 는 pull.rebase 설정이 있어도 병합(ff-only) 쪽으로 가게 하려는 것이다.
+async function gitPullFastForwardAsync(cwd, remote, branch) {
+  return await runNetworkOp('pull', 0, () => gitAsyncWrap(['pull', '--no-rebase', '--ff-only', remote, branch], cwd));
+}
 async function gitPullRebaseAsync(cwd, remote, branch) {
   return await runNetworkOp('pull', 0, () => gitAsyncWrap(['pull', '--rebase', remote, branch], cwd));
 }
@@ -2134,7 +2140,7 @@ module.exports = {
   gitRewordCommitAsync, gitSquashIntoParentAsync, gitDropCommitAsync, gitEditCommitAsync,
   gitStageAsync, gitUnstageAsync,
   gitStageMultiple, gitUnstageMultiple,
-  gitMergeFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync, gitFetchRemoteAsync,
+  gitMergeFastForwardAsync, gitPullFastForwardAsync, gitPushToRemoteAsync, gitPushHeadToBranchAsync, gitPullFromRemoteAsync, gitFetchIntoBranchAsync, gitFetchRemoteAsync,
   gitPullRebaseAsync, gitForcePushAsync, gitPushDeleteBranchAsync, gitPushBranchToRemoteAsync,
   splitUpstreamRef,
   gitPushTagsAsync, gitPushTagAsync, gitPushDeleteTagAsync,

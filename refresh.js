@@ -13,6 +13,7 @@ const FRESH_TIME_WINDOWS = [
 ];
 const FRESH_LOG_MAX_COUNT = 1000;
 const perms = require('./permissions');
+const coordinate = require('./coordinate');
 const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner, beginPanelLoading, endPanelLoading, startSettleOp, endSettleOp } = require('./spinner');
 const { applyWindowTitle } = require('./title');
@@ -376,6 +377,8 @@ function refreshInBackground(options = {}, followup = {}) {
   } else if (!state.refreshing || !state.refreshMessage) {
     state.refreshMessage = t('refresh.refreshing');
   }
+  // 걸린 시간 표시의 기준. 겹쳐 들어온 갱신은 가장 먼저 시작한 것의 시각을 이어 쓴다.
+  if (!state.refreshing) state.refreshingSince = Date.now();
   state.refreshing = true;
   // followup.settle 은 "이 갱신이 끝나야 방금 한 쓰기 작업이 화면에 반영된다"는 표시다.
   // 그때까지 목록은 작업 직전 상태 그대로이므로 새 쓰기를 받으면 안 된다 — 예를 들어
@@ -1426,7 +1429,7 @@ async function refreshAsync(options = {}) {
   let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw;
   // refs/remote/worktrees 조회가 실제로 성공했는지 — 실패를 "0건"으로 오인해 목록을 지우지 않기 위한 플래그.
   // 캐시에는 성공한 결과만 넣으므로 캐시 적중 경로는 항상 true다.
-  let refsOk = true, remoteNamesOk = true, worktreesOk = true;
+  let refsOk = true, remoteNamesOk = true, worktreesOk = true, stashOk = true;
   // status 조회 방식은 경량 refresh와 같은 규칙을 쓴다 — 기본은 단일 프로세스(porcelain).
   // split은 rev-parse(직렬) → diff-index + diff-files + ls-files 로 프로세스를 4개 쓰는데,
   // 프로세스 생성 자체가 비싼 환경에서는 그 차이가 곧 체감 지연이 된다.
@@ -1450,11 +1453,11 @@ async function refreshAsync(options = {}) {
     worktrees = _metaCache.worktrees;
     aheadBehindRaw = _metaCache.aheadBehindRaw;
   } else {
-    let refsRes, remoteNamesRes;
-    [statusSnapshot, stashRaw, refsRes, remoteNamesRes, worktrees, aheadBehindRaw, committerConfig] =
+    let refsRes, remoteNamesRes, stashRes;
+    [statusSnapshot, stashRes, refsRes, remoteNamesRes, worktrees, aheadBehindRaw, committerConfig] =
       await Promise.all([
         statusPromise,
-        gitExec(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
+        gitExecChecked(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
         gitExecChecked(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd, REFS_TIMEOUT_MS),
         gitExecChecked(['--no-optional-locks', 'remote'], state.cwd),
         gitWorktrees(state.cwd),
@@ -1463,6 +1466,10 @@ async function refreshAsync(options = {}) {
       ]);
     refsOk = refsRes.ok;
     refsRaw = refsRes.text;
+    // stash 목록도 브랜치와 같다 — 실패(중단 포함)를 "0건"으로 받으면 stash 가 사라져 보이고,
+    // 그 빈 목록이 지문이 바뀔 때까지 캐시에 남는다.
+    stashOk = stashRes.ok;
+    stashRaw = stashRes.text;
     // 일시적인 host/Git 실패를 "리모트 0개"로 캐시하면 원격 브랜치는 보이는데
     // Fetch/Pull만 막히는 상태가 된다. 한 번 더 읽고, 그래도 실패하면 이전 값을 보존한다.
     if (!remoteNamesRes.ok) {
@@ -1474,7 +1481,7 @@ async function refreshAsync(options = {}) {
     worktreesOk = worktrees.length > 0;
     // 실패한 조회 결과를 캐시에 넣으면 fingerprint(.git 내부 mtime)가 바뀔 때까지 빈 목록이
     // 계속 재사용된다. 브랜치가 한참 동안 사라져 보이는 원인이므로 성공했을 때만 캐시한다.
-    if (fingerprint && refsOk && remoteNamesOk && worktreesOk) {
+    if (fingerprint && refsOk && remoteNamesOk && worktreesOk && stashOk) {
       _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw };
       _metaFingerprint = fingerprint;
       _metaCacheCwd = state.cwd;
@@ -1524,11 +1531,13 @@ async function refreshAsync(options = {}) {
     state.ignoredLoading = false;
   }
 
-  // stashes
-  state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
-    const parts = line.split('\t');
-    return { hash: parts[0], shortHash: parts[1], ref: parts[2], message: parts[3] || '' };
-  }) : [];
+  // stashes — 조회가 실패했으면 이전 목록을 그대로 둔다.
+  if (stashOk) {
+    state.stashes = stashRaw.trim() ? stashRaw.trim().split('\n').map(line => {
+      const parts = line.split('\t');
+      return { hash: parts[0], shortHash: parts[1], ref: parts[2], message: parts[3] || '' };
+    }) : [];
+  }
 
   // branches / remoteBranches — refs 파싱 결과 사용
   if (refsOk) {
@@ -1804,6 +1813,192 @@ function cancelLogLoad() {
   require('./spinner').showToast(t('ui.loadingCommitsCancelled').trim(), 2000);
   require('./render').render();
   return true;
+}
+
+// 히스토리 말고도 조회는 전부 마감 없이 돈다(새로고침의 status·메타 조회, diff, 커밋 상세).
+// 타이틀에 경과 시간과 "Esc: 중단"이 나올 만큼 오래 도는 것들을 한꺼번에 끊는다. 끊긴 조회는
+// 실패로 돌아오고, 각 호출부는 실패를 "0건"으로 받지 않고 직전 화면을 그대로 둔다.
+const SLOW_READ_CANCEL_MS = 10000;
+function cancelSlowReads() {
+  const cancelled = require('./git-process').cancelReads(SLOW_READ_CANCEL_MS);
+  if (!cancelled) return false;
+  require('./spinner').showToast(t('ui.readsCancelled'), 2000);
+  return true;
+}
+
+// ── 저장소 단위 히스토리 캐시 ──
+//
+// `git log --all` 의 결과는 같은 저장소의 모든 워크트리에서 같다(다른 것은 HEAD 가 어디
+// 붙었는지뿐이다). 그런데 창마다 따로 읽었고, 창을 새로 열 때마다 처음부터 다시 읽었다 —
+// 2026-11-10 실측으로 한 저장소의 워크트리 창 9개가 저마다 86초짜리 log 를 돌렸다.
+// 결과를 .git/hecaton-git-client/logcache.json 에 두고 세 가지로 쓴다:
+//   1. 지문이 같으면 git 을 부르지 않는다 — 다른 창이나 지난 세션이 이미 읽어 둔 것이다
+//   2. 지문이 달라도 목록이 비어 있으면 저장된 것을 먼저 보여 주고 뒤에서 다시 읽는다.
+//      느린 시스템에서도 창을 열자마자 커밋이 보인다
+//   3. 다른 창이 같은 조회를 돌리는 중이면 기다렸다 그 결과를 받는다(logflight.json)
+// 저장할 때는 HEAD 표시를 떼고, 쓸 때 이 워크트리의 HEAD 로 다시 붙인다.
+// 지문은 워크트리별 것(_logCacheFingerprint)과 달리 저장소 전체를 본다: refs 트리,
+// packed-refs, 모든 워크트리의 HEAD — 어느 워크트리에서든 커밋 집합이 바뀌면 달라진다.
+const LOG_CACHE_VERSION = 1;
+const LOG_FLIGHT_STALE_MS = 20000;
+const LOG_FLIGHT_HEARTBEAT_MS = 8000;
+
+// 레코드: \x01 H \x00 P \x00 D \x00 … — 세 번째 필드(장식)만 바꿔 다시 잇는다.
+function mapLogDecorations(raw, fn) {
+  return raw.split('\x01').map((rec, i) => {
+    if (i === 0) return rec;
+    const a = rec.indexOf('\x00');
+    const b = a < 0 ? -1 : rec.indexOf('\x00', a + 1);
+    const c = b < 0 ? -1 : rec.indexOf('\x00', b + 1);
+    if (c < 0) return rec;
+    return rec.substring(0, b + 1) + fn(rec.substring(b + 1, c), rec.substring(0, a)) + rec.substring(c);
+  }).join('\x01');
+}
+
+function stripHeadDecoration(raw) {
+  return mapLogDecorations(raw, refs => !refs ? refs : refs.split(', ')
+    .filter(token => token !== 'HEAD')
+    .map(token => token.startsWith('HEAD -> ') ? token.substring(8) : token)
+    .join(', '));
+}
+
+function applyHeadDecoration(raw, head) {
+  return mapLogDecorations(raw, (refs, hash) => {
+    if (head.branch) {
+      if (!refs) return refs;
+      const tokens = refs.split(', ');
+      const at = tokens.indexOf(head.branch);
+      if (at < 0) return refs;
+      tokens.splice(at, 1);
+      return ['HEAD -> ' + head.branch].concat(tokens).join(', ');
+    }
+    if (head.hash && hash === head.hash) return refs ? 'HEAD, ' + refs : 'HEAD';
+    return refs;
+  });
+}
+
+// 이 워크트리의 HEAD 가 무엇을 가리키는지 — { branch } 또는 { hash }. 못 읽으면 {}.
+async function readHeadPointer() {
+  if (!state.gitDir) return {};
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  try {
+    const res = await hecaton.fs.read_file({ path: state.gitDir + sep + 'HEAD' });
+    const head = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
+    if (head.startsWith('ref: refs/heads/')) return { branch: head.substring('ref: refs/heads/'.length) };
+    if (/^[0-9a-f]{40,64}$/.test(head)) return { hash: head };
+  } catch { /* ignore */ }
+  return {};
+}
+
+async function computeRepoLogFingerprint(stashHashes, limit) {
+  const common = state.gitCommonDir || state.gitDir;
+  if (!common) return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const refsSig = await computeRefsTreeSignature(common).catch(() => '');
+  if (!refsSig) return '';
+  const worktreeHeads = async () => {
+    let entries = [];
+    try {
+      const res = await hecaton.fs.read_dir({ path: common + sep + 'worktrees' });
+      if (res && res.ok !== false && Array.isArray(res.entries)) entries = res.entries;
+    } catch { /* 링크된 워크트리가 없다 */ }
+    const names = entries.filter(e => e && e.is_dir).map(e => e.name).sort();
+    const times = await Promise.all(names.map(name =>
+      statMtimeOrMissing(common + sep + 'worktrees' + sep + name + sep + 'HEAD')));
+    return names.map((name, i) => name + '=' + times[i]).join(',');
+  };
+  const [packed, mainHead, linked] = await Promise.all([
+    statMtimeOrMissing(common + sep + 'packed-refs'),
+    statMtimeOrMissing(common + sep + 'HEAD'),
+    worktreeHeads(),
+  ]);
+  return [LOG_CACHE_VERSION, refsSig, packed, mainHead, linked, stashHashes.join(','), limit].join('\x1e');
+}
+
+function usableLogCache(cached) {
+  return !!cached && cached.version === LOG_CACHE_VERSION && typeof cached.raw === 'string' && !!cached.raw;
+}
+
+// 다른 창이 같은 지문의 조회를 돌리는 중이면 끝날 때까지 기다렸다 그 결과(raw)를 받는다.
+// 기다릴 대상이 없거나 그쪽이 결과 없이 끝났으면 null — 호출부가 직접 읽는다.
+async function waitForPeerLog(fingerprint, seq) {
+  for (;;) {
+    const flight = await coordinate.readRepoJson('logflight').catch(() => null);
+    if (_logSeq !== seq) return null;
+    const sameQuery = !!flight && flight.owner !== coordinate.INSTANCE_ID && flight.fingerprint === fingerprint;
+    const live = sameQuery && !flight.finishedAt
+      && (Date.now() - (flight.heartbeatAt || 0)) < LOG_FLIGHT_STALE_MS;
+    if (!live) {
+      if (!sameQuery || !flight.finishedAt) return null;
+      const cached = await coordinate.readRepoJson('logcache').catch(() => null);
+      return usableLogCache(cached) && cached.fingerprint === fingerprint ? cached.raw : null;
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+}
+
+// 이 창이 조회를 돌린다고 알린다. 반환한 함수를 부르면 끝났음을 적는다.
+function beginLogFlight(fingerprint) {
+  const record = { owner: coordinate.INSTANCE_ID, fingerprint, startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: 0 };
+  coordinate.writeRepoJson('logflight', record).catch(() => null);
+  const timer = setInterval(() => {
+    record.heartbeatAt = Date.now();
+    coordinate.writeRepoJson('logflight', record).catch(() => null);
+  }, LOG_FLIGHT_HEARTBEAT_MS);
+  if (timer && typeof timer.unref === 'function') timer.unref();
+  return () => {
+    clearInterval(timer);
+    record.finishedAt = Date.now();
+    return coordinate.writeRepoJson('logflight', record).catch(() => null);
+  };
+}
+
+// 1차 커밋 목록을 얻는다 — 캐시, 다른 창의 결과, 직접 조회 순이다.
+// { ok, text } 를 돌려주고, 그 사이 이 실행이 밀려났으면 null.
+async function readLogShared(args, stashHashes, stashFullHashes, limit, seq, force) {
+  if (!coordinate.isEnabled()) return runLogRead(args);
+  const [head, cached, fingerprint] = await Promise.all([
+    readHeadPointer(),
+    coordinate.readRepoJson('logcache').catch(() => null),
+    computeRepoLogFingerprint(stashHashes, limit).catch(() => ''),
+  ]);
+  if (_logSeq !== seq) return null;
+  // HEAD 를 읽지 못하면 저장된 목록에 현재 위치를 붙일 수 없다 — 캐시를 쓰지 않는다.
+  const headKnown = !!(head.branch || head.hash);
+  const usable = headKnown && usableLogCache(cached);
+  if (usable && !force && fingerprint && cached.fingerprint === fingerprint) {
+    return { ok: true, text: applyHeadDecoration(cached.raw, head) };
+  }
+  if (usable && state.logItems.length === 0) {
+    try {
+      const commits = parseLogRaw(applyHeadDecoration(cached.raw, head), { refsByHash: {} }, new Set());
+      applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
+      if (state.rightView === 'log') {
+        updateLogDetail({ headerOnly: true });
+        require('./render').render();
+      }
+    } catch { /* 저장된 목록을 못 그려도 아래 조회가 화면을 채운다 */ }
+  }
+  if (headKnown && fingerprint && !force) {
+    const peerRaw = await waitForPeerLog(fingerprint, seq);
+    if (_logSeq !== seq) return null;
+    if (peerRaw) return { ok: true, text: applyHeadDecoration(peerRaw, head) };
+  }
+  const endFlight = fingerprint ? beginLogFlight(fingerprint) : null;
+  let res;
+  try {
+    res = await runLogRead(args);
+    if (res.ok && res.text && fingerprint) {
+      // 완료 표시보다 먼저 써야 기다리던 창이 결과를 놓치지 않는다.
+      await coordinate.writeRepoJson('logcache', {
+        version: LOG_CACHE_VERSION, fingerprint, limit, savedAt: Date.now(),
+        owner: coordinate.INSTANCE_ID, raw: stripHeadDecoration(res.text),
+      }).catch(() => null);
+    }
+  } finally {
+    if (endFlight) await endFlight();
+  }
+  return res;
 }
 
 // 다른 저장소의 조회가 아직 돌고 있으면 버린다. 그대로 두면 logLoading 가드에 막혀 새
@@ -2174,8 +2369,8 @@ function refreshLog(options = {}) {
     // 1차: 커밋 목록. 한도를 나눠 올리지 않고 요청 한도로 한 번에 읽는다(LOG_FULL_LIMIT 주석 참고).
     // _logSeq로 out-of-order 가드.
     const limit = _logRequestedLimit;
-    const logRes = await runLogRead(buildArgs(limit, []));
-    if (_logSeq !== seq) return;
+    const logRes = await readLogShared(buildArgs(limit, []), stashHashes, stashFullHashes, limit, seq, !!options.force);
+    if (!logRes || _logSeq !== seq) return;
     // 실패(타임아웃·비정상 종료)를 "커밋 0건"으로 받아들이면 목록이 통째로 지워지고
     // 화면에는 "아직 커밋이 없습니다"가 뜬다 — 저장소가 빈 것과 구분되지 않는다.
     // 직전 목록은 그대로 두고 실패만 표시한다. 지문은 위에서 이미 지웠으므로 다음
@@ -2550,18 +2745,104 @@ function updateDiff() {
     } else {
       args = ['diff', '--no-index', '--', '/dev/null', item.file];
     }
-    gitExec(args, state.cwd).then(raw => {
-      if (_diffSeq !== seq) return;
+    const show = raw => {
       endPanelLoading('diff');
       state.conflictView = null;
       state.diffLines = raw.split('\n');
       require('./render').render();
-    }, () => {
+    };
+    const cacheKey = item.type + '\u0000' + item.file;
+    diffSignature(item).then(sig => {
+      if (_diffSeq !== seq) return null;
+      const hit = sig ? _diffCache.get(cacheKey) : null;
+      if (hit && hit.sig === sig) {
+        // 파일도 인덱스도 HEAD 도 그대로다 — git 을 띄우지 않고 지난 결과를 그대로 쓴다.
+        rememberDiff(cacheKey, hit);
+        show(hit.raw);
+        return null;
+      }
+      return readDiffText(args).then(raw => {
+        if (_diffSeq !== seq) return;
+        // 실패·중단한 조회를 빈 diff 로 그리지 않는다. 이미 보이던 내용은 그대로 둔다.
+        if (raw === null) {
+          endPanelLoading('diff');
+          require('./render').render();
+          return;
+        }
+        if (sig) rememberDiff(cacheKey, { sig, raw });
+        show(raw);
+      });
+    }).catch(() => {
       if (_diffSeq !== seq) return;
       endPanelLoading('diff');
       require('./render').render();
     });
   }, DIFF_DEBOUNCE_MS);
+}
+
+// ── diff 캐시 ──
+// 파일을 고를 때마다 git diff 를 띄웠다. 프로세스 하나에 초 단위가 드는 환경에서는 방금 본
+// 파일로 돌아가는 것조차 매번 기다려야 한다. diff 의 입력은 작업 트리의 그 파일, 인덱스,
+// HEAD 셋뿐이므로 그 셋이 그대로면 결과도 그대로다. 지문은 fs.stat 몇 번으로 만든다(호스트
+// RPC 중 비싼 것은 프로세스 실행뿐이다).
+//   - 지문을 못 만들면(gitDir 미확정 등) 캐시하지 않고 종전대로 읽는다
+//   - 실패한 조회는 넣지 않는다
+//   - 사용자가 직접 누른 새로고침은 invalidateDiffCache() 로 비운다 — .gitattributes 나
+//     diff 설정처럼 지문이 잡지 못하는 변화를 반영할 길이다
+const DIFF_CACHE_MAX = 32;
+const DIFF_CACHE_CHARS = 6 * 1024 * 1024;
+const _diffCache = new Map();
+let _diffCacheCwd = '';
+
+function invalidateDiffCache() {
+  _diffCache.clear();
+}
+
+function rememberDiff(key, entry) {
+  if (entry.raw.length > DIFF_CACHE_CHARS / 4) return;
+  _diffCache.delete(key);
+  _diffCache.set(key, entry);
+  let total = 0;
+  for (const value of _diffCache.values()) total += value.raw.length;
+  while (_diffCache.size > DIFF_CACHE_MAX || total > DIFF_CACHE_CHARS) {
+    const [oldestKey, oldest] = _diffCache.entries().next().value;
+    _diffCache.delete(oldestKey);
+    total -= oldest.raw.length;
+  }
+}
+
+async function diffSignature(item) {
+  if (!state.gitDir || !state.cwd) return '';
+  if (_diffCacheCwd !== state.cwd) {
+    _diffCache.clear();
+    _diffCacheCwd = state.cwd;
+  }
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  try {
+    const [file, index, head, headLog] = await Promise.all([
+      hecaton.fs.stat({ path: state.cwd + sep + item.file }).catch(() => null),
+      statMtimeOrMissing(state.gitDir + sep + 'index'),
+      statMtimeOrMissing(state.gitDir + sep + 'HEAD'),
+      statMtimeOrMissing(state.gitDir + sep + 'logs' + sep + 'HEAD'),
+    ]);
+    // 파일 시각을 읽지 못하면 "그대로인지" 알 수 없다 — 캐시하지 않는다. 지워진 파일은
+    // 그 자체가 상태이므로 missing 으로 적는다.
+    if (!file) return '';
+    const fileSig = file.exists ? (file.mtime_ms || 0) + ':' + (file.size || file.size_bytes || 0) : 'missing';
+    if (file.exists && !file.mtime_ms) return '';
+    return [fileSig, index, head, headLog].join('|');
+  } catch { return ''; }
+}
+
+// diff 본문을 읽는다. 실패·중단이면 null. `diff --no-index` 는 차이가 있으면 1 로 끝나므로
+// 0 과 1 을 모두 성공으로 본다.
+async function readDiffText(args) {
+  const result = await require('./git-process').read({ program: 'git', args, cwd: state.cwd, timeout_ms: 30000 });
+  if (!result || !result.ok || result.error || result.error_code || result.__rpcError
+      || result.cancelled || result.timed_out) return null;
+  const code = result.exit_code !== undefined ? result.exit_code : null;
+  if (code !== null && code !== 0 && code !== 1) return null;
+  return (result.stdout || '').replace(/\r\n/g, '\n');
 }
 
 function refreshFresh() {
@@ -2687,7 +2968,7 @@ function updateFreshDetail() {
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   expandFileTargets, stageAllPaths, sectionRangeAt, setFileTreeView, toggleFileDir,
-  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, cancelSlowReads, invalidateDiffCache, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,

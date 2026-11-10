@@ -34,6 +34,12 @@ function formatProgressStatus() {
       msg = (msg ? msg + ' ' : '') + t('title.loadingCommitsElapsed', { seconds });
     }
   }
+  // 갱신(status·메타 조회)도 마감 없이 돈다. 쓰기 작업의 경과 표시와 같은 기준(10초)으로
+  // 걸린 시간을 내고, 읽기는 끊을 수 있으므로 그 키를 함께 적는다(refresh.cancelSlowReads).
+  if (state.refreshing && state.refreshingSince && !(state.spinnerActive && state.error)) {
+    const seconds = Math.floor((Date.now() - state.refreshingSince) / 1000);
+    if (seconds >= 10) msg += t('title.elapsedSecondsCancellable', { seconds });
+  }
   if (state.spinnerActive) {
     const running = (state.activeOps || []).filter(op => op.phase === 'running');
     const current = running[running.length - 1];

@@ -102,6 +102,7 @@ const state = {
   freshDetailLoading: false,
   freshDetailLoadingSince: 0,
   refreshing: false,
+  refreshingSince: 0,     // 백그라운드 갱신을 시작한 시각 — 걸린 시간 표시의 기준
   refreshMessage: '',
   indexLocked: false,    // .git/index.lock 존재 여부 — Unlock 버튼 노출 트리거
 };

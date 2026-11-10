@@ -42,6 +42,8 @@
   "git.commandTimedOutUnknown": "\n\nGit 명령의 실행 시간이 초과되었습니다. 실행 중인 Git 프로세스가 끝나기를 기다린 뒤 새로고침하고 다시 시도하세요.",
   "git.streamingRequired": "이 호스트는 Git 변경 작업을 시간 제한 없이 실행할 수 없습니다. 비동기 프로세스 실행을 지원하는 Hecaton 버전으로 업데이트해 주세요.",
   "title.elapsedSeconds": " ({seconds}초 경과)",
+  "title.elapsedSecondsCancellable": " ({seconds}초 경과, Esc: 중단)",
+  "ui.readsCancelled": "진행 중이던 조회를 중단했습니다",
   "ui.rebaseProgressUnavailable": "진행 정보 없음)",
   "git.processMissingId": "호스트가 Git 프로세스 ID를 반환하지 않았습니다.",
   "git.processMissingExit": "호스트가 Git 종료 코드를 반환하지 않았습니다.",

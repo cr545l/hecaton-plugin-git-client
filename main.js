@@ -464,7 +464,7 @@ async function setupGitWatcher() {
   const pollingClient = createPollingClient(hecaton);
   async function buildWorktreeSnapshot() {
     return pollingClient.snapshot(state.cwd, () =>
-      collectWorktreeSnapshot(state.cwd, hecaton, perms.execGit));
+      collectWorktreeSnapshot(state.cwd, hecaton, gitProcess.read));
   }
 
   let lastRefsSig = '';
@@ -522,7 +522,7 @@ async function setupGitWatcher() {
       } else {
         const computed = await computeMetaSignature();
         sig = computed.sig;
-        if (computed.shareable) coordinate.publishSharedSnapshot('meta', sig).catch(() => null);
+        if (computed.shareable) coordinate.publishSharedSnapshot('meta', sig, { soloThrottle: true }).catch(() => null);
       }
 
       if (sig !== lastMetaSig) {
@@ -576,7 +576,7 @@ async function setupGitWatcher() {
             WORKTREE_POLL_MAX_INTERVAL_MS,
             Math.max(GIT_WORKTREE_POLL_INTERVAL_MS, elapsed * WORKTREE_POLL_BACKOFF),
           );
-          if (snapshot !== null) coordinate.publishSharedSnapshot('worktree-status', snapshot).catch(() => null);
+          if (snapshot !== null) coordinate.publishSharedSnapshot('worktree-status', snapshot, { soloThrottle: true }).catch(() => null);
         }
         if (snapshot !== null && snapshot !== lastStatusSnapshot) {
           lastStatusSnapshot = snapshot;

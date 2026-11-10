@@ -209,4 +209,96 @@ function startRead(params) {
   return start(params, { write: false, full: true });
 }
 
-module.exports = { run, startRead, canStream, NO_AUTO_MAINTENANCE, completedWrites: () => completedWrites };
+// ── 읽기 실행의 단일 창구 ──
+//
+// 예전에는 읽기마다 process.exec + timeout_ms(기본 5초)였다. 그 마감은 느린 조회를 빠르게
+// 하지 못하고 한 일을 버리기만 했다(2026-11-10 실측: git 호출의 48%가 마감에 죽었고, 죽은
+// 조회는 다음 갱신 때 처음부터 다시 돌았다). 마감은 호스트 큐에서 기다린 시간까지 셌다.
+// 여기서는 끝날 때까지 두고, 대신 세 가지로 쌓임과 답답함을 막는다:
+//   합치기  같은 저장소·같은 인자의 조회가 이미 돌고 있으면 그 결과를 함께 쓴다. 폴링이
+//           아무리 겹쳐도 같은 git 이 두 개 뜨지 않는다. 단, 그 조회가 시작된 뒤 쓰기가
+//           끝났으면 합치지 않는다 — 쓰기 이전의 저장소를 읽었을 수 있다.
+//   보이기  inflightReads() 로 가장 오래된 조회의 시작 시각을 내준다(타이틀의 경과 시간).
+//   끊기    cancelReads() 로 실제 프로세스를 끝낸다. 끊긴 조회는 { ok:false, cancelled:true }.
+// 스트리밍을 못 쓰는 호스트에서는 종전의 exec(호출부가 준 timeout_ms)로 내려간다 — 읽기는
+// 도중에 끊겨도 남는 것이 없어 쓰기와 달리 폴백이 안전하다.
+const reads = new Map();
+// 스트리밍 출력은 조각으로 온다. 호스트가 멀티바이트 문자를 조각 경계에서 자른다면 U+FFFD 가
+// 섞여 들어온다. 그 문자가 보이면 exec 로 한 번 더 읽어 견준다: 같으면 원래 파일에 있던
+// 문자다(몇 번 확인되면 더 견주지 않는다). 다르면 스트리밍이 글자를 깨뜨린 것이므로 이
+// 세션의 읽기를 exec 로 되돌린다 — 깨진 커밋 제목을 보여 주느니 예전 방식이 낫다.
+let streamReads = true;
+let replacementCharChecks = 3;
+
+function readKey(params) {
+  return String(params.cwd || '') + '\u0000' + (Array.isArray(params.args) ? params.args.join('\u0000') : '');
+}
+
+async function verifyStreamed(params, result) {
+  if (replacementCharChecks <= 0 || !result || !result.ok
+      || typeof result.stdout !== 'string' || !result.stdout.includes('�')) return result;
+  let viaExec = null;
+  try {
+    viaExec = await perms.execGit({ ...params, timeout_ms: Math.max(params.timeout_ms || 0, 120000) });
+  } catch { return result; }
+  if (!viaExec || !viaExec.ok || typeof viaExec.stdout !== 'string') return result;
+  if (viaExec.stdout === result.stdout) {
+    replacementCharChecks--;
+    return result;
+  }
+  streamReads = false;
+  timing.record('read-stream-disabled', { cmd: timing.gitCommandOf(params.args) });
+  return viaExec;
+}
+
+function readJob(params) {
+  if (!streamReads || !canStream()) {
+    return { promise: perms.execGit(params), cancel() {}, startedAt: Date.now() };
+  }
+  const key = readKey(params);
+  const existing = reads.get(key);
+  if (existing && existing.writesAt === completedWrites) return existing;
+  const job = start(params, { write: false, full: true });
+  const entry = { startedAt: job.startedAt, cancel: job.cancel, writesAt: completedWrites };
+  entry.promise = job.promise.then(result => {
+    // spawn 자체가 실패했으면(호스트 오류) 조회를 포기하지 않고 exec 로 한 번 읽는다.
+    // 권한 거부는 다시 물어도 같으므로 그대로 돌려준다.
+    const spawnFailed = result && !result.cancelled && result.exit_code === undefined
+      && result.error_code !== 'access_denied' && (result.ok === false || result.__rpcError);
+    return spawnFailed ? perms.execGit(params) : verifyStreamed(params, result);
+  }).finally(() => {
+    if (reads.get(key) === entry) reads.delete(key);
+  });
+  reads.set(key, entry);
+  return entry;
+}
+
+// exec 와 같은 모양의 결과로 풀리는 마감 없는 읽기.
+function read(params) {
+  return readJob(params).promise;
+}
+
+function inflightReads() {
+  let oldest = 0;
+  for (const entry of reads.values()) {
+    if (!oldest || entry.startedAt < oldest) oldest = entry.startedAt;
+  }
+  return { count: reads.size, oldestStartedAt: oldest };
+}
+
+// minAgeMs 보다 오래 돌고 있는 읽기를 끝낸다. 끝낸 개수를 돌려준다.
+function cancelReads(minAgeMs) {
+  const now = Date.now();
+  let cancelled = 0;
+  for (const entry of Array.from(reads.values())) {
+    if (now - entry.startedAt < (minAgeMs || 0)) continue;
+    entry.cancel();
+    cancelled++;
+  }
+  return cancelled;
+}
+
+module.exports = {
+  run, startRead, read, readJob, inflightReads, cancelReads, canStream,
+  NO_AUTO_MAINTENANCE, completedWrites: () => completedWrites,
+};
