@@ -198,10 +198,14 @@ function drain() {
         notifyCancelled(entry, stale);
         continue;
       }
-      const reason = actions.disabledReason(entry.id);
+      const snap = actions.snapshot();
+      const reason = actions.disabledReason(entry.id, undefined, snap);
       // 아직 풀리지 않았다 — 다음 작업이 끝날 때 다시 본다. 첫 스캔 중(LOADING)도
-      // 곧 끝나는 상태이므로 기다린다.
-      if (reason === actions.REASON.BUSY || reason === actions.REASON.LOADING) {
+      // 곧 끝나는 상태이므로 기다린다. 뒷정리 갱신이 도는 동안 나온 사유도 마찬가지다:
+      // 그 사유는 갱신 전의 state 에서 나온 것이라(머지를 끝낸 커밋 뒤에도 operationState
+      // 가 아직 'merge' 다) 갱신이 끝나 그 작업이 내려갈 때 다시 본다(actions.awaitsSettle).
+      if (reason === actions.REASON.BUSY || reason === actions.REASON.LOADING
+          || actions.awaitsSettle(entry.id, reason, snap)) {
         i++;
         continue;
       }

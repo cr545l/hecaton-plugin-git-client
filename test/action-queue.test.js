@@ -389,6 +389,90 @@ test('성립하지 않게 된 예약은 조용히 나가지 않고 취소된다'
   assert.equal(queue.size(), 0, '남겨 두면 영영 기다린다');
 });
 
+// 머지 충돌을 해결하고 커밋하는 흐름. git 은 커밋하는 순간 머지를 끝내지만 화면의
+// operationState 는 뒷정리 갱신이 다시 읽을 때까지 'merge' 로 남는다. 예약은 바로 그
+// 구간에서 풀리므로, 그때의 "Merge 진행 중"으로 취소하면 사용자가 본 "커밋 → Push"가
+// 아무 일 없이 사라진다 — 실제로 매번 그랬다.
+test('머지를 마무리하는 커밋 중에 예약한 Push 는 갱신 뒤에 나간다', async () => {
+  for (const type of ['merge', 'cherry-pick', 'revert']) {
+    idle();
+    state.operationState = { type };
+    const commitOp = startSpinner('Committing...', [INDEX, REFS]);
+
+    let pushed = 0;
+    runOrQueue('git-push', () => { pushed++; });
+    assert.equal(queue.has('git-push'), true, type + ': 커밋 중에는 예약된다');
+
+    // afterGitOp 의 순서 — 뒷정리를 걸고 원래 작업을 내린다. 화면은 아직 커밋 직전이다.
+    const settle = startSettleOp('Committing...');
+    stopSpinner(commitOp);
+    await nextTick();
+    assert.equal(pushed, 0, type + ': 갱신 전의 state 로는 판정하지 않는다');
+    assert.equal(queue.has('git-push'), true, type + ': 낡은 사유로 취소하지 않고 기다린다');
+
+    // 갱신이 다시 읽어 보니 진행 중인 작업이 없다.
+    state.operationState = null;
+    endSettleOp(settle);
+    await nextTick();
+    assert.equal(pushed, 1, type + ': 갱신이 끝나면 나간다');
+    assert.equal(queue.size(), 0);
+  }
+});
+
+// 위 유예가 확정을 미루기만 하고 뒤집지는 않는지 — 갱신 뒤에도 그대로면 그때 취소된다.
+test('갱신 뒤에도 성립하지 않으면 그때 취소된다', async () => {
+  idle();
+  state.operationState = { type: 'merge' };
+  const commitOp = startSpinner('Committing...', [INDEX, REFS]);
+
+  let pushed = 0;
+  runOrQueue('git-push', () => { pushed++; });
+
+  const settle = startSettleOp('Committing...');
+  stopSpinner(commitOp);
+  await nextTick();
+  assert.equal(queue.has('git-push'), true);
+
+  // 갱신이 다시 읽어도 머지가 남아 있다 — 이번 커밋이 머지를 끝낸 것이 아니었다.
+  endSettleOp(settle);
+  await nextTick();
+  assert.equal(pushed, 0, '진행 중인 머지 위로는 올리지 않는다');
+  assert.equal(queue.size(), 0, '확정된 사유로 취소된다');
+});
+
+// 유예는 뒷정리를 지나쳐 판정되는 동작에만 해당한다. 커밋이 실패해 뒷정리 없이 내려가면
+// state 는 낡지 않았으므로 그 자리에서 확정한다.
+test('뒷정리가 없으면 진행 중 사유로 곧바로 취소된다', async () => {
+  idle();
+  state.operationState = { type: 'merge' };
+  const commitOp = startSpinner('Committing...', [INDEX, REFS]);
+
+  let pushed = 0;
+  runOrQueue('git-push', () => { pushed++; });
+  stopSpinner(commitOp);   // 커밋 실패 — 뒷정리 없이 내려간다
+  await nextTick();
+
+  assert.equal(pushed, 0);
+  assert.equal(queue.size(), 0);
+});
+
+test('awaitsSettle 은 뒷정리를 지나치는 동작의 낡은 사유에만 참이다', () => {
+  idle();
+  const commitOp = startSpinner('Committing...', [INDEX, REFS]);
+  const settle = startSettleOp('Committing...');
+  stopSpinner(commitOp);
+
+  const opReason = 'Merge in progress';
+  assert.equal(actions.awaitsSettle('git-push', opReason), true);
+  assert.equal(actions.awaitsSettle('push_to_remote:origin', opReason), true);
+  assert.equal(actions.awaitsSettle('git-push', null), false, '통과한 판정은 미룰 것이 없다');
+  assert.equal(actions.awaitsSettle('git-push', actions.REASON.BUSY), false, 'BUSY 는 원래 기다린다');
+  assert.equal(actions.awaitsSettle('stageAll', opReason), false, '뒷정리에 막히는 동작은 해당 없다');
+
+  endSettleOp(settle);
+  assert.equal(actions.awaitsSettle('git-push', opReason), false, '갱신이 끝난 뒤의 사유는 확정이다');
+});
+
 // ── 6. 스테이징 ──
 // 이 구조에서 가장 자주 씹히던 흐름. git add 는 프로세스를 새로 띄우는 일이고 이
 // 환경에서는 그 자체가 느려서, 파일을 하나씩 고르며 s 를 누르면 중간이 통째로 버려졌다.

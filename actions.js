@@ -249,6 +249,24 @@ function ignoresSettling(id) {
   return SETTLE_TRANSPARENT_PREFIXES.some(p => id.startsWith(p));
 }
 
+// ── 뒷정리 중에 나온 거절 사유는 확정이 아니다 ──
+// 위 동작들은 뒷정리를 지나쳐 판정되므로, 그 판정이 보는 state 는 갱신이 다시 읽어오기
+// 전의 값이다. 무엇을 올릴지는 실행 순간의 저장소가 정하니 통과는 괜찮지만, 거절 사유는
+// 그 낡은 값에서 나온다.
+//
+// 머지 충돌을 해결하고 커밋하면 git 은 그 순간 머지를 끝낸다. 그런데 화면의 operationState
+// 는 갱신이 끝날 때까지 'merge' 로 남아 있어, 그 사이에 Push 를 판정하면 "Merge 진행 중"
+// 으로 막힌다. 커밋하는 동안 예약해 둔 Push 는 정확히 그 구간에서 풀리므로, 머지·체리픽을
+// 마무리하는 커밋 뒤의 예약은 매번 이렇게 취소됐다 — 화면에는 "커밋 → Push"가 떠 있었는데도.
+//
+// 그래서 이 구간의 사유로는 예약을 버리지 않고, 갱신이 끝난 뒤 다시 본다(queue.drain).
+// 그때도 같은 사유라면 그것이 확정이다.
+function awaitsSettle(id, reason, snap) {
+  if (reason === null || reason === REASON.BUSY || reason === REASON.LOADING) return false;
+  if (!id || !ignoresSettling(id)) return false;
+  return (snap || snapshot()).ops.some(op => op.phase === 'settling');
+}
+
 // 지금 이 동작과 자원이 겹치는 작업 — 없으면 null.
 function busyBlocker(id, s) {
   if (s.ops.length === 0) return null;
@@ -906,6 +924,7 @@ module.exports = {
   queueOptions,
   canQueueNow,
   ignoresSettling,
+  awaitsSettle,
   snapshot,
   context,
   isEnabled,
