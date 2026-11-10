@@ -1,7 +1,7 @@
 const { readRebaseProgress } = require('./rebase-progress');
 const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
-const { gitExec, gitExecChecked, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
+const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { get label() { return t('refresh.pending'); }, days: 0 },
@@ -1727,6 +1727,91 @@ let _logLimitCwd = '';
 // 보강 전 목록으로 화면이 되돌아가므로 막는다.
 let _logExpansionRunning = false;
 
+// ── 로그 조회의 진행 표시와 중단 ──
+//
+// log 는 마감 없이 돈다(git.gitReadJob 주석 참고). 대신 오래 걸리는 것이 보여야 하고,
+// 기다리기 싫으면 끊을 수 있어야 한다.
+//   - 걸린 시간: state.logLoadingSince 기준으로 패널(목록이 빈 경우)과 창 타이틀에 표시
+//   - 중단: Esc → cancelLogLoad(). 프로세스를 실제로 끝내고 직전 목록은 그대로 둔다
+//   - 저장소가 바뀌면 앞 저장소의 조회는 중단한다(abandonStaleLogLoad)
+// 이 시간이 지나야 경과 표시와 Esc 안내가 나온다. 보통의 조회는 그 전에 끝나므로
+// 평소에는 화면이 달라지지 않는다.
+const LOG_ELAPSED_VISIBLE_MS = 3000;
+let _logJob = null;        // 지금 도는 git log (중단 대상)
+let _logLoadCwd = '';      // 그 조회가 어느 저장소 것인지
+let _logTicker = null;
+
+function logLoadElapsedSeconds() {
+  if (!state.logLoading || !state.logLoadingSince) return -1;
+  const elapsed = Date.now() - state.logLoadingSince;
+  return elapsed >= LOG_ELAPSED_VISIBLE_MS ? Math.floor(elapsed / 1000) : -1;
+}
+
+function beginLogLoading() {
+  state.logLoading = true;
+  state.logLoadingSince = Date.now();
+  state.logLoadCancelled = false;
+  _logLoadCwd = state.cwd;
+  if (_logTicker) return;
+  // 초 단위 표시를 움직이는 타이머. logLoading 을 끄는 곳이 여럿이라 끄는 쪽에서 멈추게
+  // 하지 않고, 스스로 상태를 보고 멈춘다.
+  _logTicker = setInterval(() => {
+    if (!state.logLoading) {
+      clearInterval(_logTicker);
+      _logTicker = null;
+      state.logLoadingSince = 0;
+      applyWindowTitle();
+      return;
+    }
+    if (logLoadElapsedSeconds() < 0) return;
+    applyWindowTitle();
+    if (state.rightView === 'log' && state.logItems.length === 0) require('./render').render();
+  }, 1000);
+  if (_logTicker && typeof _logTicker.unref === 'function') _logTicker.unref();
+}
+
+async function runLogRead(args) {
+  const job = gitReadJob(args, state.cwd, 30000);
+  _logJob = job;
+  try {
+    return await job.promise;
+  } finally {
+    if (_logJob === job) _logJob = null;
+  }
+}
+
+// 진행 중인 조회를 버린다. _logSeq 를 올려 그 실행의 뒤처리를 전부 무효화하고,
+// 프로세스도 실제로 끝낸다 — 결과만 버리면 86초짜리 git 이 뒤에서 계속 돈다.
+function dropLogLoad() {
+  ++_logSeq;
+  if (_logJob) { _logJob.cancel(); _logJob = null; }
+  _logExpansionRunning = false;
+  // 더 읽기는 시작하면서 한도를 올려 둔다. 끝내지 못했으니 되돌린다.
+  if (state.logLoadingMore) _logRequestedLimit = Math.max(LOG_FULL_LIMIT, _logRequestedLimit - LOG_PAGE_SIZE);
+  state.logLoading = false;
+  state.logLoadingMore = false;
+  state.logLoadingSince = 0;
+  endPanelLoading('logRecovery');
+  applyWindowTitle();
+}
+
+// 사용자가 끊었다. 중단할 조회가 있었으면 true.
+function cancelLogLoad() {
+  if (!state.logLoading || logLoadElapsedSeconds() < 0) return false;
+  dropLogLoad();
+  state.logLoadCancelled = true;
+  state.logLoadFailed = false;
+  require('./spinner').showToast(t('ui.loadingCommitsCancelled').trim(), 2000);
+  require('./render').render();
+  return true;
+}
+
+// 다른 저장소의 조회가 아직 돌고 있으면 버린다. 그대로 두면 logLoading 가드에 막혀 새
+// 저장소의 조회가 시작되지 못하고, 앞 저장소의 결과가 이 화면에 적용된다.
+function abandonStaleLogLoad() {
+  if (state.logLoading && _logLoadCwd && _logLoadCwd !== state.cwd) dropLogLoad();
+}
+
 // 로그 조회 결과 캐시. 커밋 그래프를 건드리지 않는 작업(rename branch 등) 뒤에도
 // 액션마다 전량을 다시 돌고 있었다. 그래프의 입력이 그대로면 결과도 그대로이므로,
 // 지문이 같으면 통째로 건너뛴다.
@@ -1995,6 +2080,7 @@ function refreshLog(options = {}) {
     state.logItems = [];
     state.logSelectables = [];
     state.logLoading = false;
+    state.logLoadFailed = false;
     state.logLoadingMore = false;
     state.logHasMore = false;
     state.logLoadedLimit = 0;
@@ -2002,6 +2088,7 @@ function refreshLog(options = {}) {
     ui.stashMap = new Map();
     return;
   }
+  abandonStaleLogLoad();
   if (state.logLoading) {
     if (ui.logShowRecovery && !state.logRecoveryLoading) {
       _logRecoverySeq = _logSeq;
@@ -2032,7 +2119,7 @@ function refreshLog(options = {}) {
   }
 
   const seq = ++_logSeq;
-  state.logLoading = true;
+  beginLogLoading();
   if (ui.logShowRecovery) {
     _logRecoverySeq = seq;
     beginPanelLoading('logRecovery');
@@ -2087,9 +2174,20 @@ function refreshLog(options = {}) {
     // 1차: 커밋 목록. 한도를 나눠 올리지 않고 요청 한도로 한 번에 읽는다(LOG_FULL_LIMIT 주석 참고).
     // _logSeq로 out-of-order 가드.
     const limit = _logRequestedLimit;
-    const raw = await gitExec(buildArgs(limit, []), state.cwd, 30000);
+    const logRes = await runLogRead(buildArgs(limit, []));
     if (_logSeq !== seq) return;
-    const commits = parseLogRaw(raw, { refsByHash: {} }, new Set());
+    // 실패(타임아웃·비정상 종료)를 "커밋 0건"으로 받아들이면 목록이 통째로 지워지고
+    // 화면에는 "아직 커밋이 없습니다"가 뜬다 — 저장소가 빈 것과 구분되지 않는다.
+    // 직전 목록은 그대로 두고 실패만 표시한다. 지문은 위에서 이미 지웠으므로 다음
+    // refreshLog 가 다시 조회한다.
+    if (!logRes.ok) {
+      state.logLoadFailed = true;
+      state.logLoading = false;
+      if (state.rightView === 'log') require('./render').render();
+      return;
+    }
+    state.logLoadFailed = false;
+    const commits = parseLogRaw(logRes.text, { refsByHash: {} }, new Set());
     applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
     _lastGraphHasRecovery = false;
     state.logLoadedLimit = commits.length;
@@ -2125,9 +2223,11 @@ function refreshLog(options = {}) {
         return;
       }
 
-      const recoveredRaw = await gitExec(buildArgs(limit, recovery.hashes || []), state.cwd, 30000);
+      const recoveredRes = await runLogRead(buildArgs(limit, recovery.hashes || []));
       if (_logSeq !== seq) return;
-      const recoveredCommits = parseLogRaw(recoveredRaw, recovery, recoveryHashSet);
+      // 보강 재조회가 실패했다 — 화면은 1차 결과 그대로 두고 캐시하지 않는다.
+      if (!recoveredRes.ok) return;
+      const recoveredCommits = parseLogRaw(recoveredRes.text, recovery, recoveryHashSet);
       // 재조회가 빈손으로 왔다 — 화면은 1차 결과 그대로다. 실패했을 수 있는 결과를
       // 캐시하면 지문이 바뀔 때까지 그 상태에 묶이므로 여기서는 기록하지 않는다.
       if (recoveredCommits.length === 0 && commits.length > 0) return;
@@ -2156,6 +2256,7 @@ function refreshLog(options = {}) {
 
 function loadMoreLog() {
   if (!state.cwd || !state.isGitRepo) return false;
+  abandonStaleLogLoad();
   if (state.logLoading || state.logLoadingMore || !state.logHasMore) return false;
   _logExpansionRunning = false;
   if (_logLimitCwd !== state.cwd) {
@@ -2180,7 +2281,7 @@ function loadMoreLog() {
 
   const seq = ++_logSeq;
   state.logLoadingMore = true;
-  state.logLoading = true;
+  beginLogLoading();
   if (ui.logShowRecovery) {
     _logRecoverySeq = seq;
     beginPanelLoading('logRecovery');
@@ -2210,9 +2311,16 @@ function loadMoreLog() {
     if (stashHashes.length > 0) args.push(...stashHashes);
     if (recovery.hashes && recovery.hashes.length > 0) args.push(...recovery.hashes);
 
-    const raw = await gitExec(args, state.cwd, 30000);
+    const logRes = await runLogRead(args);
     if (_logSeq !== seq) return;
-    const commits = parseLogRaw(raw, recovery, recoveryHashSet);
+    // 더 읽기가 실패했으면 이미 보이는 목록을 빈 결과로 덮지 않는다. 한도만 되돌려
+    // 다음 시도가 같은 범위를 다시 요청하게 한다.
+    if (!logRes.ok) {
+      _logRequestedLimit = Math.max(LOG_FULL_LIMIT, _logRequestedLimit - LOG_PAGE_SIZE);
+      return;
+    }
+    state.logLoadFailed = false;
+    const commits = parseLogRaw(logRes.text, recovery, recoveryHashSet);
     applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
     _lastGraphHasRecovery = ui.logShowRecovery;
     state.logCursor = Math.min(keepCursor, Math.max(0, state.logSelectables.length - 1));
@@ -2579,7 +2687,7 @@ function updateFreshDetail() {
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   expandFileTargets, stageAllPaths, sectionRangeAt, setFileTreeView, toggleFileDir,
-  refreshAsync, refreshLog, loadMoreLog, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,

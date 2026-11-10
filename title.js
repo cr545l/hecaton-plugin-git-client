@@ -25,6 +25,15 @@ function formatProgressStatus() {
   if (state.spinnerActive && state.error) msg = state.error;
   else if (state.refreshing) msg = state.refreshMessage || t('title.refreshing');
   else if (state.logLoadingMore) msg = t('title.loadingMoreCommits');
+  // 히스토리 조회는 마감 없이 돈다. 목록이 이미 떠 있으면 패널에는 표시할 자리가 없으므로
+  // 오래 걸리는 동안에는 걸린 시간과 끊는 키를 타이틀에 낸다(refresh.LOG_ELAPSED_VISIBLE_MS 와 같은 기준).
+  if (state.logLoading && state.logLoadingSince && !(state.spinnerActive && state.error)) {
+    const elapsed = Date.now() - state.logLoadingSince;
+    if (elapsed >= 3000) {
+      const seconds = Math.floor(elapsed / 1000);
+      msg = (msg ? msg + ' ' : '') + t('title.loadingCommitsElapsed', { seconds });
+    }
+  }
   if (state.spinnerActive) {
     const running = (state.activeOps || []).filter(op => op.phase === 'running');
     const current = running[running.length - 1];

@@ -592,6 +592,9 @@ async function handleKey(key) {
     render();
     return;
   }
+  // 오래 걸리는 히스토리 조회를 끊는다. 경과 시간과 "Esc: 중단" 안내가 화면에 나온 뒤에만
+  // 먹는다 — 안내가 없는 짧은 조회를 Esc 한 번으로 조용히 죽이지 않는다.
+  if (key === ESC && require('./refresh').cancelLogLoad()) return;
 
   // 저장소 밖에서 연 첫 화면의 설정 단축키. 일반 저장소에서는 기존 키 의미를 유지한다.
   if (!state.loading && !state.isGitRepo) {

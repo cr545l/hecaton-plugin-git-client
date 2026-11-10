@@ -178,6 +178,131 @@ test('unsupported hosts do not fall back to exec with a destructive deadline', a
   } finally { hecaton.process.spawn = saved; }
 });
 
+// ── 마감 없는 읽기 (startRead / gitReadJob) ──
+
+const readParams = () => ({ program: 'git', args: ['log', '--all'], cwd: 'C:/repo', timeout_ms: 30000 });
+
+test('read keeps the whole stdout — a log is its own result, not a diagnostic', async () => {
+  const chunk = 'x'.repeat(50000) + '\n';
+  spawn = async () => {
+    const process_id = nextId++;
+    for (let i = 0; i < 20; i++) emit('process_output', { process_id, stream: 'stdout', data: chunk });
+    emit('process_exited', { process_id, exit_code: 0 });
+    return { ok: true, process_id };
+  };
+  const result = await runner.startRead(readParams()).promise;
+  assert.equal(result.ok, true);
+  assert.equal(result.stdout.length, chunk.length * 20);
+  assert.equal(calls[0].timeout_ms, undefined);
+  assert.deepEqual(calls[0].args, ['log', '--all'], 'reads do not carry the maintenance overrides');
+});
+
+test('read has no deadline and does not count as a completed write', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const id = nextId;
+  const writesBefore = runner.completedWrites();
+  let settled = false, killed = false;
+  kill = async () => { killed = true; };
+  const job = runner.startRead(readParams());
+  job.promise.then(() => { settled = true; });
+  await flush();
+  t.mock.timers.tick(2 * 60 * 60 * 1000);
+  await flush();
+  assert.equal(settled, false);
+  assert.equal(killed, false);
+  emit('process_output', { process_id: id, stream: 'stdout', data: 'done' });
+  emit('process_exited', { process_id: id, exit_code: 0 });
+  assert.equal((await job.promise).stdout, 'done');
+  assert.equal(runner.completedWrites(), writesBefore);
+});
+
+test('cancelling a read kills the process and settles even if no exit event ever arrives', async () => {
+  const id = nextId;
+  const killedIds = [];
+  kill = async ({ process_id }) => { killedIds.push(process_id); return { ok: true }; };
+  const job = runner.startRead(readParams());
+  await flush();
+  emit('process_output', { process_id: id, stream: 'stdout', data: 'partial' });
+  job.cancel();
+  const result = await job.promise;
+  assert.deepEqual(killedIds, [id]);
+  assert.equal(result.ok, false);
+  assert.equal(result.cancelled, true);
+  // 뒤늦게 온 종료 이벤트는 조용히 버려진다.
+  emit('process_exited', { process_id: id, exit_code: 1 });
+  job.cancel();
+  assert.deepEqual(killedIds, [id], 'a second cancel is a no-op');
+});
+
+test('a read cancelled while the spawn response is outstanding is killed once its id is known', async () => {
+  let respond;
+  const killedIds = [];
+  spawn = () => new Promise(resolve => { respond = resolve; });
+  kill = async ({ process_id }) => { killedIds.push(process_id); return { ok: true }; };
+  const job = runner.startRead(readParams());
+  await flush();
+  job.cancel();
+  assert.deepEqual(killedIds, []);
+  respond({ ok: true, process_id: 'late' });
+  const result = await job.promise;
+  assert.deepEqual(killedIds, ['late']);
+  assert.equal(result.cancelled, true);
+});
+
+test('writes expose no cancel — a half-finished index update must not be killable', async () => {
+  let killed = false;
+  kill = async () => { killed = true; };
+  const id = nextId;
+  const pending = runner.run(params());
+  await flush();
+  assert.equal(typeof pending.cancel, 'undefined');
+  emit('process_exited', { process_id: id, exit_code: 0 });
+  await pending;
+  assert.equal(killed, false);
+});
+
+test('gitReadJob reports success, failure and cancellation distinctly', async () => {
+  spawn = async () => {
+    const process_id = nextId++;
+    emit('process_output', { process_id, stream: 'stdout', data: 'a\r\nb\r\n' });
+    emit('process_exited', { process_id, exit_code: 0 });
+    return { ok: true, process_id };
+  };
+  assert.deepEqual(await git.gitReadJob(['log'], 'C:/repo', 30000).promise,
+    { ok: true, text: 'a\nb\n', exitCode: 0, cancelled: false });
+
+  spawn = async () => {
+    const process_id = nextId++;
+    emit('process_exited', { process_id, exit_code: 128 });
+    return { ok: true, process_id };
+  };
+  assert.deepEqual(await git.gitReadJob(['log'], 'C:/repo', 30000).promise,
+    { ok: false, text: '', exitCode: 128, cancelled: false });
+
+  spawn = async () => ({ ok: true, process_id: nextId++ });
+  kill = async () => ({ ok: true });
+  const job = git.gitReadJob(['log'], 'C:/repo', 30000);
+  await flush();
+  job.cancel();
+  const cancelled = await job.promise;
+  assert.equal(cancelled.ok, false);
+  assert.equal(cancelled.cancelled, true);
+});
+
+test('gitReadJob falls back to exec on hosts without streaming — reads are safe to cut short', async () => {
+  const saved = hecaton.process.spawn;
+  delete hecaton.process.spawn;
+  let seen = null;
+  exec = async p => { seen = p; return { ok: true, exit_code: 0, stdout: 'legacy\n' }; };
+  try {
+    const res = await git.gitReadJob(['log'], 'C:/repo', 30000).promise;
+    assert.equal(res.ok, true);
+    assert.equal(res.text, 'legacy\n');
+    assert.equal(seen.timeout_ms, 30000);
+    assert.equal(calls.length, 0);
+  } finally { hecaton.process.spawn = saved; }
+});
+
 test('real Git push retains a rejecting hook result after 65 seconds', {
   skip: !process.env.HECATON_LONG_PROCESS_TEST, timeout: 90000,
 }, async () => {

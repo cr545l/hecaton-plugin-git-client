@@ -2377,7 +2377,17 @@ function buildDiffCommitPanel(w, h) {
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
     if (state.logLoading) {
-      return [colors.dim + t('ui.loadingCommits') + ansi.reset];
+      // 조회에는 마감이 없다. 오래 걸리면 걸린 시간과 끊는 방법을 함께 보여 준다.
+      const seconds = require('./refresh').logLoadElapsedSeconds();
+      const label = seconds >= 0 ? t('ui.loadingCommitsElapsed', { seconds }) : t('ui.loadingCommits');
+      return [colors.dim + truncate(label, w) + ansi.reset];
+    }
+    if (state.logLoadCancelled) {
+      return [colors.dim + truncate(t('ui.loadingCommitsCancelled') + t('ui.loadingCommitsRetryHint'), w) + ansi.reset];
+    }
+    // 조회가 실패해서 빈 것은 "커밋이 없다"가 아니다 — 다시 시도하는 길을 적는다.
+    if (state.logLoadFailed) {
+      return [colors.dim + truncate(t('ui.loadingCommitsFailed'), w) + ansi.reset];
     }
     // Filter/Hide 때문에 비었으면 "커밋이 없다"가 아니다. 그대로 두면 저장소가 텅 빈 것처럼
     // 보이고, 지정을 걸어 둔 걸 잊었을 때 왜 이렇게 됐는지 알 길이 없다 — 되돌리는 길까지 적는다.

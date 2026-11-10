@@ -28,6 +28,9 @@ const state = {
   logRecoveryLoading: false,
   logRecoveryLoadingSince: 0,
   logLoading: false,
+  logLoadingSince: 0,     // 로그 조회를 시작한 시각 — 걸린 시간 표시의 기준
+  logLoadFailed: false,   // 마지막 로그 조회가 실패했다 — 빈 목록을 "커밋 없음"으로 읽지 않기 위한 표시
+  logLoadCancelled: false, // 마지막 로그 조회를 사용자가 중단했다
   logLoadingMore: false,
   logHasMore: false,
   logLoadedLimit: 0,

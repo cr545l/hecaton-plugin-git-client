@@ -40,6 +40,43 @@ async function gitExecChecked(args, cwd, timeout) {
   return { ok, text: ok ? (result.stdout || '').replace(/\r\n/g, '\n') : '', exitCode };
 }
 
+// 사용자가 결과를 기다리며 보고 있는 조회(히스토리 등)용 — 마감 시간이 없다.
+//
+// exec + timeout_ms 는 느린 조회를 빠르게 만들지 못하고 한 일을 버리기만 한다: 2026-11-10
+// 실측으로 정리가 밀린 저장소의 log 가 86초 걸렸는데, 30초에 죽이고 다음 갱신 때 처음부터
+// 다시 도는 일을 반복해 끝내 한 번도 완주하지 못했다. 그 타임아웃은 호스트 큐에서 기다린
+// 시간까지 센다. 그래서 여기서는 끝날 때까지 두고, 대신 호출부가 걸린 시간을 보여 주고
+// cancel() 로 끊을 수 있게 한다.
+//
+// 반환: { promise, cancel, startedAt }. promise 는 { ok, text, exitCode, cancelled } 로 풀린다.
+// 스트리밍을 못 쓰는 호스트에서는 종전의 exec 로 내려간다 — 읽기는 도중에 끊겨도 남는 것이
+// 없어 쓰기와 달리 폴백이 안전하다. 그때의 마감은 legacyTimeout 이고 cancel 은 아무 일도 않는다.
+function gitReadJob(args, cwd, legacyTimeout) {
+  const startedAt = Date.now();
+  if (!gitProcess.canStream()) {
+    return {
+      startedAt,
+      cancel() {},
+      promise: gitExecChecked(args, cwd, legacyTimeout).then(res => ({ ...res, cancelled: false })),
+    };
+  }
+  const job = gitProcess.startRead({ program: 'git', args, cwd });
+  return {
+    startedAt,
+    cancel: job.cancel,
+    promise: job.promise.then(result => {
+      const ok = gitProcessSucceeded(result);
+      const exitCode = result && result.exit_code !== undefined ? result.exit_code : null;
+      return {
+        ok,
+        text: ok ? (result.stdout || '').replace(/\r\n/g, '\n') : '',
+        exitCode,
+        cancelled: !!(result && result.cancelled),
+      };
+    }, () => ({ ok: false, text: '', exitCode: null, cancelled: false })),
+  };
+}
+
 async function git(args, cwd, timeout) {
   const result = await perms.execGit({ program: 'git', args, cwd, timeout_ms: timeout || 5000 });
   if (!result || !result.ok) {
@@ -2062,6 +2099,7 @@ module.exports = {
   git,
   gitExec,
   gitExecChecked,
+  gitReadJob,
   gitProcessSucceeded,
   isLongPathFailure, intentToAddFailurePath,
   unquoteGitPath, isUnnameablePath,
