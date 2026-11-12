@@ -279,3 +279,29 @@ test('waitForNetworkOp는 상한을 넘기면 포기한다', async () => {
   writeRaw('netop.json', { op: 'fetch', owner: 'other', startedAt: Date.now(), finishedAt: 0, ok: false });
   assert.equal(await coordinate.waitForNetworkOp(600), false);
 });
+
+// 창마다 남기는 진단 기록과 워크트리별 폴링 파일은 이름이 달라 다시 쓰이지 않는다.
+// 지우는 곳이 없어 저장소 하나에 수백 개가 쌓였다(2026-11-12 실측: timing 로그 274개).
+test('청소는 오래된 진단 기록과 폴링 파일만 고르고 캐시·조율 파일은 두고 간다', () => {
+  const now = Date.UTC(2026, 10, 12);
+  const day = 24 * 60 * 60 * 1000;
+  const entries = [
+    { name: 'timing-10700-a8pswi.log', mtime_ms: now - 4 * day },
+    { name: 'timing-53368-v9opyk.prev.log', mtime_ms: now - 4 * day },
+    { name: 'timing-110160-mx9qax.log', mtime_ms: now - 1 * day },      // 최근 기록
+    { name: 'meta-c06725f4.json', mtime_ms: now - 70 * day },
+    { name: 'reap-c06725f4.json', mtime_ms: now - 70 * day },
+    { name: 'worktree-status-c06725f4.json', mtime_ms: now - 70 * day },
+    { name: 'meta-85102089.json', mtime_ms: now - 2 * day },            // 열려 있는 워크트리
+    { name: 'logcache.json', mtime_ms: now - 70 * day },                // 캐시
+    { name: 'netop.json', mtime_ms: now - 70 * day },                   // 조율 파일
+    { name: 'timing-notes.log', mtime_ms: now - 70 * day },             // 이 플러그인이 만든 이름 꼴이 아니다
+    { name: 'timing-1-abc.log', mtime_ms: 0 },                          // 나이를 모른다
+    { name: 'timing-2-abc.log', is_dir: true, mtime_ms: now - 70 * day },
+  ];
+  assert.deepEqual(coordinate.sweepTargets(entries, now).sort(), [
+    'meta-c06725f4.json', 'reap-c06725f4.json', 'timing-10700-a8pswi.log',
+    'timing-53368-v9opyk.prev.log', 'worktree-status-c06725f4.json',
+  ]);
+  assert.deepEqual(coordinate.sweepTargets(null, now), []);
+});

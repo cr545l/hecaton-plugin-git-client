@@ -10,6 +10,11 @@ let subscribed = false;
 // 끝난 쓰기 명령의 수. 이보다 먼저 시작한 status 결과는 그 쓰기 이전의 저장소일 수 있다 —
 // refresh.js 는 그런 결과를 적용하지 않고 다시 조회한다.
 let completedWrites = 0;
+// 지금 도는 쓰기 명령의 수와 마지막 쓰기가 끝난 시각. 감시 폴링이 읽어 둔 status 를 목록에
+// 그대로 적용해도 되는지 판단하는 데 쓴다 — 쓰기 도중이거나 쓰기보다 먼저 시작한 조회는
+// 그 쓰기 이전의 저장소를 본 것일 수 있다(refresh.js applyPolledStatus).
+let activeWrites = 0;
+let lastWriteDoneAt = 0;
 
 // Git 은 commit·fetch·pull·merge·rebase·cherry-pick 끝에 자동 정리(maintenance run
 // --auto, 옛 git 은 gc --auto)를 붙인다. 정리가 필요하다고 판단되면 Windows 의 git 은
@@ -200,7 +205,11 @@ function start(params, opts) {
 }
 
 function run(params) {
-  return start(params, { write: true }).promise;
+  activeWrites++;
+  return start(params, { write: true }).promise.finally(() => {
+    activeWrites--;
+    lastWriteDoneAt = Date.now();
+  });
 }
 
 // 마감 없는 읽기. { promise, cancel, startedAt } 를 돌려준다 — promise 는 exec 와 같은
@@ -301,4 +310,5 @@ function cancelReads(minAgeMs) {
 module.exports = {
   run, startRead, read, readJob, inflightReads, cancelReads, canStream,
   NO_AUTO_MAINTENANCE, completedWrites: () => completedWrites,
+  writesInFlight: () => activeWrites, lastWriteDoneAt: () => lastWriteDoneAt,
 };

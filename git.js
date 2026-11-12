@@ -266,6 +266,36 @@ async function gitDirFromDiskMarker(workTreeDir) {
   }
 }
 
+// git dir 에서 공용 git dir(--git-common-dir)을 디스크만 보고 구한다. linked worktree 의 git dir
+// 에는 공용 dir 을 가리키는 `commondir` 파일이 있고(git 이 직접 쓰는 방식), 없으면 git dir 이
+// 곧 공용 dir 이다. 창이 뜰 때마다 `rev-parse --git-dir --git-common-dir` 를 띄우지 않기 위한
+// 것이다 — 그 명령은 창 열 개가 한꺼번에 뜨는 구간에서 건당 0.5초 안팎이었다(실측).
+// 판단할 수 없으면 '' — 호출부가 rev-parse 로 넘어간다.
+async function commonDirFromDisk(gitDir) {
+  if (!gitDir) return '';
+  let res;
+  try {
+    res = await hecaton.fs.read_file({ path: nodePath.join(gitDir, 'commondir') });
+  } catch {
+    // 파일이 없을 때 예외를 던지는 호스트 — 있는지부터 확인한다.
+    res = null;
+  }
+  const content = (typeof res === 'string' ? res : (res && res.content) ? res.content : '').trim();
+  if (content) {
+    const common = nodePath.resolve(gitDir, content);
+    try {
+      const head = await hecaton.fs.stat({ path: nodePath.join(common, 'HEAD') });
+      return head && head.exists && !head.is_dir ? common : '';
+    } catch { return ''; }
+  }
+  // 내용이 비었다: 파일이 없거나(= 공용 dir 자신) 읽기에 실패했다. 둘을 가른다.
+  try {
+    const marker = await hecaton.fs.stat({ path: nodePath.join(gitDir, 'commondir') });
+    if (!marker) return '';
+    return marker.exists ? '' : gitDir;
+  } catch { return ''; }
+}
+
 async function findGitDirFromDisk(cwd) {
   if (!cwd) return '';
   let probe;
@@ -465,7 +495,15 @@ async function gitStatusPorcelain(cwd, opts = {}) {
     if (opts.nullOnError) return null;
     return { staged: [], unstaged: [], untracked: [], ignored: [], branch: '' };
   }
-  const snapshot = parseStatusPorcelain((result.stdout || '').replace(/\r\n/g, '\n'), includeIgnored);
+  return statusSnapshotFromOutput(result.stdout, { includeIgnored, maxFilesDisplayed: maxFiles, displayUntracked: showUntracked });
+}
+
+// status 출력(--porcelain=v1 -z)을 목록 스냅샷으로 바꾼다. 직접 조회한 결과와 감시 폴링이
+// 이미 읽어 둔 출력이 같은 규칙(표시 상한, untrackedComplete)을 거치도록 한 곳에 둔다.
+function statusSnapshotFromOutput(stdout, opts = {}) {
+  const showUntracked = opts.displayUntracked !== false;
+  const maxFiles = opts.maxFilesDisplayed || 0;
+  const snapshot = parseStatusPorcelain((stdout || '').replace(/\r\n/g, '\n'), opts.includeIgnored === true);
   let truncated = false;
   if (maxFiles > 0) {
     const trackedCount = snapshot.staged.length + snapshot.unstaged.length;
@@ -825,7 +863,6 @@ async function gitWorktrees(cwd) {
   try {
     const raw = (await git(['worktree', 'list', '--porcelain'], cwd)).replace(/\r/g, '').trim();
     if (!raw) return [];
-    const currentPath = normalizePathForCompare(cwd);
     const blocks = raw.split(/\n\s*\n/).filter(Boolean);
     const items = blocks.map((block, idx) => {
       const item = {
@@ -850,21 +887,30 @@ async function gitWorktrees(cwd) {
       }
       return item;
     });
-    // cwd가 워크트리 하위 디렉터리일 수 있으므로 가장 긴 경로 접두사를 현재 워크트리로 본다.
-    let bestIdx = -1, bestLen = -1;
-    for (let i = 0; i < items.length; i++) {
-      const p = normalizePathForCompare(items[i].path);
-      if (!p) continue;
-      if ((currentPath === p || currentPath.startsWith(p + '/')) && p.length > bestLen) {
-        bestLen = p.length;
-        bestIdx = i;
-      }
-    }
-    if (bestIdx >= 0) items[bestIdx].isCurrent = true;
-    return items;
+    return markCurrentWorktree(items, cwd);
   } catch {
     return [];
   }
+}
+
+// 목록에서 cwd 가 속한 워크트리에 isCurrent 를 붙인다(나머지는 false 로 되돌린다). 워크트리
+// 목록 자체는 저장소 전체에 공통이고 "현재"만 창마다 다르다 — 저장소 단위로 공유한 목록을
+// 각 창이 자기 것으로 바꿀 때도 쓴다.
+function markCurrentWorktree(items, cwd) {
+  const currentPath = normalizePathForCompare(cwd);
+  // cwd가 워크트리 하위 디렉터리일 수 있으므로 가장 긴 경로 접두사를 현재 워크트리로 본다.
+  let bestIdx = -1, bestLen = -1;
+  for (let i = 0; i < items.length; i++) {
+    items[i].isCurrent = false;
+    const p = normalizePathForCompare(items[i].path);
+    if (!p) continue;
+    if ((currentPath === p || currentPath.startsWith(p + '/')) && p.length > bestLen) {
+      bestLen = p.length;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx >= 0) items[bestIdx].isCurrent = true;
+  return items;
 }
 
 async function gitReflogRecoveries(cwd, maxEntries, maxCandidates, maxDepth) {
@@ -2109,7 +2155,7 @@ module.exports = {
   gitProcessSucceeded,
   isLongPathFailure, intentToAddFailurePath,
   unquoteGitPath, isUnnameablePath,
-  resolveWorkTreeRoot, findGitDirFromDisk,
+  resolveWorkTreeRoot, findGitDirFromDisk, commonDirFromDisk,
   gitIsRepo, gitBranch, gitStatus, gitDiff, gitDiffUntracked,
   gitStage, gitUnstage, gitStageAll, gitUnstageAll, gitStageEntries, gitAddExplicitFiles, gitCommit,
   gitStashRefs, gitShowRef, gitStashDiff, gitLogCommits,
@@ -2127,7 +2173,7 @@ module.exports = {
   gitFileHistory, gitBlameFile, gitFilePatch,
   gitReadConflictFile, gitWriteConflictResolution,
   gitFreshLog, gitShowCommitFile,
-  gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, parseDiffOutput, parseLsFilesOutput,
+  gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, statusSnapshotFromOutput, markCurrentWorktree, parseDiffOutput, parseLsFilesOutput,
   gitGetConfig, gitGetConfigLocal, gitGetConfigGlobal, gitSetConfig, gitEnableLongPaths, gitIntentToAddPaths, gitUnsetConfigLocal,
   gitFetchAsync, gitPullAsync, gitPushAsync,
   gitCheckRebaseConflicts,

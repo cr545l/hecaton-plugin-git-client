@@ -1,7 +1,7 @@
 const { readRebaseProgress } = require('./rebase-progress');
 const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
-const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
+const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, statusSnapshotFromOutput, markCurrentWorktree, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { get label() { return t('refresh.pending'); }, days: 0 },
@@ -924,55 +924,11 @@ function currentBranchRemote() {
 // 통째로 비므로 status와 같은 수준으로 여유를 준다.
 const REFS_TIMEOUT_MS = 15000;
 
-// .git/refs 하위 loose ref 트리의 지문.
-// 디렉터리 mtime은 "직접 자식"이 바뀔 때만 갱신된다. refs/remotes/origin/foo를
-// 지우면 refs/remotes/origin의 mtime만 바뀌고 refs·refs/remotes는 그대로다.
-// 그래서 refs 한 곳만 stat하면 원격 브랜치 삭제/prune, 태그 추가/삭제,
-// 중첩 이름(feature/x) 브랜치 변경을 통째로 놓친다. 트리를 직접 훑어
-// "경로:mtime:size" 목록을 지문으로 만든다. packed-refs에 묶인 ref는
-// packed-refs 파일 mtime으로 별도 추적된다.
-const REFS_SCAN_MAX_ENTRIES = 4000;
-
-async function collectRefEntries(dirPath, relPath, out, budget) {
-  let res = null;
-  try {
-    res = await hecaton.fs.read_dir({ path: dirPath });
-  } catch { return; }
-  if (!res || !res.ok || !Array.isArray(res.entries)) return;
-  budget.scanned = true;
-  const sep = (process.platform === 'win32') ? '\\' : '/';
-  const subdirs = [];
-  for (const entry of res.entries) {
-    if (!entry || !entry.name) continue;
-    if (budget.remaining <= 0) { budget.truncated = true; break; }
-    budget.remaining--;
-    const rel = relPath ? relPath + '/' + entry.name : entry.name;
-    if (entry.is_dir) {
-      out.push(rel + '/');
-      subdirs.push([dirPath + sep + entry.name, rel]);
-    } else {
-      out.push(rel + ':' + (entry.mtime_ms || 0) + ':' + (entry.size_bytes || 0));
-    }
-  }
-  await Promise.all(subdirs.map(([p, r]) => collectRefEntries(p, r, out, budget)));
-}
-
-// refs 트리 지문 문자열. read_dir을 제공하지 않는 호스트나 스캔 실패 시 ''를
-// 반환해, 호출자가 기존 mtime 지문만으로 판단하도록(= 종전 동작) 폴백한다.
-async function computeRefsTreeSignature(gitDir) {
-  if (!gitDir) return '';
-  if (!hecaton || !hecaton.fs || typeof hecaton.fs.read_dir !== 'function') return '';
-  const sep = (process.platform === 'win32') ? '\\' : '/';
-  const out = [];
-  const budget = { remaining: REFS_SCAN_MAX_ENTRIES, truncated: false, scanned: false };
-  await collectRefEntries(gitDir + sep + 'refs', '', out, budget);
-  if (!budget.scanned) return '';
-  // read_dir 순서는 플랫폼/파일시스템마다 다르므로 정렬해 안정화한다.
-  out.sort();
-  // ref가 상한을 넘는 저장소는 부분 지문만 남는다. 지문 자체는 안정적이므로
-  // 오탐은 없고, 잘린 구간의 변경만 놓친다(= 종전 동작 수준).
-  if (budget.truncated) out.push(t('refresh.truncated'));
-  return "refs\n" + out.join('\n');  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
+// .git/refs 하위 loose ref 트리의 지문. 계산은 meta-signature.js 에 있다 — 서비스도 같은 것을 쓴다.
+// read_dir을 제공하지 않는 호스트나 스캔 실패 시 ''를 반환해, 호출자가 기존 mtime 지문만으로
+// 판단하도록(= 종전 동작) 폴백한다.
+function computeRefsTreeSignature(gitDir) {
+  return require('./meta-signature').computeRefsTreeSignature(hecaton, gitDir, t('refresh.truncated'));
 }
 
 // linked worktree에서는 HEAD/logs/HEAD만 per-worktree git dir에 있고
@@ -1007,14 +963,130 @@ async function statMtimeOrMissing(path) {
 }
 
 async function computeMetaFingerprint(cwd, gitDir, commonDir) {
-  if (!gitDir) return '';
+  return (await computeMetaFingerprints(cwd, gitDir, commonDir)).window;
+}
+
+// 이 창의 지문(window)과 저장소 단위 지문(repo)을 refs 트리 한 번 훑기로 함께 낸다.
+async function computeMetaFingerprints(cwd, gitDir, commonDir) {
+  if (!gitDir) return { window: '', repo: '' };
   const common = commonDir || gitDir;
   const targets = metaFingerprintTargets(gitDir, common);
   const [stats, refsSig] = await Promise.all([
     Promise.all(targets.map(statMtimeOrMissing)),
     computeRefsTreeSignature(common).catch(() => ''),
   ]);
-  return stats.join('|') + '\x1e' + refsSig;
+  const repo = await computeRepoMetaFingerprint(common, refsSig).catch(() => '');
+  return { window: stats.join('|') + '\x1e' + refsSig, repo };
+}
+
+// ── 저장소 단위 메타 캐시 ──
+//
+// 위의 _metaCache 는 창 하나의 메모리에만 있다. 그래서 창을 띄울 때마다, 그리고 같은 저장소를
+// 보는 창마다 stash·for-each-ref·remote·worktree·ahead-behind 를 각자 다시 읽었다. 호스트를
+// 다시 띄우면 창 열 개가 같은 1초에 이 다섯을 한꺼번에 띄워, 단독으로 60~90ms 인 명령이
+// 건당 1초 안팎이 됐다(2026-11-12 실측, 동시 실행 최대 58개).
+//
+// 이 다섯 가운데 창마다 다른 것은 "현재"뿐이다 — for-each-ref 의 %(HEAD) 표시, 워크트리
+// 목록의 isCurrent, 현재 브랜치의 ahead/behind. 그 셋을 떼어 내면 나머지는 저장소 전체에
+// 공통이므로 로그(logcache)와 같은 방식으로 .git 아래 파일 하나에 지문과 함께 둔다. 지문이
+// 같으면 git 을 띄우지 않고 그 파일을 쓰고, "현재"는 창이 자기 HEAD·cwd 로 다시 붙인다.
+//
+// 지문은 창의 지문과 같은 대상을 보되 워크트리에 묶이지 않는 것만 쓴다: 공용 dir 의 config·
+// packed-refs·refs 트리·worktrees, 그리고 워크트리 목록이 싣는 각 워크트리의 HEAD.
+// refs 트리를 훑지 못하면(read_dir 미지원 호스트) 같음을 증명할 수 없으므로 공유하지 않는다.
+const META_CACHE_VERSION = 1;
+
+async function linkedWorktreeHeadsSignature(common) {
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  let entries = [];
+  try {
+    const res = await hecaton.fs.read_dir({ path: common + sep + 'worktrees' });
+    if (res && res.ok !== false && Array.isArray(res.entries)) entries = res.entries;
+  } catch { /* 링크된 워크트리가 없다 */ }
+  const names = entries.filter(e => e && e.is_dir).map(e => e.name).sort();
+  const times = await Promise.all(names.map(name =>
+    statMtimeOrMissing(common + sep + 'worktrees' + sep + name + sep + 'HEAD')));
+  return names.map((name, i) => name + '=' + times[i]).join(',');
+}
+
+async function computeRepoMetaFingerprint(common, refsSig) {
+  if (!common || !refsSig || !coordinate.isEnabled()) return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const [config, packed, mainHead, worktreesDir, linked] = await Promise.all([
+    statMtimeOrMissing(common + sep + 'config'),
+    statMtimeOrMissing(common + sep + 'packed-refs'),
+    statMtimeOrMissing(common + sep + 'HEAD'),
+    statMtimeOrMissing(common + sep + 'worktrees'),
+    linkedWorktreeHeadsSignature(common),
+  ]);
+  return [META_CACHE_VERSION, refsSig, config, packed, mainHead, worktreesDir, linked].join('\x1e');
+}
+
+// for-each-ref 출력의 첫 칸(%(HEAD): 현재 브랜치면 '*')을 비우거나 다시 붙인다.
+function stripRefsHeadMark(refsRaw) {
+  return (refsRaw || '').split('\n').map(line => {
+    const tab = line.indexOf('\t');
+    return tab === -1 ? line : ' ' + line.substring(tab);
+  }).join('\n');
+}
+
+function applyRefsHeadMark(refsRaw, branch) {
+  const target = branch ? 'refs/heads/' + branch : '';
+  return (refsRaw || '').split('\n').map(line => {
+    const tab = line.indexOf('\t');
+    if (tab === -1) return line;
+    const rest = line.substring(tab + 1);
+    const end = rest.indexOf('\t');
+    const refname = end === -1 ? rest : rest.substring(0, end);
+    return (target && refname === target ? '*' : ' ') + '\t' + rest;
+  }).join('\n');
+}
+
+// 현재 브랜치의 ahead/behind 를 for-each-ref 가 이미 실어 온 upstream:track 에서 얻는다 —
+// rev-list --left-right --count @{u}...HEAD 와 같은 값이다("behind\tahead"). upstream 이
+// 없거나 사라졌거나 HEAD 가 분리돼 있으면 그 rev-list 도 실패해 빈 값이 되므로 ''.
+function aheadBehindFromRefs(refsRaw) {
+  for (const line of (refsRaw || '').split('\n')) {
+    if (!line.startsWith('*\t')) continue;
+    const parts = line.split('\t');
+    if (!parts[2]) return '';
+    const track = parseUpstreamTrack(parts[3] || '', parts[4] || '');
+    return track.gone ? '' : track.behind + '\t' + track.ahead;
+  }
+  return '';
+}
+
+// 지문이 같은 저장소 단위 메타가 있으면 이 창의 것으로 바꿔 돌려준다. 없으면 null.
+async function readSharedMeta(repoFingerprint, cwd) {
+  if (!repoFingerprint) return null;
+  const cached = await coordinate.readRepoJson('metacache').catch(() => null);
+  if (!cached || cached.version !== META_CACHE_VERSION || cached.fingerprint !== repoFingerprint) return null;
+  if (typeof cached.stashRaw !== 'string' || typeof cached.refsRaw !== 'string'
+      || typeof cached.remoteNamesRaw !== 'string' || !Array.isArray(cached.worktrees) || cached.worktrees.length === 0) return null;
+  // 현재 브랜치를 모르면 %(HEAD) 를 붙일 수 없다. 분리된 HEAD(해시)와 읽기 실패(둘 다 없음)를
+  // 구분한다 — 읽지 못했는데 공유 목록을 쓰면 현재 브랜치가 없는 것처럼 보인다.
+  const head = await readHeadPointer();
+  if (!head.branch && !head.hash) return null;
+  const refsRaw = applyRefsHeadMark(cached.refsRaw, head.branch || '');
+  return {
+    stashRaw: cached.stashRaw,
+    refsRaw,
+    remoteNamesRaw: cached.remoteNamesRaw,
+    worktrees: markCurrentWorktree(cached.worktrees.map(w => ({ ...w })), cwd),
+    aheadBehindRaw: aheadBehindFromRefs(refsRaw),
+  };
+}
+
+function writeSharedMeta(repoFingerprint, meta) {
+  if (!repoFingerprint) return Promise.resolve(false);
+  return coordinate.writeRepoJson('metacache', {
+    version: META_CACHE_VERSION, fingerprint: repoFingerprint, savedAt: Date.now(),
+    owner: coordinate.INSTANCE_ID,
+    stashRaw: meta.stashRaw,
+    refsRaw: stripRefsHeadMark(meta.refsRaw),
+    remoteNamesRaw: meta.remoteNamesRaw,
+    worktrees: meta.worktrees.map(w => ({ ...w, isCurrent: false })),
+  }).catch(() => false);
 }
 
 // 로그 지문이 보는 대상. 메타 지문과 달리 FETCH_HEAD와 config는 넣지 않는다 —
@@ -1050,7 +1122,11 @@ function shouldIncludeIgnored(options) {
   return options.includeIgnored === true || ui.collapsedSections.ignored === false;
 }
 
+// 지금 목록이 반영하는 status 가 적용된 시각. 이보다 늦게 시작한 조회만 목록보다 새것이다.
+let _statusAppliedAt = 0;
+
 function applyStatusSnapshot(snapshot, includeIgnored) {
+  _statusAppliedAt = Date.now();
   state._prevFileList = buildFileList();
   state.staged = snapshot.staged || [];
   state.unstaged = snapshot.unstaged || [];
@@ -1081,6 +1157,7 @@ function applyPathsSnapshot(snapshot, paths, dropEntries) {
     for (const entry of list) touched.add(entry.file);
   }
   const keep = list => (list || []).filter(entry => !touched.has(entry.file));
+  _statusAppliedAt = Date.now();
   state._prevFileList = buildFileList();
   state.staged = keep(state.staged).concat(snapshot.staged).sort(compareStatusPath);
   state.unstaged = keep(state.unstaged).concat(snapshot.unstaged).sort(compareStatusPath);
@@ -1120,6 +1197,38 @@ function statusOutputMatchesState(raw) {
   ].sort().join('\0');
   return keys(snapshot.staged, snapshot.unstaged, snapshot.untracked)
     === keys(state.staged || [], state.unstaged || [], state.untracked || []);
+}
+
+// 감시 폴링이 읽은 status 출력을 목록에 그대로 적용한다. 예전에는 폴링이 "바뀌었다"만 알리고
+// 창이 같은 status 를 한 번 더 돌렸다 — 밖에서 파일이 바뀔 때마다 창 수만큼 git 이 더 떴다.
+// 적용했으면 true. false 면 호출부가 예전처럼 refresh 를 건다.
+//
+// 그대로 써도 되는 것은 그 출력이 창이 직접 돌렸을 status 와 같은 조회이고(추적 안 된 파일
+// 표시, 무시 파일 미포함), 지금 목록보다 새것일 때뿐이다. 서비스는 대기 구간 동안 직전
+// 결과를 다시 내주므로 "처음 받았다"가 "새것이다"를 뜻하지 않는다. startedAt(그 조회가 시작된
+// 시각)이 마지막 목록 적용과 마지막 쓰기 완료보다 늦어야 한다 — 아니면 방금 스테이징한 파일이
+// 쓰기 이전의 조회 결과로 되돌아가 보인다.
+function applyPolledStatus(raw, startedAt) {
+  if (typeof raw !== 'string' || !state.isGitRepo || !(startedAt > 0)) return false;
+  if (_refreshRunning || _refreshQueued) return false;
+  if (!_guiConfigLoaded || _guiConfigCwd !== state.cwd) return false;
+  if (_cachedUntrackedFlag === '-uno' || shouldIncludeIgnored({})) return false;
+  const gitProcess = require('./git-process');
+  const inFlight = typeof gitProcess.writesInFlight === 'function' ? gitProcess.writesInFlight() : 1;
+  if (inFlight > 0) return false;
+  const lastWrite = typeof gitProcess.lastWriteDoneAt === 'function' ? gitProcess.lastWriteDoneAt() : Infinity;
+  if (startedAt <= Math.max(_statusAppliedAt, lastWrite)) return false;
+  const snapshot = statusSnapshotFromOutput(raw, {
+    displayUntracked: true,
+    includeIgnored: false,
+    maxFilesDisplayed: _cachedMaxFilesDisplayed,
+  });
+  if (!state.spinnerActive) state.error = null;
+  applyStatusSnapshot(snapshot, false);
+  // 전체 status refresh 가 함께 하던 일 — 밖에서 생긴 index.lock 표시를 놓치지 않는다.
+  const wasLocked = state.indexLocked;
+  detectIndexLock().then(() => { if (state.indexLocked !== wasLocked) renderNow(); }).catch(() => null);
+  return true;
 }
 
 // .git/index.lock 경로 — worktree에서는 per-worktree git dir에 위치하므로 gitDir 우선 사용
@@ -1421,7 +1530,7 @@ async function refreshAsync(options = {}) {
   // push는 원격 추적 ref(refs/remotes/...)만 갱신하는데 fingerprint가 이를 잡지 못해
   // ahead/behind가 캐시에 묶인다. forceMeta로 명시 무효화한다.
   if (options.forceMeta) invalidateMetaCache();
-  const fingerprint = await computeMetaFingerprint(state.cwd, gitDir, state.gitCommonDir);
+  const { window: fingerprint, repo: repoFingerprint } = await computeMetaFingerprints(state.cwd, gitDir, state.gitCommonDir);
   const metaHit = !!_metaCache && fingerprint && fingerprint === _metaFingerprint;
 
   const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
@@ -1445,7 +1554,20 @@ async function refreshAsync(options = {}) {
       });
   const committerConfigPromise = readCommitterConfig(state.cwd);
   let committerConfig;
-  if (metaHit) {
+  // 이 창의 캐시가 비었으면(막 떴거나 저장소가 바뀌었다) git 을 띄우기 전에 저장소 단위
+  // 캐시를 본다. forceMeta 는 "지문이 못 잡는 변경이 있었다"는 뜻이라 공유 캐시도 건너뛴다.
+  const sharedMeta = (!metaHit && !options.forceMeta)
+    ? await readSharedMeta(repoFingerprint, state.cwd).catch(() => null)
+    : null;
+  if (sharedMeta) {
+    [statusSnapshot, committerConfig] = await Promise.all([statusPromise, committerConfigPromise]);
+    ({ stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw } = sharedMeta);
+    if (fingerprint) {
+      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw };
+      _metaFingerprint = fingerprint;
+      _metaCacheCwd = state.cwd;
+    }
+  } else if (metaHit) {
     [statusSnapshot, committerConfig] = await Promise.all([statusPromise, committerConfigPromise]);
     stashRaw = _metaCache.stashRaw;
     refsRaw = _metaCache.refsRaw;
@@ -1485,6 +1607,8 @@ async function refreshAsync(options = {}) {
       _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw };
       _metaFingerprint = fingerprint;
       _metaCacheCwd = state.cwd;
+      // 같은 저장소의 다른 창과 다음에 뜨는 창이 이 조회를 되풀이하지 않게 남긴다.
+      writeSharedMeta(repoFingerprint, { stashRaw, refsRaw, remoteNamesRaw, worktrees });
     }
   }
 
@@ -1896,21 +2020,10 @@ async function computeRepoLogFingerprint(stashHashes, limit) {
   const sep = (process.platform === 'win32') ? '\\' : '/';
   const refsSig = await computeRefsTreeSignature(common).catch(() => '');
   if (!refsSig) return '';
-  const worktreeHeads = async () => {
-    let entries = [];
-    try {
-      const res = await hecaton.fs.read_dir({ path: common + sep + 'worktrees' });
-      if (res && res.ok !== false && Array.isArray(res.entries)) entries = res.entries;
-    } catch { /* 링크된 워크트리가 없다 */ }
-    const names = entries.filter(e => e && e.is_dir).map(e => e.name).sort();
-    const times = await Promise.all(names.map(name =>
-      statMtimeOrMissing(common + sep + 'worktrees' + sep + name + sep + 'HEAD')));
-    return names.map((name, i) => name + '=' + times[i]).join(',');
-  };
   const [packed, mainHead, linked] = await Promise.all([
     statMtimeOrMissing(common + sep + 'packed-refs'),
     statMtimeOrMissing(common + sep + 'HEAD'),
-    worktreeHeads(),
+    linkedWorktreeHeadsSignature(common),
   ]);
   return [LOG_CACHE_VERSION, refsSig, packed, mainHead, linked, stashHashes.join(','), limit].join('\x1e');
 }
@@ -2973,7 +3086,7 @@ module.exports = {
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
   refreshTouchedInBackground,
-  statusOutputMatchesState,
+  statusOutputMatchesState, applyPolledStatus,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
   removeIndexLock,
   invalidateCommitterCache,
