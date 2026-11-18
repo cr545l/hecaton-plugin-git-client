@@ -117,7 +117,9 @@ function init(deps) {
     _hostLeft.set(p.id, left);
     applyLeft(p.id, left);
     if (p.id === 'logList' && _deps.maybeLoadMoreLog) _deps.maybeLoadMoreLog();
-    if (_deps.render) _deps.render();
+    // 휠·트랙패드 스크롤은 갱신이 몰려온다 — 묶어서 그릴 수단이 있으면 그쪽을 쓴다.
+    const draw = _deps.requestRender || _deps.render;
+    if (draw) draw();
   });
 }
 
@@ -151,21 +153,47 @@ function moveHorizontal(id, delta) {
   hecaton.scroll.set({ id, left_col: left }).catch(() => {});
 }
 
+// 보이는 칸이 끝나면 멈춘다 — 줄 전체를 글자 단위로 쪼개지 않는다. 예전에는 줄 전체를 정규식으로
+// 토큰 배열로 만든 뒤 앞쪽만 썼다. 한 줄짜리 생성 파일(2026-11-18 Com2uX 의 adminScreenMessages.json,
+// 55만 자)을 건드린 커밋을 고르면 상세 패널의 줄이 모두 그 폭까지 채워져, 그리기 한 번에 보이는
+// 줄 수 × 55만 개의 토큰을 만들었다(JIT 없는 Node 로 한 프레임 250ms, QuickJS 는 그보다 느리다).
+// 결과는 종전과 같다: SGR(ESC[…m)과 홀로 선 ESC 는 칸을 차지하지 않고, 보이는 칸이 끝난 뒤의
+// 첫 글자에서 멈추며(그 앞의 ESC 시퀀스는 담는다), 넓은 글자가 경계에 걸리면 공백으로 채운다.
 function sliceLine(value, start, width) {
   start = Math.max(0, start);
   width = Math.max(0, width);
   const end = start + width;
-  let out = '', col = 0, used = 0;
-  const tokens = String(value || '').match(/\x1b\[[0-9;]*m|[\s\S]/gu) || [];
-  for (const token of tokens) {
-    if (token.startsWith('\x1b')) { out += token; continue; }
-    const n = isWide(token.codePointAt(0)) ? 2 : 1;
+  const text = String(value || '');
+  let out = '', col = 0, used = 0, i = 0;
+  while (i < text.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
+    if (text.charCodeAt(i) === 0x1b) {
+      const seqEnd = sgrEnd(text, i);
+      out += text.substring(i, seqEnd);
+      i = seqEnd;
+      continue;
+    }
     if (col >= end) break;
+    const cp = text.codePointAt(i);
+    const units = cp > 0xFFFF ? 2 : 1;
+    const n = isWide(cp) ? 2 : 1;
     const overlap = Math.max(0, Math.min(end, col + n) - Math.max(start, col));
-    if (overlap) { out += overlap === n ? token : ' '.repeat(overlap); used += overlap; }
+    if (overlap) { out += overlap === n ? text.substring(i, i + units) : ' '.repeat(overlap); used += overlap; }
     col += n;
+    i += units;
   }
   return out + ' '.repeat(Math.max(0, width - used)) + '\x1b[0m';
+}
+
+// text[i] 가 ESC 일 때 그 시퀀스가 끝나는 위치. SGR(ESC [ 숫자·; m)이면 m 다음, 아니면 ESC 한 글자.
+function sgrEnd(text, i) {
+  if (text.charCodeAt(i + 1) !== 0x5b) return i + 1;
+  let j = i + 2;
+  while (j < text.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
+    const c = text.charCodeAt(j);
+    if ((c >= 0x30 && c <= 0x39) || c === 0x3b) j++;
+    else break;
+  }
+  return text.charCodeAt(j) === 0x6d ? j + 1 : i + 1;
 }
 
 function bankCol(id) { return ui.termCols + (BANK_SLOTS[id] || 0) * BANK_ROWS; }

@@ -303,7 +303,24 @@ function caps() {
   return frameCaps;
 }
 
+// ── 몰려오는 입력의 그리기 묶기 ──
+//
+// 마우스 이동(호버·구분선/스크롤바 끌기)과 호스트 스크롤 갱신은 짧은 간격으로 몰려온다. 예전에는
+// 이벤트마다 곧바로 화면 전체를 그렸는데, 한 번 그리는 시간이 이벤트 간격보다 길면 밀린 이벤트가
+// 각자 또 그리느라 화면이 마우스를 점점 늦게 따라갔다(2026-11-18 Com2uX 실측: 브랜치 64·원격 221·
+// 워크트리 31 의 히스토리 화면에서 마우스 반응이 1초가량 늦었고, 같은 동작이 작은 저장소에서는
+// 괜찮았다 — 그리기 비용이 그 경계를 넘느냐의 차이다). 여기서는 한 프레임 안의 요청을 한 번으로
+// 묶고, 그릴 때의 최신 상태를 그린다. 그 사이 다른 곳에서 render() 를 부르면 그것으로 갈음한다.
+const FRAME_MS = 16;
+let _frameTimer = null;
+
+function requestRender() {
+  if (_frameTimer) return;
+  _frameTimer = setTimeout(() => { _frameTimer = null; render(); }, FRAME_MS);
+}
+
 function render() {
+  if (_frameTimer) { clearTimeout(_frameTimer); _frameTimer = null; }
   // 모든 상태 변경은 render를 거치므로 여기서 영속화 디바운스를 건다
   persist.schedule();
   frameCaps = actions.context();
@@ -2194,6 +2211,7 @@ function buildDiffCommitPanel(w, h) {
       ui.diffMaxScrollX = preMaxScrollX;
       if (state.diffScrollX > preMaxScrollX) state.diffScrollX = preMaxScrollX;
       const scrollX = 0;
+      const rowW = renderableWidth(canvasW, state.diffScrollX, innerW, 'diff');
 
       if (sideBySideLayout) {
         // hunk 행 → hunk 인덱스 매핑 (버튼 렌더/클릭 존용)
@@ -2208,7 +2226,7 @@ function buildDiffCommitPanel(w, h) {
         // 화면과 bank 에 걸리는 줄만 그린다. 파일 전체를 매 프레임 하이라이트하면 긴 diff 에서
         // 스크롤 한 칸마다 수백 ms 가 들어 내용이 호스트 스크롤을 한참 늦게 따라온다.
         const sideRowCount = sideBySideLayout.rows.length;
-        const renderSideRow = (i) => renderSideBySideDiffRow(sideBySideLayout, i, state.currentDiffFile, scrollX, sideHunkOpts);
+        const renderSideRow = (i) => renderSideBySideDiffRow(sideBySideLayout, i, state.currentDiffFile, scrollX, sideHunkOpts, rowW);
         const maxScroll = Math.max(0, sideRowCount - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
@@ -2242,8 +2260,12 @@ function buildDiffCommitPanel(w, h) {
             if (isHunkEntry(annotated[ri])) { unifiedHunkIdxByRow.set(ri, hi); hi++; }
           }
         }
+        // 줄은 화면에 나갈 수 있는 폭(rowW)까지만 만든다 — renderableWidth 주석 참고.
         const renderUnifiedRow = (entry, absIdx) => {
           if (hunkBtnLabel && isHunkEntry(entry)) {
+            // hunk 버튼은 캔버스 오른쪽 끝에 붙는다. 그 자리가 보일 수 있는 폭 밖이면 버튼까지
+            // 공백을 채울 필요가 없다.
+            if (hunkAvail + 1 >= rowW) return ' ' + colorizeDiffLine(entry.text, rowW - 1, state.currentDiffFile, scrollX);
             const base = ' ' + colorizeDiffLine(entry.text, hunkAvail - 1, state.currentDiffFile, scrollX);
             return padRight(base, hunkAvail + 1) + renderHunkButton(unifiedHunkIdxByRow.get(absIdx));
           }
@@ -2256,9 +2278,9 @@ function buildDiffCommitPanel(w, h) {
             } else {
               gutter = ' '.repeat(gutterW);
             }
-            return gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX);
+            return gutter + colorizeDiffLine(entry.text, Math.min(contentW, rowW - gutterW), state.currentDiffFile, scrollX);
           }
-          return ' ' + colorizeDiffLine(entry.text, canvasW - 1, state.currentDiffFile, scrollX);
+          return ' ' + colorizeDiffLine(entry.text, rowW - 1, state.currentDiffFile, scrollX);
         };
         const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
         for (let vi = 0; vi < visible.length; vi++) {
@@ -2732,6 +2754,7 @@ function buildLogPanel(w, h) {
       const canvasW = innerW + logDetailMaxScrollX;
       ui.logDetailMaxScrollX = logDetailMaxScrollX;
       if (state.diffScrollX > logDetailMaxScrollX) state.diffScrollX = logDetailMaxScrollX;
+      const rowW = renderableWidth(canvasW, state.diffScrollX, innerW, 'logDetail');
       if (logDetailMaxScrollX > 0 && cH > 0) cH--;
 
       // Sticky file header: pin the file name when scrolled past its header.
@@ -2778,9 +2801,9 @@ function buildLogPanel(w, h) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
           const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
-          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, canvasW), canvasW) + ansi.reset;
+          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, rowW), rowW) + ansi.reset;
         } else if (/^\u2500{3,}$/.test(entry.text)) {
-          return colorizeDiffLine(entry.text, canvasW, entry.file);
+          return colorizeDiffLine(entry.text, rowW, entry.file);
         } else if (entry.inDiff && gutterW > 0) {
           let gutter;
           if (entry.oldNum != null || entry.newNum != null) {
@@ -2790,7 +2813,7 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          return gutter + colorizeDiffLine(entry.text, canvasW - gutterW, entry.file, 0);
+          return gutter + colorizeDiffLine(entry.text, rowW - gutterW, entry.file, 0);
         } else {
           const rawText = (entry.text || '').replace(/[\r\n]/g, '');
           // Register copy zones for metadata lines (visible rows only)
@@ -2833,9 +2856,9 @@ function buildLogPanel(w, h) {
             ? ui.detailCopyZones.find(z => z.lineIdx === lineIdx && z.colStart === hz.colStart + state.diffScrollX && z.colEnd === hz.colEnd + state.diffScrollX)
             : null;
           if (hoveredZone) {
-            return ' ' + colorizeDiffLineWithUnderline(rawText, canvasW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
+            return ' ' + colorizeDiffLineWithUnderline(rawText, rowW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
           }
-          return ' ' + colorizeDiffLine(entry.text, canvasW - 1, entry.file, 0);
+          return ' ' + colorizeDiffLine(entry.text, rowW - 1, entry.file, 0);
         }
       }
       for (const entry of visible) {
@@ -3085,13 +3108,14 @@ function buildFreshPanel(w, h) {
       const canvasW = innerW + freshDetailMaxScrollX;
       ui.freshDetailMaxScrollX = freshDetailMaxScrollX;
       if (state.diffScrollX > freshDetailMaxScrollX) state.diffScrollX = freshDetailMaxScrollX;
+      const rowW = renderableWidth(canvasW, state.diffScrollX, innerW, 'freshDetail');
       if (freshDetailMaxScrollX > 0 && cH > 0) cH--;
 
       const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
       ui.freshDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const renderFreshDetailRow = (rawLine) =>
-        ' ' + colorizeDiffLine(rawLine, canvasW - 1, selItem ? selItem.file : null, 0);
+        ' ' + colorizeDiffLine(rawLine, rowW - 1, selItem ? selItem.file : null, 0);
       const detailRegionRelRow = lines.length;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
@@ -3711,30 +3735,39 @@ function renderSideBySideCell(rawText, lineNum, numW, contentW, totalW, filePath
   return padRight(gutter + content, totalW);
 }
 
-function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts) {
+// limitW \ub97c \uc8fc\uba74 \uadf8 \uce78\uae4c\uc9c0\ub9cc \ub9cc\ub4e0\ub2e4(renderableWidth). \uae34 \uc904\uc774 \uc788\uc73c\uba74 \ub450 \uce78\uc774 \uac01\uac01 \uadf8 \uc904 \uae38\uc774\ub9cc\ud07c
+// \ub113\uc5b4\uc838, \uc9e7\uc740 \uc904\ub3c4 \uc591\ucabd\uc744 \ub05d\uae4c\uc9c0 \uacf5\ubc31\uc73c\ub85c \ucc44\uc6b0\ub290\ub77c \ud55c \uc904\uc774 \ubc31\ub9cc \uc790\ub97c \ub118\uc5c8\ub2e4.
+function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts, limitW) {
   const row = layout.rows[rowIdx];
   if (!row) return '';
+  const limit = limitW > 0 ? limitW : Infinity;
   const gap = colors.border + ' \u2502 ' + ansi.reset;
+  const leftLimit = Math.min(layout.leftW, limit);
+  const rightLimit = Math.min(layout.rightW, limit - (layout.leftW + 3));
+  const showsRight = rightLimit > 0;
   if (hunkOpts && row.type === 'hunk') {
+    if (hunkOpts.avail + 1 >= limit) return ' ' + colorizeDiffLine(row.text, limit - 1, filePath, 0);
     const base = ' ' + colorizeDiffLine(row.text, hunkOpts.avail - 1, filePath, 0);
     return padRight(base, hunkOpts.avail + 1) + hunkOpts.renderButton(hunkOpts.idxByRow.get(rowIdx));
   }
   if (row.type === 'side-title') {
-    return colors.dim + padRight(t('ui.head'), layout.leftW) + ansi.reset +
-      gap +
-      colors.dim + padRight(t('ui.staged'), layout.rightW) + ansi.reset;
+    return colors.dim + padRight(t('ui.head'), leftLimit) + ansi.reset +
+      (showsRight ? gap + colors.dim + padRight(t('ui.staged'), rightLimit) + ansi.reset : '');
   }
   if (row.type === 'side-header') {
-    return colors.border + '\u2500'.repeat(layout.leftW) + ansi.reset +
-      gap +
-      colors.border + '\u2500'.repeat(layout.rightW) + ansi.reset;
+    return colors.border + '\u2500'.repeat(leftLimit) + ansi.reset +
+      (showsRight ? gap + colors.border + '\u2500'.repeat(rightLimit) + ansi.reset : '');
   }
   if (row.type === 'pair') {
-    const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW, layout.leftContentW, layout.leftW, filePath, scrollX);
-    const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW, layout.rightContentW, layout.rightW, filePath, scrollX);
+    const cellGutterW = layout.numW + 1;
+    const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW,
+      Math.max(0, Math.min(layout.leftContentW, leftLimit - cellGutterW)), leftLimit, filePath, scrollX);
+    if (!showsRight) return left;
+    const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW,
+      Math.max(0, Math.min(layout.rightContentW, rightLimit - cellGutterW)), rightLimit, filePath, scrollX);
     return left + gap + right;
   }
-  return ' ' + colorizeDiffLine(row.text, layout.innerW - 1, filePath, 0);
+  return ' ' + colorizeDiffLine(row.text, Math.min(layout.innerW, limit) - 1, filePath, 0);
 }
 
 // refresh.js replaces diffLines when a new patch arrives. Like the log detail,
@@ -3948,7 +3981,20 @@ function colorizeDiffLineWithUnderline(rawLine, w, ulStart, ulEnd) {
   return fgColor + result + ansi.reset;
 }
 
+// 줄 하나를 만들 폭. 가로 캔버스(canvasW)는 스크롤 범위일 뿐이고, 한 번에 화면에 나갈 수 있는
+// 칸은 스크롤 위치부터 패널 폭에 호스트가 가로 스크롤용으로 받아 두는 여분(bank)을 더한 곳까지다.
+// 그 너머는 만들어도 sliceLine 이 버린다. 한 줄짜리 생성 파일(2026-11-18 Com2uX 의
+// adminScreenMessages.json, 55만 자)이 diff 에 걸리면 캔버스가 55만 칸이 되어, 예전에는 보이는
+// 줄마다 그 폭까지 공백을 채우고 긴 줄 전체를 구문 강조했다(처음 보일 때 한 번에 수백 ms).
+function renderableWidth(canvasW, scrollX, viewW, regionId) {
+  return Math.min(canvasW, Math.max(0, scrollX || 0) + viewW + hostScroll.depthOf(regionId).after);
+}
+
 function colorizeDiffLine(rawLine, w, filePath, scrollX) {
+  // 보일 수 있는 앞부분만 다룬다. 칸을 차지하지 않는 것은 지울 \r·\n 뿐이고 서로게이트 쌍도 두
+  // 단위에 한 칸 이상이라, (스크롤+폭)의 두 배 단위를 남기면 보일 칸이 모자라지 않는다.
+  const keepUnits = 2 * (Math.max(0, scrollX || 0) + Math.max(0, w || 0)) + 16;
+  if (rawLine.length > keepUnits) rawLine = rawLine.substring(0, keepUnits);
   rawLine = expandDiffTabs(rawLine.replace(/[\r\n]/g, ''));
   // Don't apply horizontal scroll to metadata/header lines
   const sx = isDiffMetaLine(rawLine) ? 0 : (scrollX || 0);
@@ -4030,4 +4076,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };
+module.exports = { render, requestRender, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };
