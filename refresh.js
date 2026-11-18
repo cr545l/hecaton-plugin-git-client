@@ -1,7 +1,7 @@
 const { readRebaseProgress } = require('./rebase-progress');
 const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
-const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktrees, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
+const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktreeListRaw, parseWorktreeList, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { get label() { return t('refresh.pending'); }, days: 0 },
@@ -801,8 +801,10 @@ let _guiConfigAt = 0;
 const GUI_CONFIG_TTL_MS = 60000;
 
 // 메타 데이터 캐시 — .git 내부 mtime fingerprint가 동일하면 재호출 생략.
-// 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees, ahead/behind.
-// user.* config는 글로벌 설정 변경과 일시적 조회 실패가 캐시에 고착되지 않도록 매번 다시 읽는다.
+// 대상: stash, for-each-ref(branches/remotes), remote 이름, worktrees. 이 창의 메모리 캐시이고,
+// 미스가 나면 저장소 단위 공유(loadRepoMeta)로 넘어간다. ahead/behind 는 for-each-ref 의
+// upstream:track 에서 읽으므로 따로 담지 않는다(upstream 없는 브랜치의 보조 조회 결과만 담는다).
+// user.* config는 지문으로 좇을 수 없어 TTL 캐시를 따로 둔다(readCommitterConfig).
 // status는 워킹트리 변경을 잡아야 하므로 항상 새로 호출한다.
 let _metaCache = null;
 let _metaFingerprint = '';
@@ -867,20 +869,36 @@ async function queryCommitterConfig(cwd) {
 // 늘려도 위험하지 않다. 플러그인에서 committer 를 고치면 invalidateCommitterCache() 가
 // 즉시 무효화하고, 실제 커밋은 git 이 config 를 직접 읽으므로 이 캐시의 영향을 받지
 // 않는다 — 낡을 수 있는 것은 밖에서 바꾼 설정의 표시뿐이고, 그것도 이 창을 넘기면 따라온다.
+//
+// 같은 저장소의 다른 창이 TTL 안에 읽어 둔 값이 있으면 그것을 쓴다(configShareKey) — 낡을 수
+// 있는 정도는 창 하나일 때와 같다(읽은 지 TTL 이내).
 const COMMITTER_CACHE_TTL_MS = 60000;
 let _committerCache = null;
 let _committerCacheCwd = '';
 let _committerCacheAt = 0;
+// 이 창이 committer 를 고쳤다 — 다음 조회는 남이 저장한 값을 쓰지 않고 직접 읽어 다시 저장한다.
+let _committerForceShared = false;
+
+function validSharedCommitter(value) {
+  return !!value && typeof value.effective === 'string' && typeof value.local === 'string';
+}
 
 async function readCommitterConfig(cwd) {
   const now = Date.now();
   if (_committerCache && _committerCacheCwd === cwd && (now - _committerCacheAt) < COMMITTER_CACHE_TTL_MS) {
     return _committerCache;
   }
-  let result = await queryCommitterConfig(cwd);
-  // A failed host/Git call used to look like an unset config and was cached.
-  // Retry once so a brief startup failure does not leave placeholders behind.
-  if (!result.ok) result = await queryCommitterConfig(cwd);
+  const force = _committerForceShared;
+  _committerForceShared = false;
+  const key = await configShareKey().catch(() => '');
+  const { value, shared } = await coordinate.sharedRepoQuery('userconfig', key, async () => {
+    let own = await queryCommitterConfig(cwd);
+    // A failed host/Git call used to look like an unset config and was cached.
+    // Retry once so a brief startup failure does not leave placeholders behind.
+    if (!own.ok) own = await queryCommitterConfig(cwd);
+    return { value: own, share: own.ok ? { effective: own.effective, local: own.local } : undefined };
+  }, { force, maxAgeMs: COMMITTER_CACHE_TTL_MS, validate: validSharedCommitter });
+  const result = shared ? { ok: true, effective: value.effective, local: value.local } : value;
   // 실패한 조회는 캐시하지 않는다 — 성공할 때까지 매번 다시 시도해야 한다.
   if (result.ok) {
     _committerCache = result;
@@ -895,6 +913,7 @@ function invalidateCommitterCache() {
   _committerCache = null;
   _committerCacheCwd = '';
   _committerCacheAt = 0;
+  _committerForceShared = true;
 }
 
 // 브랜치가 올라가 있는 리모트 이름 — 없으면 '' (아직 push 하지 않은 로컬 전용 브랜치).
@@ -1015,6 +1034,141 @@ async function computeMetaFingerprint(cwd, gitDir, commonDir) {
     computeRefsTreeSignature(common).catch(() => ''),
   ]);
   return stats.join('|') + '\x1e' + refsSig;
+}
+
+// 링크된 워크트리마다의 HEAD 시각 — "이름=mtime" 을 이름순으로 잇는다. `worktree list` 와
+// 히스토리의 HEAD 표시는 다른 워크트리의 HEAD 까지 읽는데, 분리된 HEAD 에서 커밋하면 그
+// 워크트리의 HEAD 파일만 바뀌고 refs 트리는 그대로다.
+async function linkedWorktreeHeadsSignature(common) {
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  let entries = [];
+  try {
+    const res = await hecaton.fs.read_dir({ path: common + sep + 'worktrees' });
+    if (res && res.ok !== false && Array.isArray(res.entries)) entries = res.entries;
+  } catch { /* 링크된 워크트리가 없다 */ }
+  const names = entries.filter(e => e && e.is_dir).map(e => e.name).sort();
+  const times = await Promise.all(names.map(name =>
+    statMtimeOrMissing(common + sep + 'worktrees' + sep + name + sep + 'HEAD')));
+  return names.map((name, i) => name + '=' + times[i]).join(',');
+}
+
+// ── 저장소 단위 메타 공유 ──
+//
+// stash·for-each-ref·remote·worktree list 는 어느 워크트리에서 읽어도 결과가 같다. 다른 것은
+// for-each-ref 의 %(HEAD) 열 하나뿐이라, 그 열을 비워 저장하고 읽는 창이 자기 HEAD 로 다시
+// 채운다. 그래서 같은 저장소를 보는 창들이 이 넷을 한 번만 돌린다(coordinate.sharedRepoQuery).
+// 창마다 메모리에 두는 _metaCache 는 그 앞단에 그대로 남는다 — 지문이 같으면 파일도 안 읽는다.
+//
+// 지문은 이 넷이 읽는 것 전부다: refs 트리(브랜치·원격·태그·stash 의 loose ref), packed-refs,
+// config(remote 목록·upstream), 메인 HEAD 와 링크된 워크트리들의 HEAD(worktree list 의
+// HEAD/branch 줄), worktrees 디렉터리(워크트리 추가·삭제), stash reflog(stash@{1} 이하를
+// 지우면 refs/stash 는 그대로이고 reflog 만 바뀐다). refs 트리를 못 읽으면 지문이 없다 —
+// mtime 만으로 넘겨짚어 남에게 넘기지 않고 공유를 포기한다.
+const REPO_META_VERSION = 1;
+
+async function computeRepoMetaKey(common) {
+  if (!common) return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const files = ['config', 'packed-refs', 'HEAD', 'worktrees', 'logs' + sep + 'refs' + sep + 'stash'];
+  const [refsSig, stats, heads] = await Promise.all([
+    computeRefsTreeSignature(common).catch(() => ''),
+    Promise.all(files.map(name => statMtimeOrMissing(common + sep + name))),
+    linkedWorktreeHeadsSignature(common).catch(() => null),
+  ]);
+  if (!refsSig || heads === null) return '';
+  return [REPO_META_VERSION, stats.join('|'), heads, refsSig].join('\x1e');
+}
+
+// for-each-ref 출력의 %(HEAD) 열(첫 칸)을 이 워크트리 기준으로 다시 쓴다. branch 가 ''
+// 이면(분리된 HEAD, 또는 저장용으로 비울 때) 어느 줄에도 '*' 를 두지 않는다.
+function markRefsHead(refsRaw, branch) {
+  const target = branch ? 'refs/heads/' + branch : '';
+  return String(refsRaw || '').split('\n').map(line => {
+    const tab = line.indexOf('\t');
+    if (tab === -1) return line;
+    const end = line.indexOf('\t', tab + 1);
+    const refname = end === -1 ? line.substring(tab + 1) : line.substring(tab + 1, end);
+    return (target && refname === target ? '*' : ' ') + line.substring(tab);
+  }).join('\n');
+}
+
+function validRepoMeta(value) {
+  return !!value && typeof value.stash === 'string' && typeof value.refs === 'string'
+    && typeof value.remotes === 'string' && typeof value.worktrees === 'string' && !!value.worktrees;
+}
+
+async function queryRepoMeta(cwd, refsFormat) {
+  const [stashRes, refsRes, firstRemoteRes, worktreesRaw] = await Promise.all([
+    gitExecChecked(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], cwd),
+    gitExecChecked(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], cwd, REFS_TIMEOUT_MS),
+    gitExecChecked(['--no-optional-locks', 'remote'], cwd),
+    gitWorktreeListRaw(cwd),
+  ]);
+  // 일시적인 host/Git 실패를 "리모트 0개"로 받으면 원격 브랜치는 보이는데 Fetch/Pull 만
+  // 막히는 상태가 된다. 한 번 더 읽고, 그래도 실패하면 호출부가 이전 값을 보존한다.
+  const remoteNamesRes = firstRemoteRes.ok
+    ? firstRemoteRes
+    : await gitExecChecked(['--no-optional-locks', 'remote'], cwd);
+  return { stashRes, refsRes, remoteNamesRes, worktreesRaw };
+}
+
+// 공유 위치를 지금 저장소로 맞춘다 — 창이 막 열려 감시(setupGitWatcher)가 아직 설정하기 전이거나
+// 다른 저장소로 옮겨 온 직후여도 엉뚱한 저장소의 공유 폴더를 쓰지 않는다. 같은 값이면 아무 일도
+// 없다. 공용 git dir 을 모르면 건드리지 않는다 — 링크된 워크트리의 git dir 로 맞추면 공유가 갈린다.
+function syncCoordinate() {
+  if (state.gitCommonDir && state.cwd) coordinate.configure(state.gitCommonDir, state.cwd);
+}
+
+// 메타 넷을 저장소 단위로 공유해 얻는다. 반환 모양은 queryRepoMeta 와 같다.
+// force 면 남이 저장한 결과를 쓰지 않고 직접 읽는다(push 뒤처럼 호출부가 재조회를 요구할 때).
+async function loadRepoMeta(cwd, refsFormat, force) {
+  syncCoordinate();
+  const common = state.gitCommonDir;
+  const [key, head] = await Promise.all([
+    common && coordinate.isEnabled() ? computeRepoMetaKey(common).catch(() => '') : '',
+    readHeadPointer(),
+  ]);
+  // HEAD 를 못 읽으면 남이 저장한 목록에 현재 브랜치를 표시할 수 없다 — 공유하지 않는다.
+  // 조회 형식도 지문에 넣는다 — 형식을 바꾼 버전과 옛 버전의 창이 섞여 떠 있어도 모양이 다른
+  // 결과를 주고받지 않는다.
+  const shareKey = (key && (head.branch || head.hash)) ? key + '\x1e' + refsFormat : '';
+  const { value, shared } = await coordinate.sharedRepoQuery('meta', shareKey, async () => {
+    const meta = await queryRepoMeta(cwd, refsFormat);
+    const allOk = meta.stashRes.ok && meta.refsRes.ok && meta.remoteNamesRes.ok && !!meta.worktreesRaw;
+    return {
+      value: meta,
+      share: allOk ? {
+        stash: meta.stashRes.text,
+        refs: markRefsHead(meta.refsRes.text, ''),
+        remotes: meta.remoteNamesRes.text,
+        worktrees: meta.worktreesRaw,
+      } : undefined,
+    };
+  }, { force, validate: validRepoMeta });
+  if (!shared) return value;
+  return {
+    stashRes: { ok: true, text: value.stash },
+    refsRes: { ok: true, text: markRefsHead(value.refs, head.branch || '') },
+    remoteNamesRes: { ok: true, text: value.remotes },
+    worktreesRaw: value.worktrees,
+  };
+}
+
+// config 조회(committer·gui)를 창끼리 나누기 위한 지문. 전역 config 와 include 까지는 mtime 으로
+// 좇을 수 없어 이 지문만으로는 부족하다 — 그래서 저장된 값에 종전과 같은 TTL 을 함께 건다.
+// 워크트리 전용 설정(config.worktree)이 있으면 창마다 값이 다를 수 있으므로 공유하지 않는다.
+async function configShareKey() {
+  if (!state.gitDir || !state.gitCommonDir) return '';
+  syncCoordinate();
+  if (!coordinate.isEnabled()) return '';
+  const sep = (process.platform === 'win32') ? '\\' : '/';
+  const common = state.gitCommonDir;
+  const [config, worktreeConfig] = await Promise.all([
+    statMtimeOrMissing(common + sep + 'config'),
+    statMtimeOrMissing(state.gitDir + sep + 'config.worktree'),
+  ]);
+  if (worktreeConfig !== -1) return '';
+  return 'config\x1e' + config;
 }
 
 // 로그 지문이 보는 대상. 메타 지문과 달리 FETCH_HEAD와 config는 넣지 않는다 —
@@ -1300,7 +1454,13 @@ async function refreshAsync(options = {}) {
   const guiConfigStale = !_guiConfigLoaded || _guiConfigCwd !== state.cwd
     || (Date.now() - _guiConfigAt) >= GUI_CONFIG_TTL_MS;
   if (guiConfigStale && ((!metadataOnly && (!statusOnly || !_guiConfigLoaded)) || (options.loadGuiConfig && !_guiConfigLoaded))) {
-    const guiRaw = await gitExec(['--no-optional-locks', 'config', '--get-regexp', '^gui\\.'], state.cwd);
+    // 같은 저장소의 다른 창이 TTL 안에 읽어 둔 값이 있으면 그것을 쓴다(committer 와 같은 규칙).
+    // 조회가 끝까지 돌았을 때(키가 없어 exit 1 인 경우 포함)만 남긴다.
+    const guiKey = await configShareKey().catch(() => '');
+    const { value: guiRaw } = await coordinate.sharedRepoQuery('guiconfig', guiKey, async () => {
+      const res = await gitExecChecked(['--no-optional-locks', 'config', '--get-regexp', '^gui\\.'], state.cwd);
+      return { value: res.text, share: configLookupCompleted(res) ? res.text : undefined };
+    }, { maxAgeMs: GUI_CONFIG_TTL_MS, validate: value => typeof value === 'string' });
     let duVal = '';
     let mfVal = '';
     if (guiRaw) {
@@ -1387,9 +1547,12 @@ async function refreshAsync(options = {}) {
   // 평상시 spawn 수:
   // - status는 항상 호출 (워킹트리 변경 추적). porcelain 한 번으로 staged/unstaged/
   //   untracked/ignored를 모두 받는다 — split 방식은 rev-parse까지 앞세워 4번을 썼다.
-  // - 메타(stash/for-each-ref/remote/worktrees/user 2종/ahead-behind) 7개는 fingerprint 캐시 적중 시 재호출 생략
+  // - 메타(stash/for-each-ref/remote/worktrees) 4개는 fingerprint 캐시 적중 시 재호출 생략, 미스여도
+  //   같은 저장소의 다른 창이 같은 지문으로 읽어 두었으면 받아 쓴다(loadRepoMeta)
+  // - committer·gui config 는 각각 TTL 캐시(창끼리 공유)
+  // - ahead/behind 는 for-each-ref 의 upstream:track 에서 읽는다 — 따로 띄우지 않는다
   // - git-dir은 state.gitDir 캐시 우선 (preCheck/setupGitWatcher가 채움)
-  // → 캐시 적중: 1 spawn (status), 미스: 8 spawn
+  // → 캐시 적중: 1 spawn (status), 미스: 5 spawn(+ TTL 이 지난 config)
   // upstream:track / trackshort까지 함께 받아 브랜치별 ahead/behind를 얻는다. 같은
   // for-each-ref 한 번에 딸려 오므로 spawn이 늘지 않는다 — Pinned 목록이 현재 브랜치처럼
   // push/pull 대기 수를 보여주는 데 쓴다.
@@ -1426,7 +1589,7 @@ async function refreshAsync(options = {}) {
 
   const includeIgnored = metadataOnly ? false : shouldIncludeIgnored(options);
   if (!metadataOnly) state.ignoredLoading = includeIgnored;
-  let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw;
+  let statusSnapshot, stashRaw, refsRaw, remoteNamesRaw, worktrees;
   // refs/remote/worktrees 조회가 실제로 성공했는지 — 실패를 "0건"으로 오인해 목록을 지우지 않기 위한 플래그.
   // 캐시에는 성공한 결과만 넣으므로 캐시 적중 경로는 항상 true다.
   let refsOk = true, remoteNamesOk = true, worktreesOk = true, stashOk = true;
@@ -1451,30 +1614,24 @@ async function refreshAsync(options = {}) {
     refsRaw = _metaCache.refsRaw;
     remoteNamesRaw = _metaCache.remoteNamesRaw;
     worktrees = _metaCache.worktrees;
-    aheadBehindRaw = _metaCache.aheadBehindRaw;
   } else {
-    let refsRes, remoteNamesRes, stashRes;
-    [statusSnapshot, stashRes, refsRes, remoteNamesRes, worktrees, aheadBehindRaw, committerConfig] =
+    // stash·for-each-ref·remote·worktree list 는 저장소 단위로 공유한다(loadRepoMeta).
+    let repoMeta;
+    [statusSnapshot, repoMeta, committerConfig] =
       await Promise.all([
         statusPromise,
-        gitExecChecked(['--no-optional-locks', 'stash', 'list', '--format=%H\t%h\t%gd\t%s'], state.cwd),
-        gitExecChecked(['--no-optional-locks', 'for-each-ref', '--format=' + refsFormat, 'refs/heads', 'refs/remotes'], state.cwd, REFS_TIMEOUT_MS),
-        gitExecChecked(['--no-optional-locks', 'remote'], state.cwd),
-        gitWorktrees(state.cwd),
-        gitExec(['--no-optional-locks', 'rev-list', '--left-right', '--count', '@{u}...HEAD'], state.cwd),
+        loadRepoMeta(state.cwd, refsFormat, !!options.forceMeta),
         committerConfigPromise,
       ]);
+    const { stashRes, refsRes, remoteNamesRes } = repoMeta;
+    worktrees = parseWorktreeList(repoMeta.worktreesRaw, state.cwd);
     refsOk = refsRes.ok;
     refsRaw = refsRes.text;
     // stash 목록도 브랜치와 같다 — 실패(중단 포함)를 "0건"으로 받으면 stash 가 사라져 보이고,
     // 그 빈 목록이 지문이 바뀔 때까지 캐시에 남는다.
     stashOk = stashRes.ok;
     stashRaw = stashRes.text;
-    // 일시적인 host/Git 실패를 "리모트 0개"로 캐시하면 원격 브랜치는 보이는데
-    // Fetch/Pull만 막히는 상태가 된다. 한 번 더 읽고, 그래도 실패하면 이전 값을 보존한다.
-    if (!remoteNamesRes.ok) {
-      remoteNamesRes = await gitExecChecked(['--no-optional-locks', 'remote'], state.cwd);
-    }
+    // remote 조회 실패는 queryRepoMeta 가 한 번 더 읽어 본 결과다. 그래도 실패면 이전 값을 보존한다.
     remoteNamesOk = remoteNamesRes.ok;
     remoteNamesRaw = remoteNamesRes.text;
     // 정상 저장소의 worktree list는 최소 메인 워크트리 한 줄을 낸다. 빈 결과는 조회 실패다.
@@ -1482,7 +1639,7 @@ async function refreshAsync(options = {}) {
     // 실패한 조회 결과를 캐시에 넣으면 fingerprint(.git 내부 mtime)가 바뀔 때까지 빈 목록이
     // 계속 재사용된다. 브랜치가 한참 동안 사라져 보이는 원인이므로 성공했을 때만 캐시한다.
     if (fingerprint && refsOk && remoteNamesOk && worktreesOk && stashOk) {
-      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees, aheadBehindRaw };
+      _metaCache = { stashRaw, refsRaw, remoteNamesRaw, worktrees };
       _metaFingerprint = fingerprint;
       _metaCacheCwd = state.cwd;
     }
@@ -1667,29 +1824,38 @@ async function refreshAsync(options = {}) {
     state.committerEmailIsLocal = !!localUserCfg.email;
   }
 
-  // ahead/behind
-  // upstream이 없으면 `@{u}` 조회가 실패해 빈 값이 온다. 그래도 같은 이름의 원격 브랜치가 있으면
-  // 그 ref로 한 번 더 세어, @리모트 표기는 붙었는데 화살표만 빠지는 어긋남을 막는다.
-  // 결과를 메타 캐시에 넣어 새로고침마다 spawn이 하나 늘지 않게 한다. 조회가 실패해 빈 값이
-  // 와도 시도 자체를 기록해 둔다 — 안 그러면 같은 fingerprint 동안 매번 다시 spawn 한다.
-  const abFallbackDone = !!(metaHit && _metaCache && _metaCache.abFallbackDone);
-  if (!aheadBehindRaw.trim() && !abFallbackDone) {
+  // ahead/behind — 현재 브랜치의 %(upstream:track) 에서 읽는다. 예전에는 refresh 마다
+  // `rev-list --left-right --count @{u}...HEAD` 를 따로 띄웠는데, upstream 이 있으면 같은
+  // for-each-ref 가 이미 같은 값을 냈고 없으면 그 명령은 실패(exit 128)만 했다(2026-11-18 Com2uX
+  // 실측: 1,363회 중 66% 가 실패 — 작업용 워크트리는 대개 upstream 이 없는 로컬 브랜치다).
+  // refs 조회가 실패했으면 화살표를 0 으로 지우지 않고 이전 값을 둔다.
+  if (refsOk) {
     const cur = state.branches.find(b => b.isCurrent);
-    const remote = cur && !cur.upstream ? currentBranchRemote() : '';
-    if (remote) {
-      aheadBehindRaw = await gitExec(
-        ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],  // i18n-ok: git ref 경로
-        state.cwd,
-      );
-      if (_metaCache && _metaCacheCwd === state.cwd) {
-        _metaCache.aheadBehindRaw = aheadBehindRaw;
-        _metaCache.abFallbackDone = true;
+    let ahead = 0, behind = 0;
+    if (cur && cur.upstream) {
+      ahead = cur.ahead;
+      behind = cur.behind;
+    } else if (cur) {
+      // upstream 이 없어도 같은 이름의 원격 브랜치가 있으면 그 ref 로 세어, @리모트 표기는 붙었는데
+      // 화살표만 빠지는 어긋남을 막는다. 결과는 메타 캐시에 넣어 새로고침마다 다시 띄우지 않는다 —
+      // 조회가 실패해 빈 값이어도 시도했다는 사실을 남긴다(안 그러면 같은 지문 동안 매번 띄운다).
+      const cacheIsCurrent = !!_metaCache && !!fingerprint && _metaFingerprint === fingerprint && _metaCacheCwd === state.cwd;
+      let raw = cacheIsCurrent && typeof _metaCache.abFallbackRaw === 'string' ? _metaCache.abFallbackRaw : null;
+      if (raw === null) {
+        const remote = currentBranchRemote();
+        raw = remote ? await gitExec(
+          ['--no-optional-locks', 'rev-list', '--left-right', '--count', 'refs/remotes/' + remote + '/' + cur.name + '...HEAD'],  // i18n-ok: git ref 경로
+          state.cwd,
+        ) : '';
+        if (cacheIsCurrent) _metaCache.abFallbackRaw = raw;
       }
+      const abParts = raw.trim().split(/\s+/);
+      behind = parseInt(abParts[0]) || 0;
+      ahead = parseInt(abParts[1]) || 0;
     }
+    state.ahead = ahead;
+    state.behind = behind;
   }
-  const abParts = aheadBehindRaw.trim().split(/\s+/);
-  state.behind = parseInt(abParts[0]) || 0;
-  state.ahead = parseInt(abParts[1]) || 0;
 
   if (metadataOnly) {
     applyWindowTitle();
@@ -1896,21 +2062,10 @@ async function computeRepoLogFingerprint(stashHashes, limit) {
   const sep = (process.platform === 'win32') ? '\\' : '/';
   const refsSig = await computeRefsTreeSignature(common).catch(() => '');
   if (!refsSig) return '';
-  const worktreeHeads = async () => {
-    let entries = [];
-    try {
-      const res = await hecaton.fs.read_dir({ path: common + sep + 'worktrees' });
-      if (res && res.ok !== false && Array.isArray(res.entries)) entries = res.entries;
-    } catch { /* 링크된 워크트리가 없다 */ }
-    const names = entries.filter(e => e && e.is_dir).map(e => e.name).sort();
-    const times = await Promise.all(names.map(name =>
-      statMtimeOrMissing(common + sep + 'worktrees' + sep + name + sep + 'HEAD')));
-    return names.map((name, i) => name + '=' + times[i]).join(',');
-  };
   const [packed, mainHead, linked] = await Promise.all([
     statMtimeOrMissing(common + sep + 'packed-refs'),
     statMtimeOrMissing(common + sep + 'HEAD'),
-    worktreeHeads(),
+    linkedWorktreeHeadsSignature(common),
   ]);
   return [LOG_CACHE_VERSION, refsSig, packed, mainHead, linked, stashHashes.join(','), limit].join('\x1e');
 }
