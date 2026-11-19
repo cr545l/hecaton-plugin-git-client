@@ -18,6 +18,7 @@ const { calcGraphRows } = require('./graph');
 const { acquireSpinner, releaseSpinner, beginPanelLoading, endPanelLoading, startSettleOp, endSettleOp } = require('./spinner');
 const { applyWindowTitle } = require('./title');
 const { stripDiffFileHeaders } = require('./text');
+const { lineKeys, anchorOffset } = require('./scroll-anchor');
 
 function findHeadCommitHash(commits) {
   for (const c of commits) {
@@ -2396,14 +2397,17 @@ function buildLogGraphRows(rawCommits, stashFullHashes) {
 
 // 정렬 모드 변경용 — 캐시된 커밋으로 그래프 행만 다시 만들고 선택 커밋을 해시로 복원한다.
 // 캐시가 없으면 false를 돌려줘 호출부가 refreshLog()로 폴백하게 한다.
-function rebuildLogGraphRows() {
+// options.keepView: 표시 설정은 그대로이고 다시 그리기만 하는 경우(갱신의 캐시 적중). 스크롤 고정을
+// 풀면 사용자가 스크롤해 커서를 화면 밖에 둔 채일 때 다음 그리기가 커서 쪽으로 화면을 끌고 간다 —
+// 갱신마다(상태 갱신 한 번에 한 번) 히스토리가 튀었다.
+function rebuildLogGraphRows(options = {}) {
   if (!_lastGraphCommits) return false;
   const selIdx = state.logSelectables[state.logCursor];
   const selectedHash = (selIdx !== undefined && state.logItems[selIdx]) ? state.logItems[selIdx].hash : null;
 
   applyLogGraphRows(buildLogGraphRows(_lastGraphCommits, _lastGraphStashHashes || new Set()));
 
-  ui.logScrollPin = undefined;
+  if (!options.keepView) ui.logScrollPin = undefined;
   if (selectedHash) {
     const found = state.logSelectables.findIndex(i => state.logItems[i] && state.logItems[i].hash === selectedHash);
     if (found >= 0) state.logCursor = found;
@@ -2411,7 +2415,19 @@ function rebuildLogGraphRows() {
   return true;
 }
 
+const logRowKey = row => (row && row.type === 'commit' && row.hash) ? row.hash : null;
+
+// 다시 읽은 목록에서도 보던 자리를 지킨다(scroll-anchor.js). 순번만 들고 있으면 새 커밋이 맨 위에
+// 들어올 때마다 목록이 그 수만큼 밀리고, 선택도 그 순번에 온 다른 커밋으로 바뀌었다.
+// 맨 위 — 첫 커밋을 고른 채 첫 줄을 보고 있으면 — 예전처럼 순번을 둔다: 새 커밋이 보이고 선택도
+// 맨 위를 따라간다(커밋한 직후 새 커밋이 골라져 있는 것).
 function applyLogGraphRows(graphRows) {
+  const prevItems = state.logItems;
+  const prevCursor = state.logCursor;
+  const prevSel = state.logSelectables[prevCursor];
+  const selectedHash = (prevSel !== undefined && prevItems[prevSel]) ? prevItems[prevSel].hash : null;
+  const keepView = prevItems.length > 0 && !(prevCursor === 0 && state.logScrollOffset === 0);
+  const prevKeys = keepView ? lineKeys(prevItems, logRowKey) : null;
   state.logItems = [];
   state.logSelectables = [];
   for (const row of graphRows) {
@@ -2419,6 +2435,17 @@ function applyLogGraphRows(graphRows) {
       state.logSelectables.push(state.logItems.length);
     }
     state.logItems.push(row);
+  }
+  if (keepView) {
+    if (selectedHash) {
+      const found = state.logSelectables.findIndex(i => state.logItems[i].hash === selectedHash);
+      if (found >= 0 && found !== prevCursor) {
+        // 스크롤로 커서를 화면 밖에 둔 고정(logScrollPin)은 커서 순번에 붙어 있다 — 같이 옮긴다.
+        if (ui.logScrollPin === prevCursor) ui.logScrollPin = found;
+        state.logCursor = found;
+      }
+    }
+    state.logScrollOffset = anchorOffset(prevKeys, lineKeys(state.logItems, logRowKey), state.logScrollOffset, 200);
   }
   if (state.logCursor >= state.logSelectables.length) {
     state.logCursor = Math.max(0, state.logSelectables.length - 1);
@@ -2491,7 +2518,7 @@ function refreshLog(options = {}) {
     if (cacheHit) {
       // 커밋은 그대로여도 리커버리 토글·필터 지정은 그 사이 바뀌었을 수 있다.
       // 원본 커밋 캐시로 다시 그려 현재 표시 설정을 반영한다.
-      rebuildLogGraphRows();
+      rebuildLogGraphRows({ keepView: true });
       state.logLoading = false;
       if (state.rightView === 'log') {
         updateLogDetail();
@@ -2616,8 +2643,6 @@ function loadMoreLog() {
 
   _logRequestedLimit += LOG_PAGE_SIZE;
   const targetLimit = _logRequestedLimit;
-  const keepCursor = state.logCursor;
-  const keepScrollOffset = state.logScrollOffset;
 
   const stashRefList = state.stashes;
   ui.stashMap = new Map();
@@ -2671,10 +2696,10 @@ function loadMoreLog() {
     }
     state.logLoadFailed = false;
     const commits = parseLogRaw(logRes.text, recovery, recoveryHashSet);
+    // 커서·위치는 applyLogGraphRows 가 보던 자리에 맞춘다. 예전에는 요청할 때의 값으로 되돌렸는데,
+    // 더 읽기는 목록 끝으로 스크롤할 때 시작되므로 읽는 동안 더 내려간 만큼 화면이 되돌아갔다.
     applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
     _lastGraphHasRecovery = ui.logShowRecovery;
-    state.logCursor = Math.min(keepCursor, Math.max(0, state.logSelectables.length - 1));
-    state.logScrollOffset = keepScrollOffset;
     state.logLoadedLimit = targetLimit;
     state.logHasMore = commits.length >= targetLimit;
     if (state.rightView === 'log') updateLogDetail();
@@ -2716,13 +2741,23 @@ function rememberCommitDetail(key, raw) {
   }
 }
 
+// 지금 상세에 올라 있는(또는 올리는 중인) 커밋과 그 단계 — 'header'(헤더만) | 'loading' | 'full'.
+// 갱신은 로그가 그대로여도 이 함수를 다시 부른다(상태 갱신 한 번에 한 번). 같은 커밋이어도 매번 헤더만
+// 남겼다가 패치를 다시 얹어서, 그 사이 한 프레임 동안 상세가 짧아지고 스크롤 위치가 0으로 잘렸으며
+// 접어 둔 파일도 펼쳐졌다(2026-11-19 Com2uX 창 기록: 상태 갱신 직후마다 상세 영역이 한 줄 올라갔다
+// 26~56ms 뒤 돌아옴). 같은 커밋이 이미 있거나 오는 중이면 그대로 둔다.
+let _logDetailKey = '';
+let _logDetailPhase = '';
+
 function updateLogDetail(options = {}) {
-  ui.collapsedDetailFiles.clear();
-  state.diffScrollX = 0;
   const item = selectedLogRef();
   if (!item) {
+    ui.collapsedDetailFiles.clear();
+    state.diffScrollX = 0;
     endPanelLoading('logDetail');
     state.logDetailLines = [];
+    _logDetailKey = '';
+    _logDetailPhase = '';
     return;
   }
   const lines = [];
@@ -2758,8 +2793,19 @@ function updateLogDetail(options = {}) {
   lines.push(...recoveryLines);
   lines.push(separator);
 
+  // 헤더(해시·작성자·날짜·유실 정보)가 같으면 같은 상세다.
+  const detailIdentity = state.cwd + '\n' + lines.join('\n');
+  if (detailIdentity === _logDetailKey && state.logDetailLines.length > 0
+    && (_logDetailPhase === 'full' || _logDetailPhase === 'loading' || options.headerOnly)) {
+    return;
+  }
+  ui.collapsedDetailFiles.clear();
+  state.diffScrollX = 0;
+
   // Show header immediately, load body/diff async.
   state.logDetailLines = [...lines];
+  _logDetailKey = detailIdentity;
+  _logDetailPhase = options.headerOnly ? 'header' : 'loading';
   const seq = ++_logDetailSeq;
   if (options.headerOnly) { endPanelLoading('logDetail'); return; }
   // 본문/패치가 도착할 때까지 상세 끝에 스피너를 붙인다.
@@ -2805,11 +2851,13 @@ function updateLogDetail(options = {}) {
       }
     }
     state.logDetailLines = detailLines;
+    _logDetailPhase = 'full';
     require('./render').render();
   }, () => {
     // 실패로 끝나도 스피너는 걷는다. 더 새 요청이 떠 있으면 그 쪽 것은 건드리지 않는다.
     if (_logDetailSeq !== seq) return;
     endPanelLoading('logDetail');
+    _logDetailPhase = 'header';   // 다음에 다시 부르면 다시 읽는다
     require('./render').render();
   });
 }

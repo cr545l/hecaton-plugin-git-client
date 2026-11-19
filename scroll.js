@@ -59,6 +59,16 @@ function depthOf() {
 let _supported; // undefined = not probed yet
 let _deps = null; // { render, maybeLoadMoreLog }
 
+// ── 스크롤 이상 징후 기록 ──
+// 호스트가 스크롤을 맡는 동안 플러그인이 그 위치를 덮어쓰거나(scroll.set) 영역을 다시 등록하면
+// (scroll.region) 내용이 튄다. 정상적인 순수 스크롤에서는 둘 다 일어나지 않아야 하므로, 일어나면
+// 동작 기록(timing 로그)에 남긴다 — 호스트 내부를 볼 수 없어 실제 창에서 원인을 잡는 유일한 단서다.
+// 사용자가 키보드·클릭으로 옮긴 경우도 set 이 나가므로, 직전 호스트 갱신과의 간격을 함께 적는다.
+const _lastUpdateAt = new Map();
+function traceScroll(kind, fields) {
+  try { require('./timing').record(kind, fields); } catch { /* 진단 기록 실패는 무시한다 */ }
+}
+
 // id -> last sent geometry signature / last offset the host knows about.
 const _sentRegions = new Map();
 const _hostOffsets = new Map();
@@ -111,16 +121,38 @@ function init(deps) {
     // 목록이 맨 위로 튄다 — 둘 다 받는다.
     const raw = p.top_row !== undefined ? p.top_row : p.topRow;
     const top = Math.max(0, raw | 0);
+    if (_hostOffsets.get(p.id) !== top) clearHoverFor(p.id);
     _hostOffsets.set(p.id, top);
     applyOffset(p.id, top);
     const left = Math.max(0, (p.left_col ?? p.leftCol ?? 0) | 0);
     _hostLeft.set(p.id, left);
     applyLeft(p.id, left);
+    _lastUpdateAt.set(p.id, Date.now());
     if (p.id === 'logList' && _deps.maybeLoadMoreLog) _deps.maybeLoadMoreLog();
-    // 휠·트랙패드 스크롤은 갱신이 몰려온다 — 묶어서 그릴 수단이 있으면 그쪽을 쓴다.
-    const draw = _deps.requestRender || _deps.render;
-    if (draw) draw();
+    // 곧바로 그린다. 호스트는 받아 둔 여분 줄(bank)로 버티며 이 프레임을 기다린다 — 그리기를 미루면
+    // 빠른 스크롤에서 여분을 넘어서 내용이 튈 수 있다(2026-11-18 묶어 그리기를 시도했다 되돌림).
+    if (_deps.render) _deps.render();
   });
+}
+
+// 호버 강조는 내용이 아니라 화면 위치(마우스 아래 줄)에 붙는다. 호스트가 세로로 스크롤하면 직전
+// 프레임의 강조 줄을 내용과 함께 밀었다가, 새 프레임이 제자리에 다시 그려 — 스크롤하는 내내 강조 줄이
+// 한 줄씩 튀었다(2026-11-18 재현: 포인터를 목록 위에 둔 채 한 줄 내릴 때마다 두 줄이 바뀜. 휠로 내릴
+// 때는 포인터가 늘 목록 위에 있다). 그래서 그 영역의 호버를 걷는다. 마우스가 다시 움직이면 입력 처리가
+// 그 자리의 호버를 되살린다.
+function clearHoverFor(id) {
+  switch (id) {
+    case 'left': ui.hoveredLeftPanelRow = -1; break;
+    case 'files': ui.hoveredFileRow = -1; break;
+    case 'logList': ui.hoveredLogRow = -1; break;
+    case 'freshList': ui.hoveredFreshRow = -1; break;
+    case 'diff': case 'logDetail': case 'freshDetail':
+      ui.hoveredDetailCopyZone = null;
+      ui.hoveredFileHeaderIdx = -1;
+      ui.hoveredDiffHunkIdx = -1;
+      ui.hoveredMergeZoneIndex = -1;
+      break;
+  }
 }
 
 // Single mapping between region ids and the plugin's scroll state. Pins keep
@@ -216,6 +248,11 @@ function syncRegions(defs) {
     const sig = d.row + ',' + d.col + ',' + d.width + ',' + d.height + ','
       + d.contentRows + ',' + d.contentCols + ',' + d.overscanRow + ',' + gutter + ',' + gutterRows + ',' + d.overscanCol;
     if (_sentRegions.get(d.id) !== sig) {
+      const prevSig = _sentRegions.get(d.id);
+      if (prevSig !== undefined) {
+        const since = _lastUpdateAt.has(d.id) ? Date.now() - _lastUpdateAt.get(d.id) : -1;
+        traceScroll('scroll-region', { id: d.id, from: prevSig, to: sig, sinceUpdateMs: since });
+      }
       _sentRegions.set(d.id, sig);
       // Geometry changed (resize/font/layout): the previous confirmation no
       // longer describes the buffer the host holds. Drop it so isReady() is
@@ -262,6 +299,11 @@ function syncRegions(defs) {
     }
     const left = d.left || 0;
     if (_hostOffsets.get(d.id) !== d.off || _hostLeft.get(d.id) !== left) {
+      // 호스트가 알던 위치를 바꾼다. 방금(1초 안) 호스트가 스크롤을 갱신한 영역이면 튐의 후보다.
+      if (_hostOffsets.has(d.id) && _lastUpdateAt.has(d.id) && Date.now() - _lastUpdateAt.get(d.id) < 1000) {
+        traceScroll('scroll-set', { id: d.id, top: d.off, host: _hostOffsets.get(d.id), left, hostLeft: _hostLeft.get(d.id),
+          sinceUpdateMs: Date.now() - _lastUpdateAt.get(d.id) });
+      }
       _hostOffsets.set(d.id, d.off);
       _hostLeft.set(d.id, left);
       hecaton.scroll.set({ id: d.id, top_row: d.off, left_col: left }).catch(() => {});

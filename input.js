@@ -1289,6 +1289,17 @@ function applyScrollbarOffset(target, offset) {
   if (target === 'logList') maybeLoadMoreLog();
 }
 
+// 호스트가 스크롤을 맡는 동안의 휠은 호스트가 처리한다고 보고 있다. 플러그인에도 오면 아래의 휠
+// 처리가 같은 휠을 한 번 더 움직여 내용이 튄다 — 실제로 오는지 동작 기록에 남긴다(2초에 한 줄).
+let _wheelTrace = { at: 0, count: 0 };
+function traceWheelWhileHostScroll(cb, cx, cy) {
+  _wheelTrace.count++;
+  const now = Date.now();
+  if (now - _wheelTrace.at < 2000) return;
+  try { require('./timing').record('wheel-while-host-scroll', { count: _wheelTrace.count, cb, cx, cy }); } catch { /* 진단 기록 실패는 무시한다 */ }
+  _wheelTrace = { at: now, count: 0 };
+}
+
 async function handleMouseData(data) {
   const mouseRegex = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
   let mouseMatch;
@@ -1747,6 +1758,7 @@ async function handleMouseData(data) {
 
     // Scroll wheel (native horizontal wheel or Shift+wheel = horizontal scroll)
     const isWheel = !isRelease && (cb & 64) !== 0;
+    if (isWheel && hostScroll.isActive()) traceWheelWhileHostScroll(cb, cx, cy);
     if (isWheel) {
       const wheelStep = (cb & 1) !== 0 ? 3 : -3;
       const wheelBtn = cb & 3; // 0/1: vertical up/down, 2/3: horizontal left/right

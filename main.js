@@ -25,7 +25,7 @@ const i18n = require('./i18n');
 const { state, ui, init: initState } = require('./state');
 const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, computeRefsTreeSignature, statusOutputMatchesState, updateDiff } = require('./refresh');
 const gitProcess = require('./git-process');
-const { render, requestRender } = require('./render');
+const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
 const { resolveWorkTreeRoot, findGitDirFromDisk } = require('./git');
@@ -100,7 +100,7 @@ async function main() {
 
   // Host-owned scroll: subscribe to scroll.update (host momentum → integer
   // offsets) and re-render. No-op on hosts without the scroll API.
-  hostScroll.init({ render, requestRender, maybeLoadMoreLog });
+  hostScroll.init({ render, maybeLoadMoreLog });
 
   process.stdin.on('data', async (data) => {
     // 초기 로딩 중에만 전체 입력을 막는다. 쓰기 작업(spinnerActive) 중에는 입력을
