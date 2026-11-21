@@ -12,6 +12,7 @@ const { highlightedRows } = require('./log-highlight');
 const { panelLoadingLabel } = require('./spinner');
 const actions = require('./actions');
 const queue = require('./queue');
+const { lineKeys, anchorOffset } = require('./scroll-anchor');
 
 // ── 버튼 스타일의 단일 규칙 ──
 // 지금 눌러도 되는 버튼만 평상시 기본 전경색으로 그리고, 막힌 버튼은 흐리게(dim) 둔다.
@@ -303,7 +304,26 @@ function caps() {
   return frameCaps;
 }
 
+// ── 몰려오는 입력의 그리기 묶기 ──
+//
+// 마우스 이동(호버·구분선/스크롤바 끌기)은 짧은 간격으로 몰려온다. 예전에는
+// 이벤트마다 곧바로 화면 전체를 그렸는데, 한 번 그리는 시간이 이벤트 간격보다 길면 밀린 이벤트가
+// 각자 또 그리느라 화면이 마우스를 점점 늦게 따라갔다(2026-11-18 Com2uX 실측: 브랜치 64·원격 221·
+// 워크트리 31 의 히스토리 화면에서 마우스 반응이 1초가량 늦었고, 같은 동작이 작은 저장소에서는
+// 괜찮았다 — 그리기 비용이 그 경계를 넘느냐의 차이다). 여기서는 한 프레임 안의 요청을 한 번으로
+// 묶고, 그릴 때의 최신 상태를 그린다. 그 사이 다른 곳에서 render() 를 부르면 그것으로 갈음한다.
+// 호스트 스크롤 갱신(scroll.update)에는 쓰지 않는다 — 호스트는 받아 둔 여분 줄로 버티며 곧바로 올
+// 프레임을 기다리므로, 미루면 빠른 스크롤에서 내용이 튈 수 있다(scroll.js 참고).
+const FRAME_MS = 16;
+let _frameTimer = null;
+
+function requestRender() {
+  if (_frameTimer) return;
+  _frameTimer = setTimeout(() => { _frameTimer = null; render(); }, FRAME_MS);
+}
+
 function render() {
+  if (_frameTimer) { clearTimeout(_frameTimer); _frameTimer = null; }
   // 모든 상태 변경은 render를 거치므로 여기서 영속화 디바운스를 건다
   persist.schedule();
   frameCaps = actions.context();
@@ -1348,6 +1368,16 @@ function renderBody() {
 
 // ── Left panel: branch tree ──
 
+// 브랜치 패널 줄의 정체 — 클릭 동작에 붙은 이름(섹션·그룹·브랜치·워크트리 경로·스태시)으로 잡는다.
+// 상단의 현재 브랜치 줄(reveal)은 목록의 같은 브랜치 줄과 따로 센다.
+function leftLineKey(entry) {
+  if (!entry) return null;
+  const id = entry.branch || entry.group || entry.section || entry.path || entry.shortHash;
+  return id ? entry.action + (entry.reveal ? '!' : '') + ':' + id : null;
+}
+// 직전 buildLeftPanel 의 줄 키 — ui.leftPanelScrollOffset 은 이 목록 기준의 위치다.
+let _leftLineKeys = null;
+
 function buildLeftPanel(w, h) {
   require('./branch-selection').sync();
   ui.leftPanelFullClickMap = null;
@@ -1737,6 +1767,12 @@ function buildLeftPanel(w, h) {
   }
 
   ui.leftTabInfo = null;
+  // 보던 위치보다 위에 줄이 끼거나 빠져도(fetch 로 들어온 팀원 브랜치, 다른 창의 브랜치·워크트리
+  // 작업) 보던 줄을 그 자리에 둔다(scroll-anchor.js). 위치가 바뀌면 프레임 끝의 scroll.set 으로
+  // 호스트 스크롤도 따라온다.
+  const leftKeys = lineKeys(clickMap, leftLineKey);
+  ui.leftPanelScrollOffset = anchorOffset(_leftLineKeys, leftKeys, ui.leftPanelScrollOffset, h);
+  _leftLineKeys = leftKeys;
   const maxScroll = Math.max(0, lines.length - h);
   ui.leftPanelFullClickMap = clickMap;
   ui.leftMaxScroll = maxScroll;
@@ -2194,6 +2230,7 @@ function buildDiffCommitPanel(w, h) {
       ui.diffMaxScrollX = preMaxScrollX;
       if (state.diffScrollX > preMaxScrollX) state.diffScrollX = preMaxScrollX;
       const scrollX = 0;
+      const rowW = renderableWidth(canvasW, state.diffScrollX, innerW, 'diff');
 
       if (sideBySideLayout) {
         // hunk 행 → hunk 인덱스 매핑 (버튼 렌더/클릭 존용)
@@ -2208,7 +2245,7 @@ function buildDiffCommitPanel(w, h) {
         // 화면과 bank 에 걸리는 줄만 그린다. 파일 전체를 매 프레임 하이라이트하면 긴 diff 에서
         // 스크롤 한 칸마다 수백 ms 가 들어 내용이 호스트 스크롤을 한참 늦게 따라온다.
         const sideRowCount = sideBySideLayout.rows.length;
-        const renderSideRow = (i) => renderSideBySideDiffRow(sideBySideLayout, i, state.currentDiffFile, scrollX, sideHunkOpts);
+        const renderSideRow = (i) => renderSideBySideDiffRow(sideBySideLayout, i, state.currentDiffFile, scrollX, sideHunkOpts, rowW);
         const maxScroll = Math.max(0, sideRowCount - diffH);
         ui.diffMaxScroll = maxScroll;
         if (state.diffScrollOffset > maxScroll) state.diffScrollOffset = maxScroll;
@@ -2242,8 +2279,12 @@ function buildDiffCommitPanel(w, h) {
             if (isHunkEntry(annotated[ri])) { unifiedHunkIdxByRow.set(ri, hi); hi++; }
           }
         }
+        // 줄은 화면에 나갈 수 있는 폭(rowW)까지만 만든다 — renderableWidth 주석 참고.
         const renderUnifiedRow = (entry, absIdx) => {
           if (hunkBtnLabel && isHunkEntry(entry)) {
+            // hunk 버튼은 캔버스 오른쪽 끝에 붙는다. 그 자리가 보일 수 있는 폭 밖이면 버튼까지
+            // 공백을 채울 필요가 없다.
+            if (hunkAvail + 1 >= rowW) return ' ' + colorizeDiffLine(entry.text, rowW - 1, state.currentDiffFile, scrollX);
             const base = ' ' + colorizeDiffLine(entry.text, hunkAvail - 1, state.currentDiffFile, scrollX);
             return padRight(base, hunkAvail + 1) + renderHunkButton(unifiedHunkIdxByRow.get(absIdx));
           }
@@ -2256,9 +2297,9 @@ function buildDiffCommitPanel(w, h) {
             } else {
               gutter = ' '.repeat(gutterW);
             }
-            return gutter + colorizeDiffLine(entry.text, contentW, state.currentDiffFile, scrollX);
+            return gutter + colorizeDiffLine(entry.text, Math.min(contentW, rowW - gutterW), state.currentDiffFile, scrollX);
           }
-          return ' ' + colorizeDiffLine(entry.text, canvasW - 1, state.currentDiffFile, scrollX);
+          return ' ' + colorizeDiffLine(entry.text, rowW - 1, state.currentDiffFile, scrollX);
         };
         const visible = annotated.slice(state.diffScrollOffset, state.diffScrollOffset + diffH);
         for (let vi = 0; vi < visible.length; vi++) {
@@ -2374,6 +2415,22 @@ function buildDiffCommitPanel(w, h) {
 
 // ── Right panel (log mode): history + detail (top/bottom split) ──
 
+// 그래프 열 폭 — 불러온 목록 전체에서 가장 넓은 줄의 폭(naturalWidth). 예전에는 보이는 줄만 보고
+// 정해서, 갈래가 많은 구간이 화면에 들어오고 나갈 때마다 폭이 바뀌어 스크롤하는 동안 목록 전체가
+// 옆으로 밀렸다(호스트가 줄을 미는 동안 다음 프레임에서 모든 줄의 글자 위치가 바뀐다 — 2026-11-18
+// Com2uX: 폭 1~26칸, 4,453줄을 내리는 동안 39번). 목록은 새로 읽을 때 배열째 바뀌므로 그것으로 캐시한다.
+let _logGraphWidthCache = { items: null, length: -1, width: 1 };
+function logGraphWidth(items) {
+  const c = _logGraphWidthCache;
+  if (c.items === items && c.length === items.length) return c.width;
+  let width = 1;
+  for (const item of items) {
+    if (item && item.naturalWidth > width) width = item.naturalWidth;
+  }
+  _logGraphWidthCache = { items, length: items.length, width };
+  return width;
+}
+
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
     if (state.logLoading) {
@@ -2435,15 +2492,8 @@ function buildLogPanel(w, h) {
   state.logScrollOffset = Math.max(0, Math.min(state.logScrollOffset, Math.max(0, state.logItems.length - listH)));
 
   // -- Item list --
-  const visibleItems = state.logItems.slice(state.logScrollOffset, state.logScrollOffset + listH);
-
-  // Compute max natural width among visible rows (trim trailing empty lanes)
-  let maxNaturalWidth = 1;
-  for (const item of visibleItems) {
-    if (item && item.naturalWidth && item.naturalWidth > maxNaturalWidth) {
-      maxNaturalWidth = item.naturalWidth;
-    }
-  }
+  // 그래프 열 폭은 목록 전체에서 가장 넓은 줄에 맞춘다(logGraphWidth 주석 참고).
+  const maxNaturalWidth = logGraphWidth(state.logItems);
   const graphRows = [];
   let graphWidth = 0;
   const logFocused = state.focusPanel === 'status';
@@ -2732,38 +2782,42 @@ function buildLogPanel(w, h) {
       const canvasW = innerW + logDetailMaxScrollX;
       ui.logDetailMaxScrollX = logDetailMaxScrollX;
       if (state.diffScrollX > logDetailMaxScrollX) state.diffScrollX = logDetailMaxScrollX;
+      const rowW = renderableWidth(canvasW, state.diffScrollX, innerW, 'logDetail');
       if (logDetailMaxScrollX > 0 && cH > 0) cH--;
 
       // Sticky file header: pin the file name when scrolled past its header.
-      // The pinned row consumes a viewport row, so the scroll limit depends on
-      // whether the limit position itself shows a sticky (a header landing
-      // exactly on the viewport top suppresses it). Resolve that fixed point
-      // BEFORE clamping so the plugin's limit and the host's contentRows/height
-      // limit agree at every alignment — any mismatch lets the trackpad
-      // overscroll at the bottom (jitter + revealed blank bank rows).
+      // 고정 줄은 스크롤 영역 바깥(바로 위)의 한 줄이고, 그 줄은 늘 비워 둔다.
+      // 호스트 스크롤 영역은 스크롤 위치에 따라 위치·높이가 바뀌면 안 되고(바뀌면 재등록하며
+      // 위치를 덮어써 내용이 튄다), 고정 줄은 호스트가 밀지 않는 곳에 있어야 한다(영역 안에 겹쳐
+      // 그리면 호스트가 한 줄 밀 때마다 같이 밀렸다가 다음 프레임에 되돌아와 맨 윗줄이 튄다).
+      // 2026-11-18 에 두 방식 다 겪었다 — 앞의 것은 13개 파일 커밋 300줄에 7번, 뒤의 것은 매 줄.
+      // 처음에는 파일이 있는 커밋에만 비워 뒀는데, 패치가 오기 전(헤더만 있을 때)에는 파일이 없어
+      // 커밋을 고를 때마다 상세가 한 줄 올라갔다가 패치가 오면 내려왔다(2026-11-19 창 기록).
+      const reserveSticky = cH >= 2;
+      if (reserveSticky) cH--;
+      // 맨 위 줄이 속한 파일. 다음 파일의 머리줄이 맨 위에 닿은 순간에는 앞 파일을 그대로 보인다 —
+      // 같은 머리줄 막대가 두 줄 겹쳐 보이지 않게. 첫 파일 앞(커밋 메시지)이면 없다.
       const stickyFileAt = (off) => {
-        if (cH < 2) return null;
         if (off <= 0 || off >= filteredDetail.length) return null;
-        if (filteredDetail[off].isFileHeader) return null;
         for (let i = off - 1; i >= 0; i--) {
           if (filteredDetail[i].isFileHeader) return filteredDetail[i].file;
           if (!filteredDetail[i].inDiff) return null;
         }
         return null;
       };
-      const stickyCandidate = Math.max(0, filteredDetail.length - (cH - 1));
-      const maxDetailScroll = stickyFileAt(stickyCandidate)
-        ? stickyCandidate
-        : Math.max(0, stickyCandidate - 1);
+      const maxDetailScroll = Math.max(0, filteredDetail.length - cH);
       ui.logDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
-      const stickyFile = stickyFileAt(state.diffScrollOffset);
-      if (stickyFile) {
-        cH--;
-        const collapsed = ui.collapsedDetailFiles.has(stickyFile);
-        const arrow = collapsed ? '+' : '-';
-        const label = ' ' + arrow + ' ' + stickyFile;
-        lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
+      if (reserveSticky) {
+        const stickyFile = stickyFileAt(state.diffScrollOffset);
+        if (stickyFile) {
+          const collapsed = ui.collapsedDetailFiles.has(stickyFile);
+          const arrow = collapsed ? '+' : '-';
+          const label = ' ' + arrow + ' ' + stickyFile;
+          lines.push(ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, innerW), innerW) + ansi.reset);
+        } else {
+          lines.push('');
+        }
         ui.detailFileHeaderMap.push(stickyFile);
       }
       ui.lastDetailContentH = cH;
@@ -2778,9 +2832,9 @@ function buildLogPanel(w, h) {
           const collapsed = ui.collapsedDetailFiles.has(entry.file);
           const arrow = collapsed ? '+' : '-';
           const label = ' ' + arrow + ' ' + entry.file;
-          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, canvasW), canvasW) + ansi.reset;
+          return ansi.bg(153, 121, 0) + ansi.fg(255, 255, 255) + padRight(truncate(label, rowW), rowW) + ansi.reset;
         } else if (/^\u2500{3,}$/.test(entry.text)) {
-          return colorizeDiffLine(entry.text, canvasW, entry.file);
+          return colorizeDiffLine(entry.text, rowW, entry.file);
         } else if (entry.inDiff && gutterW > 0) {
           let gutter;
           if (entry.oldNum != null || entry.newNum != null) {
@@ -2790,7 +2844,7 @@ function buildLogPanel(w, h) {
           } else {
             gutter = ' '.repeat(gutterW);
           }
-          return gutter + colorizeDiffLine(entry.text, canvasW - gutterW, entry.file, 0);
+          return gutter + colorizeDiffLine(entry.text, rowW - gutterW, entry.file, 0);
         } else {
           const rawText = (entry.text || '').replace(/[\r\n]/g, '');
           // Register copy zones for metadata lines (visible rows only)
@@ -2833,9 +2887,9 @@ function buildLogPanel(w, h) {
             ? ui.detailCopyZones.find(z => z.lineIdx === lineIdx && z.colStart === hz.colStart + state.diffScrollX && z.colEnd === hz.colEnd + state.diffScrollX)
             : null;
           if (hoveredZone) {
-            return ' ' + colorizeDiffLineWithUnderline(rawText, canvasW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
+            return ' ' + colorizeDiffLineWithUnderline(rawText, rowW - 1, hoveredZone.colStart - 1, hoveredZone.colEnd - 1);
           }
-          return ' ' + colorizeDiffLine(entry.text, canvasW - 1, entry.file, 0);
+          return ' ' + colorizeDiffLine(entry.text, rowW - 1, entry.file, 0);
         }
       }
       for (const entry of visible) {
@@ -2848,9 +2902,7 @@ function buildLogPanel(w, h) {
         const pick = (i) => (i >= 0 && i < filteredDetail.length) ? renderDetailRow(filteredDetail[i], -1) : '';
         ui.hostScrollRegions.push({
           id: 'logDetail', panel: 'right', relRow: detailRegionRelRow, width: innerW, height: cH,
-          // Not filteredDetail.length: the sticky row makes the viewport height
-          // position-dependent, so report whatever makes the host's limit
-          // (contentRows - height) equal the plugin's true reachable limit.
+          // 내용이 영역보다 짧아도 한계가 0 이 되도록 높이만큼은 보고한다.
           contentRows: maxDetailScroll + cH, off, contentCols: canvasW, left: state.diffScrollX, getLine: pick,
           bank: hostScroll.buildBank('logDetail', pick, off, cH),
         });
@@ -3085,13 +3137,14 @@ function buildFreshPanel(w, h) {
       const canvasW = innerW + freshDetailMaxScrollX;
       ui.freshDetailMaxScrollX = freshDetailMaxScrollX;
       if (state.diffScrollX > freshDetailMaxScrollX) state.diffScrollX = freshDetailMaxScrollX;
+      const rowW = renderableWidth(canvasW, state.diffScrollX, innerW, 'freshDetail');
       if (freshDetailMaxScrollX > 0 && cH > 0) cH--;
 
       const maxDetailScroll = Math.max(0, state.freshDetailLines.length - cH);
       ui.freshDetailMaxScroll = maxDetailScroll;
       if (state.diffScrollOffset > maxDetailScroll) state.diffScrollOffset = maxDetailScroll;
       const renderFreshDetailRow = (rawLine) =>
-        ' ' + colorizeDiffLine(rawLine, canvasW - 1, selItem ? selItem.file : null, 0);
+        ' ' + colorizeDiffLine(rawLine, rowW - 1, selItem ? selItem.file : null, 0);
       const detailRegionRelRow = lines.length;
       const visible = state.freshDetailLines.slice(state.diffScrollOffset, state.diffScrollOffset + cH);
       for (const rawLine of visible) {
@@ -3711,30 +3764,39 @@ function renderSideBySideCell(rawText, lineNum, numW, contentW, totalW, filePath
   return padRight(gutter + content, totalW);
 }
 
-function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts) {
+// limitW \ub97c \uc8fc\uba74 \uadf8 \uce78\uae4c\uc9c0\ub9cc \ub9cc\ub4e0\ub2e4(renderableWidth). \uae34 \uc904\uc774 \uc788\uc73c\uba74 \ub450 \uce78\uc774 \uac01\uac01 \uadf8 \uc904 \uae38\uc774\ub9cc\ud07c
+// \ub113\uc5b4\uc838, \uc9e7\uc740 \uc904\ub3c4 \uc591\ucabd\uc744 \ub05d\uae4c\uc9c0 \uacf5\ubc31\uc73c\ub85c \ucc44\uc6b0\ub290\ub77c \ud55c \uc904\uc774 \ubc31\ub9cc \uc790\ub97c \ub118\uc5c8\ub2e4.
+function renderSideBySideDiffRow(layout, rowIdx, filePath, scrollX, hunkOpts, limitW) {
   const row = layout.rows[rowIdx];
   if (!row) return '';
+  const limit = limitW > 0 ? limitW : Infinity;
   const gap = colors.border + ' \u2502 ' + ansi.reset;
+  const leftLimit = Math.min(layout.leftW, limit);
+  const rightLimit = Math.min(layout.rightW, limit - (layout.leftW + 3));
+  const showsRight = rightLimit > 0;
   if (hunkOpts && row.type === 'hunk') {
+    if (hunkOpts.avail + 1 >= limit) return ' ' + colorizeDiffLine(row.text, limit - 1, filePath, 0);
     const base = ' ' + colorizeDiffLine(row.text, hunkOpts.avail - 1, filePath, 0);
     return padRight(base, hunkOpts.avail + 1) + hunkOpts.renderButton(hunkOpts.idxByRow.get(rowIdx));
   }
   if (row.type === 'side-title') {
-    return colors.dim + padRight(t('ui.head'), layout.leftW) + ansi.reset +
-      gap +
-      colors.dim + padRight(t('ui.staged'), layout.rightW) + ansi.reset;
+    return colors.dim + padRight(t('ui.head'), leftLimit) + ansi.reset +
+      (showsRight ? gap + colors.dim + padRight(t('ui.staged'), rightLimit) + ansi.reset : '');
   }
   if (row.type === 'side-header') {
-    return colors.border + '\u2500'.repeat(layout.leftW) + ansi.reset +
-      gap +
-      colors.border + '\u2500'.repeat(layout.rightW) + ansi.reset;
+    return colors.border + '\u2500'.repeat(leftLimit) + ansi.reset +
+      (showsRight ? gap + colors.border + '\u2500'.repeat(rightLimit) + ansi.reset : '');
   }
   if (row.type === 'pair') {
-    const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW, layout.leftContentW, layout.leftW, filePath, scrollX);
-    const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW, layout.rightContentW, layout.rightW, filePath, scrollX);
+    const cellGutterW = layout.numW + 1;
+    const left = renderSideBySideCell(row.leftText, row.oldNum, layout.numW,
+      Math.max(0, Math.min(layout.leftContentW, leftLimit - cellGutterW)), leftLimit, filePath, scrollX);
+    if (!showsRight) return left;
+    const right = renderSideBySideCell(row.rightText, row.newNum, layout.numW,
+      Math.max(0, Math.min(layout.rightContentW, rightLimit - cellGutterW)), rightLimit, filePath, scrollX);
     return left + gap + right;
   }
-  return ' ' + colorizeDiffLine(row.text, layout.innerW - 1, filePath, 0);
+  return ' ' + colorizeDiffLine(row.text, Math.min(layout.innerW, limit) - 1, filePath, 0);
 }
 
 // refresh.js replaces diffLines when a new patch arrives. Like the log detail,
@@ -3948,7 +4010,20 @@ function colorizeDiffLineWithUnderline(rawLine, w, ulStart, ulEnd) {
   return fgColor + result + ansi.reset;
 }
 
+// 줄 하나를 만들 폭. 가로 캔버스(canvasW)는 스크롤 범위일 뿐이고, 한 번에 화면에 나갈 수 있는
+// 칸은 스크롤 위치부터 패널 폭에 호스트가 가로 스크롤용으로 받아 두는 여분(bank)을 더한 곳까지다.
+// 그 너머는 만들어도 sliceLine 이 버린다. 한 줄짜리 생성 파일(2026-11-18 Com2uX 의
+// adminScreenMessages.json, 55만 자)이 diff 에 걸리면 캔버스가 55만 칸이 되어, 예전에는 보이는
+// 줄마다 그 폭까지 공백을 채우고 긴 줄 전체를 구문 강조했다(처음 보일 때 한 번에 수백 ms).
+function renderableWidth(canvasW, scrollX, viewW, regionId) {
+  return Math.min(canvasW, Math.max(0, scrollX || 0) + viewW + hostScroll.depthOf(regionId).after);
+}
+
 function colorizeDiffLine(rawLine, w, filePath, scrollX) {
+  // 보일 수 있는 앞부분만 다룬다. 칸을 차지하지 않는 것은 지울 \r·\n 뿐이고 서로게이트 쌍도 두
+  // 단위에 한 칸 이상이라, (스크롤+폭)의 두 배 단위를 남기면 보일 칸이 모자라지 않는다.
+  const keepUnits = 2 * (Math.max(0, scrollX || 0) + Math.max(0, w || 0)) + 16;
+  if (rawLine.length > keepUnits) rawLine = rawLine.substring(0, keepUnits);
   rawLine = expandDiffTabs(rawLine.replace(/[\r\n]/g, ''));
   // Don't apply horizontal scroll to metadata/header lines
   const sx = isDiffMetaLine(rawLine) ? 0 : (scrollX || 0);
@@ -4030,4 +4105,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };
+module.exports = { render, requestRender, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };

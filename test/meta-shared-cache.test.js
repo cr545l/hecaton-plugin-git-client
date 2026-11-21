@@ -90,7 +90,7 @@ function repo(t) {
   return { base, root, gitDir: path.join(root, '.git') };
 }
 
-const META = ['stash', 'for-each-ref', 'remote', 'worktree', 'rev-list'];
+const META = ['stash', 'for-each-ref', 'remote', 'worktree'];
 const metaRuns = () => commands.filter(args => META.some(name => args.includes(name))).map(args => META.find(name => args.includes(name)));
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 

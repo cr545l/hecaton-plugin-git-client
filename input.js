@@ -27,7 +27,7 @@ const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
 const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
-const { render, revealBranch } = require('./render');
+const { render, requestRender, revealBranch } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildBranchesContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
@@ -1289,6 +1289,17 @@ function applyScrollbarOffset(target, offset) {
   if (target === 'logList') maybeLoadMoreLog();
 }
 
+// 호스트가 스크롤을 맡는 동안의 휠은 호스트가 처리한다고 보고 있다. 플러그인에도 오면 아래의 휠
+// 처리가 같은 휠을 한 번 더 움직여 내용이 튄다 — 실제로 오는지 동작 기록에 남긴다(2초에 한 줄).
+let _wheelTrace = { at: 0, count: 0 };
+function traceWheelWhileHostScroll(cb, cx, cy) {
+  _wheelTrace.count++;
+  const now = Date.now();
+  if (now - _wheelTrace.at < 2000) return;
+  try { require('./timing').record('wheel-while-host-scroll', { count: _wheelTrace.count, cb, cx, cy }); } catch { /* 진단 기록 실패는 무시한다 */ }
+  _wheelTrace = { at: now, count: 0 };
+}
+
 async function handleMouseData(data) {
   const mouseRegex = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
   let mouseMatch;
@@ -1309,24 +1320,26 @@ async function handleMouseData(data) {
     const div2Col = midStart + L.middleW;
 
     // Motion events (cb bit 5 set) -> drag resize / hover
+    // 마우스가 움직이는 내내 몰려오므로 그리기는 한 프레임에 한 번으로 묶는다(render.js requestRender).
+    // 브랜치 끌기만은 놓을 자리가 바뀔 때만 그리고, 그 그리기가 호스트 툴팁을 띄우므로 곧바로 그린다.
     if ((cb & 32) !== 0) {
       if (ui.dragging === 'vertical') {
         ui.verticalDividerRatio = Math.max(1 / L.width, Math.min(0.5, (cx - L.startCol) / L.width));
-        render();
+        requestRender();
         continue;
       }
       if (ui.dragging === 'vertical2') {
         const remaining = L.width - L.leftW - L.divider1W;
         const relX = cx - midStart;
         ui.filesDividerRatio = Math.max(0.15, Math.min(0.7, relX / remaining));
-        render();
+        requestRender();
         continue;
       }
       if (ui.dragging === 'horizontal') {
         const contentH = Math.max(1, L.bodyH - 2);
         const relY = cy - bodyTop;
         ui.logListRatio = Math.max(0.1, Math.min(0.9, relY / contentH));
-        render();
+        requestRender();
         continue;
       }
       if (ui.dragging === 'scrollbar') {
@@ -1334,7 +1347,7 @@ async function handleMouseData(data) {
         const relY = cy - info.trackTop;
         const ratio = Math.max(0, Math.min(1, relY / Math.max(1, info.trackH - 1)));
         applyScrollbarOffset(info.target, Math.round(ratio * info.maxScroll));
-        render();
+        requestRender();
         continue;
       }
 
@@ -1649,7 +1662,7 @@ async function handleMouseData(data) {
             setMouseShape('default');
           }
         }
-        render();
+        requestRender();
       }
       continue;
     }
@@ -1745,6 +1758,7 @@ async function handleMouseData(data) {
 
     // Scroll wheel (native horizontal wheel or Shift+wheel = horizontal scroll)
     const isWheel = !isRelease && (cb & 64) !== 0;
+    if (isWheel && hostScroll.isActive()) traceWheelWhileHostScroll(cb, cx, cy);
     if (isWheel) {
       const wheelStep = (cb & 1) !== 0 ? 3 : -3;
       const wheelBtn = cb & 3; // 0/1: vertical up/down, 2/3: horizontal left/right

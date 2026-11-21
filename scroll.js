@@ -59,6 +59,16 @@ function depthOf() {
 let _supported; // undefined = not probed yet
 let _deps = null; // { render, maybeLoadMoreLog }
 
+// ── 스크롤 이상 징후 기록 ──
+// 호스트가 스크롤을 맡는 동안 플러그인이 그 위치를 덮어쓰거나(scroll.set) 영역을 다시 등록하면
+// (scroll.region) 내용이 튄다. 정상적인 순수 스크롤에서는 둘 다 일어나지 않아야 하므로, 일어나면
+// 동작 기록(timing 로그)에 남긴다 — 호스트 내부를 볼 수 없어 실제 창에서 원인을 잡는 유일한 단서다.
+// 사용자가 키보드·클릭으로 옮긴 경우도 set 이 나가므로, 직전 호스트 갱신과의 간격을 함께 적는다.
+const _lastUpdateAt = new Map();
+function traceScroll(kind, fields) {
+  try { require('./timing').record(kind, fields); } catch { /* 진단 기록 실패는 무시한다 */ }
+}
+
 // id -> last sent geometry signature / last offset the host knows about.
 const _sentRegions = new Map();
 const _hostOffsets = new Map();
@@ -111,14 +121,38 @@ function init(deps) {
     // 목록이 맨 위로 튄다 — 둘 다 받는다.
     const raw = p.top_row !== undefined ? p.top_row : p.topRow;
     const top = Math.max(0, raw | 0);
+    if (_hostOffsets.get(p.id) !== top) clearHoverFor(p.id);
     _hostOffsets.set(p.id, top);
     applyOffset(p.id, top);
     const left = Math.max(0, (p.left_col ?? p.leftCol ?? 0) | 0);
     _hostLeft.set(p.id, left);
     applyLeft(p.id, left);
+    _lastUpdateAt.set(p.id, Date.now());
     if (p.id === 'logList' && _deps.maybeLoadMoreLog) _deps.maybeLoadMoreLog();
+    // 곧바로 그린다. 호스트는 받아 둔 여분 줄(bank)로 버티며 이 프레임을 기다린다 — 그리기를 미루면
+    // 빠른 스크롤에서 여분을 넘어서 내용이 튈 수 있다(2026-11-18 묶어 그리기를 시도했다 되돌림).
     if (_deps.render) _deps.render();
   });
+}
+
+// 호버 강조는 내용이 아니라 화면 위치(마우스 아래 줄)에 붙는다. 호스트가 세로로 스크롤하면 직전
+// 프레임의 강조 줄을 내용과 함께 밀었다가, 새 프레임이 제자리에 다시 그려 — 스크롤하는 내내 강조 줄이
+// 한 줄씩 튀었다(2026-11-18 재현: 포인터를 목록 위에 둔 채 한 줄 내릴 때마다 두 줄이 바뀜. 휠로 내릴
+// 때는 포인터가 늘 목록 위에 있다). 그래서 그 영역의 호버를 걷는다. 마우스가 다시 움직이면 입력 처리가
+// 그 자리의 호버를 되살린다.
+function clearHoverFor(id) {
+  switch (id) {
+    case 'left': ui.hoveredLeftPanelRow = -1; break;
+    case 'files': ui.hoveredFileRow = -1; break;
+    case 'logList': ui.hoveredLogRow = -1; break;
+    case 'freshList': ui.hoveredFreshRow = -1; break;
+    case 'diff': case 'logDetail': case 'freshDetail':
+      ui.hoveredDetailCopyZone = null;
+      ui.hoveredFileHeaderIdx = -1;
+      ui.hoveredDiffHunkIdx = -1;
+      ui.hoveredMergeZoneIndex = -1;
+      break;
+  }
 }
 
 // Single mapping between region ids and the plugin's scroll state. Pins keep
@@ -151,21 +185,47 @@ function moveHorizontal(id, delta) {
   hecaton.scroll.set({ id, left_col: left }).catch(() => {});
 }
 
+// 보이는 칸이 끝나면 멈춘다 — 줄 전체를 글자 단위로 쪼개지 않는다. 예전에는 줄 전체를 정규식으로
+// 토큰 배열로 만든 뒤 앞쪽만 썼다. 한 줄짜리 생성 파일(2026-11-18 Com2uX 의 adminScreenMessages.json,
+// 55만 자)을 건드린 커밋을 고르면 상세 패널의 줄이 모두 그 폭까지 채워져, 그리기 한 번에 보이는
+// 줄 수 × 55만 개의 토큰을 만들었다(JIT 없는 Node 로 한 프레임 250ms, QuickJS 는 그보다 느리다).
+// 결과는 종전과 같다: SGR(ESC[…m)과 홀로 선 ESC 는 칸을 차지하지 않고, 보이는 칸이 끝난 뒤의
+// 첫 글자에서 멈추며(그 앞의 ESC 시퀀스는 담는다), 넓은 글자가 경계에 걸리면 공백으로 채운다.
 function sliceLine(value, start, width) {
   start = Math.max(0, start);
   width = Math.max(0, width);
   const end = start + width;
-  let out = '', col = 0, used = 0;
-  const tokens = String(value || '').match(/\x1b\[[0-9;]*m|[\s\S]/gu) || [];
-  for (const token of tokens) {
-    if (token.startsWith('\x1b')) { out += token; continue; }
-    const n = isWide(token.codePointAt(0)) ? 2 : 1;
+  const text = String(value || '');
+  let out = '', col = 0, used = 0, i = 0;
+  while (i < text.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
+    if (text.charCodeAt(i) === 0x1b) {
+      const seqEnd = sgrEnd(text, i);
+      out += text.substring(i, seqEnd);
+      i = seqEnd;
+      continue;
+    }
     if (col >= end) break;
+    const cp = text.codePointAt(i);
+    const units = cp > 0xFFFF ? 2 : 1;
+    const n = isWide(cp) ? 2 : 1;
     const overlap = Math.max(0, Math.min(end, col + n) - Math.max(start, col));
-    if (overlap) { out += overlap === n ? token : ' '.repeat(overlap); used += overlap; }
+    if (overlap) { out += overlap === n ? text.substring(i, i + units) : ' '.repeat(overlap); used += overlap; }
     col += n;
+    i += units;
   }
   return out + ' '.repeat(Math.max(0, width - used)) + '\x1b[0m';
+}
+
+// text[i] 가 ESC 일 때 그 시퀀스가 끝나는 위치. SGR(ESC [ 숫자·; m)이면 m 다음, 아니면 ESC 한 글자.
+function sgrEnd(text, i) {
+  if (text.charCodeAt(i + 1) !== 0x5b) return i + 1;
+  let j = i + 2;
+  while (j < text.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
+    const c = text.charCodeAt(j);
+    if ((c >= 0x30 && c <= 0x39) || c === 0x3b) j++;
+    else break;
+  }
+  return text.charCodeAt(j) === 0x6d ? j + 1 : i + 1;
 }
 
 function bankCol(id) { return ui.termCols + (BANK_SLOTS[id] || 0) * BANK_ROWS; }
@@ -188,6 +248,11 @@ function syncRegions(defs) {
     const sig = d.row + ',' + d.col + ',' + d.width + ',' + d.height + ','
       + d.contentRows + ',' + d.contentCols + ',' + d.overscanRow + ',' + gutter + ',' + gutterRows + ',' + d.overscanCol;
     if (_sentRegions.get(d.id) !== sig) {
+      const prevSig = _sentRegions.get(d.id);
+      if (prevSig !== undefined) {
+        const since = _lastUpdateAt.has(d.id) ? Date.now() - _lastUpdateAt.get(d.id) : -1;
+        traceScroll('scroll-region', { id: d.id, from: prevSig, to: sig, sinceUpdateMs: since });
+      }
       _sentRegions.set(d.id, sig);
       // Geometry changed (resize/font/layout): the previous confirmation no
       // longer describes the buffer the host holds. Drop it so isReady() is
@@ -234,6 +299,11 @@ function syncRegions(defs) {
     }
     const left = d.left || 0;
     if (_hostOffsets.get(d.id) !== d.off || _hostLeft.get(d.id) !== left) {
+      // 호스트가 알던 위치를 바꾼다. 방금(1초 안) 호스트가 스크롤을 갱신한 영역이면 튐의 후보다.
+      if (_hostOffsets.has(d.id) && _lastUpdateAt.has(d.id) && Date.now() - _lastUpdateAt.get(d.id) < 1000) {
+        traceScroll('scroll-set', { id: d.id, top: d.off, host: _hostOffsets.get(d.id), left, hostLeft: _hostLeft.get(d.id),
+          sinceUpdateMs: Date.now() - _lastUpdateAt.get(d.id) });
+      }
       _hostOffsets.set(d.id, d.off);
       _hostLeft.set(d.id, left);
       hecaton.scroll.set({ id: d.id, top_row: d.off, left_col: left }).catch(() => {});

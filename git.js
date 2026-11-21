@@ -859,9 +859,24 @@ function normalizePathForCompare(path) {
   return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
-async function gitWorktrees(cwd) {
+// `worktree list --porcelain` 원문. 어느 워크트리에서 돌려도 같은 출력이라(현재 워크트리 표시가
+// 없다) 저장소 단위로 공유할 수 있다 — 현재 워크트리 판정은 parseWorktreeList 가 cwd 로 한다.
+// 실패하면 '' 다(정상 저장소는 최소 메인 워크트리 한 블록을 낸다).
+async function gitWorktreeListRaw(cwd) {
   try {
-    const raw = (await git(['worktree', 'list', '--porcelain'], cwd)).replace(/\r/g, '').trim();
+    return (await git(['worktree', 'list', '--porcelain'], cwd)).replace(/\r/g, '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function gitWorktrees(cwd) {
+  return parseWorktreeList(await gitWorktreeListRaw(cwd), cwd);
+}
+
+function parseWorktreeList(text, cwd) {
+  try {
+    const raw = String(text || '').replace(/\r/g, '').trim();
     if (!raw) return [];
     const blocks = raw.split(/\n\s*\n/).filter(Boolean);
     const items = blocks.map((block, idx) => {
@@ -1114,8 +1129,16 @@ async function runNetworkOp(op, reuseWindowMs, run) {
   return err;
 }
 
+// 작업 이름은 fetch 의 범위마다 다르다 — 재사용 판정(coordinate.beginNetworkOp)이 이름이 같은
+// 성공 기록만 받아 주기 때문이다. 예전에는 셋 다 'fetch' 여서, 다른 창이 리모트 하나나 브랜치
+// 하나만 받은 직후(그 작업을 기다린 직후라면 거의 항상)의 전체 fetch 가 "방금 끝난 fetch" 로
+// 판정되어 실행되지 않았다.
+const FETCH_ALL_OP = 'fetch-all';
+const FETCH_REMOTE_OP = 'fetch-remote';
+const FETCH_REF_OP = 'fetch-ref';
+
 async function gitFetchAsync(cwd) {
-  return await runNetworkOp('fetch', FETCH_REUSE_WINDOW_MS,
+  return await runNetworkOp(FETCH_ALL_OP, FETCH_REUSE_WINDOW_MS,
     () => gitAsyncWrap(['fetch', '--all', '--prune', '--jobs=' + FETCH_JOBS], cwd));
 }
 // pull/push는 워크트리와 브랜치에 따라 결과가 달라 남의 실행 결과를 대신 쓸 수 없다.
@@ -1513,12 +1536,12 @@ async function gitPullFromRemoteAsync(cwd, remote, branch) {
 // refusing to fetch into branch로 거절한다. 둘 다 그대로 사용자에게 보여주면 된다.
 async function gitFetchIntoBranchAsync(cwd, remote, remoteBranch, localBranch) {
   // 특정 ref만 끌어오는 fetch라 남의 fetch 결과로 대체할 수 없다 — reuse 창은 0.
-  return await runNetworkOp('fetch', 0, () => gitAsyncWrap(['fetch', remote, remoteBranch + ':' + localBranch], cwd));
+  return await runNetworkOp(FETCH_REF_OP, 0, () => gitAsyncWrap(['fetch', remote, remoteBranch + ':' + localBranch], cwd));
 }
 // 리모트 하나만 페치한다 — 현재 브랜치를 upstream 최신으로 패스트포워드하기 전에 쓴다.
 // 다른 리모트까지 --all 로 받을 이유가 없고, 그 리모트의 결과를 재사용할 수도 없다(reuse 0).
 async function gitFetchRemoteAsync(cwd, remote) {
-  return await runNetworkOp('fetch', 0, () => gitAsyncWrap(['fetch', remote], cwd));
+  return await runNetworkOp(FETCH_REMOTE_OP, 0, () => gitAsyncWrap(['fetch', remote], cwd));
 }
 // 현재 브랜치의 "페치 후 패스트포워드"를 git 한 번으로 한다. 예전에는 fetch <remote> →
 // rev-parse → merge --ff-only 로 프로세스를 셋 띄웠는데, 프로세스 하나를 띄우는 데만 1.5초가
@@ -2163,7 +2186,7 @@ module.exports = {
   gitCheckoutOurs, gitCheckoutTheirs,
   gitMergeContinue, gitMergeAbort, gitCherryPickContinue, gitCherryPickAbort, gitCherryPickSkip,
   gitRevertContinue, gitRevertAbort, gitRevertSkip, gitWriteRebaseMessage,
-  gitBranches, parseUpstreamTrack, gitRemoteBranches, gitRemotes, gitWorktrees, gitReflogRecoveries, gitRemoteAdd,
+  gitBranches, parseUpstreamTrack, gitRemoteBranches, gitRemotes, gitWorktrees, gitWorktreeListRaw, parseWorktreeList, gitReflogRecoveries, gitRemoteAdd,
   gitRenameBranch, gitDeleteBranch, gitSetUpstream, gitUnsetUpstream, gitGetRemoteUrl,
   gitCherryPick, gitCherryPickNoCommit, gitRevert, gitCheckoutRef, gitCreateBranch, gitCreateTag,
   gitReset, gitMerge, gitFormatPatch, gitCommitInfo, gitCommitMessage,

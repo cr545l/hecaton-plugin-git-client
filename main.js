@@ -39,6 +39,7 @@ const path = require('path');
 const { createPollingClient } = require('./polling-client');
 const { createMetaReader } = require('./meta-signature');
 const { buildWorktreeSnapshot: collectWorktreeSnapshot } = require('./worktree-snapshot');
+const { onlyIndexChanged, refreshScopeFor, mergeAutoRefreshOptions } = require('./poll-change');
 
 async function main() {
   // 언어부터 정한다 - HECA_LOCALE 이 initialState.locale 로 이미 와 있으므로
@@ -409,12 +410,10 @@ async function setupGitWatcher() {
   let pendingAutoRefreshOptions = null;
   const sep = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/';
 
-  function mergeAutoRefreshOptions(existing, incoming) {
-    if (!existing) return { ...incoming };
-    if (existing.statusOnly === true && incoming.statusOnly === true) {
-      return { statusOnly: true };
-    }
-    return {};
+  // 현재 브랜치와 그 tip — 메타만 다시 읽은 뒤 HEAD 가 가리키는 커밋이 바뀌었는지 보는 데 쓴다.
+  function currentBranchTip() {
+    const cur = state.branches.find(b => b.isCurrent);
+    return cur && cur.hash ? cur.name + '\t' + cur.hash : '';
   }
 
   function triggerRefresh(options = {}) {
@@ -431,7 +430,11 @@ async function setupGitWatcher() {
       pendingAutoRefreshOptions = null;
       if (state.loading || state.minimized) return;
       if (state.mode !== 'normal') return;
+      const tipBefore = refreshOptions.metadataOnly ? currentBranchTip() : '';
       await refreshAsync(refreshOptions);
+      // 공용 refs 만 바뀐 줄 알았는데 이 워크트리의 브랜치 tip 이 옮겨졌다 — 다른 곳에서
+      // update-ref 등으로 옮긴 경우다. HEAD 기준 staged 목록이 달라졌을 수 있으니 status 를 잇는다.
+      if (tipBefore && currentBranchTip() && currentBranchTip() !== tipBefore) triggerRefresh({ statusOnly: true });
       if (!refreshOptions.statusOnly && state.rightView === 'log') refreshLog();
       if (state.rightView === 'fresh') refreshFresh();
       render();
@@ -509,13 +512,6 @@ async function setupGitWatcher() {
   // 전체 refresh 를 또 걸지 않는다(무거운 워크트리에서 status 한 번에 3초). 밖에서 같은
   // 틱에 인덱스를 바꿨다면 아래 워크트리 폴링이 목록 차이로 잡는다.
   const writesDone = () => (typeof gitProcess.completedWrites === 'function' ? gitProcess.completedWrites() : -1);
-  const onlyIndexChanged = (before, after) => {
-    const [beforeTimes, ...beforeRest] = before.split('\x1e');
-    const [afterTimes, ...afterRest] = after.split('\x1e');
-    if (beforeRest.join('\x1e') !== afterRest.join('\x1e')) return false;
-    const a = beforeTimes.split('|'), b = afterTimes.split('|');
-    return a.length === b.length && a[0] !== b[0] && a.slice(1).join('|') === b.slice(1).join('|');
-  };
   let metaPollWrites = writesDone();
   let lastMetaSig = (await readLocalMeta()).sig;
   let metaPolling = false;
@@ -551,8 +547,10 @@ async function setupGitWatcher() {
 
       if (sig !== lastMetaSig) {
         const ownIndexWrite = writes >= 0 && writes !== metaPollWrites && onlyIndexChanged(lastMetaSig, sig);
+        // 공용 부분만 바뀌었으면(다른 워크트리의 커밋, fetch) 메타만 다시 읽는다 — poll-change.js.
+        const scope = refreshScopeFor(lastMetaSig, sig);
         lastMetaSig = sig;
-        if (!ownIndexWrite) triggerRefresh();
+        if (!ownIndexWrite) triggerRefresh(scope);
       }
       metaPollWrites = writes;
     } finally {

@@ -305,3 +305,135 @@ test('청소는 오래된 진단 기록과 폴링 파일만 고르고 캐시·�
   ]);
   assert.deepEqual(coordinate.sweepTargets(null, now), []);
 });
+
+// ── 저장소 단위 조회 공유(sharedRepoQuery) ──
+// 같은 저장소의 워크트리마다 창이 하나씩 떠 있을 때, 공용 refs 가 바뀌면 모든 창이 같은 메타
+// 조회를 동시에 돌렸다. 결과가 워크트리와 무관한 조회는 저장소 단위로 한 번만 돌린다.
+
+function counter(value, share) {
+  const calls = { n: 0 };
+  const run = async () => { calls.n++; return { value, share: share === undefined ? value : share }; };
+  return { calls, run };
+}
+
+test('같은 지문의 저장된 결과가 있으면 조회를 돌리지 않는다', async () => {
+  reset();
+  const first = counter('RESULT-1');
+  const own = await coordinate.sharedRepoQuery('meta', 'KEY-A', first.run);
+  assert.deepEqual(own, { value: 'RESULT-1', shared: false });
+  assert.equal(first.calls.n, 1);
+
+  const second = counter('SHOULD-NOT-RUN');
+  const hit = await coordinate.sharedRepoQuery('meta', 'KEY-A', second.run);
+  assert.deepEqual(hit, { value: 'RESULT-1', shared: true });
+  assert.equal(second.calls.n, 0, '다른 창이 저장해 둔 결과를 그대로 써야 한다');
+});
+
+test('지문이 다르면 저장된 결과를 쓰지 않고 직접 돌린다', async () => {
+  reset();
+  await coordinate.sharedRepoQuery('meta', 'KEY-A', counter('OLD').run);
+  const next = counter('NEW');
+  const result = await coordinate.sharedRepoQuery('meta', 'KEY-B', next.run);
+  assert.deepEqual(result, { value: 'NEW', shared: false });
+  assert.equal(next.calls.n, 1);
+  assert.equal(readRaw('metacache.json').key, 'KEY-B', '새 결과가 저장돼야 한다');
+});
+
+test('실패한 조회(share 없음)는 저장하지 않는다', async () => {
+  reset();
+  const failed = { n: 0 };
+  const result = await coordinate.sharedRepoQuery('meta', 'KEY-A', async () => { failed.n++; return { value: 'PARTIAL', share: undefined }; });
+  assert.deepEqual(result, { value: 'PARTIAL', shared: false }, '이 창은 자기 결과를 그대로 받는다');
+  assert.equal(readRaw('metacache.json'), null, '실패를 남기면 다른 창이 빈 목록에 묶인다');
+  const retry = counter('OK');
+  await coordinate.sharedRepoQuery('meta', 'KEY-A', retry.run);
+  assert.equal(retry.calls.n, 1);
+});
+
+test('다른 창이 같은 지문으로 조회 중이면 기다렸다가 그 결과를 쓴다', async () => {
+  reset();
+  const keyHash = coordinate.hashKey('KEY-A');
+  writeRaw('metaflight.json', { owner: 'peer', keyHash, startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: 0 });
+  setTimeout(() => {
+    writeRaw('metacache.json', { key: 'KEY-A', savedAt: Date.now(), owner: 'peer', value: 'PEER-RESULT' });
+    writeRaw('metaflight.json', { owner: 'peer', keyHash, startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: Date.now() });
+  }, 400);
+  const mine = counter('MINE');
+  const result = await coordinate.sharedRepoQuery('meta', 'KEY-A', mine.run);
+  assert.deepEqual(result, { value: 'PEER-RESULT', shared: true });
+  assert.equal(mine.calls.n, 0, '같은 조회를 동시에 두 번 돌리지 않아야 한다');
+});
+
+test('기다리던 남의 조회가 결과 없이 끝나면 직접 돌린다', async () => {
+  reset();
+  const keyHash = coordinate.hashKey('KEY-A');
+  writeRaw('metaflight.json', { owner: 'peer', keyHash, startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: Date.now() });
+  const mine = counter('MINE');
+  const result = await coordinate.sharedRepoQuery('meta', 'KEY-A', mine.run);
+  assert.deepEqual(result, { value: 'MINE', shared: false });
+  assert.equal(mine.calls.n, 1);
+});
+
+test('heartbeat 가 끊긴 남의 조회는 기다리지 않는다', async () => {
+  reset();
+  const keyHash = coordinate.hashKey('KEY-A');
+  const old = Date.now() - 60000;
+  writeRaw('metaflight.json', { owner: 'peer', keyHash, startedAt: old, heartbeatAt: old, finishedAt: 0 });
+  const started = Date.now();
+  const mine = counter('MINE');
+  await coordinate.sharedRepoQuery('meta', 'KEY-A', mine.run);
+  assert.equal(mine.calls.n, 1);
+  assert.ok(Date.now() - started < 1000, '죽은 창의 기록에 묶이면 안 된다');
+});
+
+test('다른 지문으로 조회 중인 창은 기다리지 않는다', async () => {
+  reset();
+  writeRaw('metaflight.json', { owner: 'peer', keyHash: coordinate.hashKey('KEY-OTHER'), startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: 0 });
+  const mine = counter('MINE');
+  await coordinate.sharedRepoQuery('meta', 'KEY-A', mine.run);
+  assert.equal(mine.calls.n, 1);
+});
+
+test('조회를 마치면 진행 기록을 완료로 닫는다', async () => {
+  reset();
+  await coordinate.sharedRepoQuery('meta', 'KEY-A', counter('R').run);
+  const flight = readRaw('metaflight.json');
+  assert.equal(flight.owner, coordinate.INSTANCE_ID);
+  assert.equal(flight.keyHash, coordinate.hashKey('KEY-A'));
+  assert.ok(flight.finishedAt > 0, '완료로 닫히지 않으면 기다리던 창이 만료까지 묶인다');
+});
+
+test('유효 기간을 넘긴 저장 결과는 쓰지 않는다', async () => {
+  reset();
+  writeRaw('userconfigcache.json', { key: 'K', savedAt: Date.now() - 61000, owner: 'peer', value: 'OLD' });
+  const mine = counter('FRESH');
+  const result = await coordinate.sharedRepoQuery('userconfig', 'K', mine.run, { maxAgeMs: 60000 });
+  assert.deepEqual(result, { value: 'FRESH', shared: false });
+});
+
+test('force 면 저장된 결과가 있어도 직접 돌리고 다시 저장한다', async () => {
+  reset();
+  await coordinate.sharedRepoQuery('meta', 'KEY-A', counter('OLD').run);
+  const forced = counter('NEW');
+  const result = await coordinate.sharedRepoQuery('meta', 'KEY-A', forced.run, { force: true });
+  assert.deepEqual(result, { value: 'NEW', shared: false });
+  assert.equal(readRaw('metacache.json').value, 'NEW');
+});
+
+test('모양이 맞지 않는 저장 결과(다른 버전)는 미스로 친다', async () => {
+  reset();
+  writeRaw('metacache.json', { key: 'KEY-A', savedAt: Date.now(), owner: 'old', value: 42 });
+  const mine = counter('MINE');
+  const result = await coordinate.sharedRepoQuery('meta', 'KEY-A', mine.run, { validate: v => typeof v === 'string' });
+  assert.deepEqual(result, { value: 'MINE', shared: false });
+});
+
+test('지문이 없거나 공유 폴더를 쓸 수 없으면 그냥 직접 돌린다', async () => {
+  reset();
+  const noKey = counter('A');
+  assert.deepEqual(await coordinate.sharedRepoQuery('meta', '', noKey.run), { value: 'A', shared: false });
+  coordinate.configure('', WT_A);
+  const disabled = counter('B');
+  assert.deepEqual(await coordinate.sharedRepoQuery('meta', 'KEY-A', disabled.run), { value: 'B', shared: false });
+  assert.equal(noKey.calls.n + disabled.calls.n, 2);
+});

@@ -49,7 +49,9 @@ function configure(gitCommonDir, cwd) {
   const common = String(gitCommonDir || '').trim();
   if (!common) { _shareDir = ''; _dirReady = false; return; }
   const next = nodePath.join(common, SHARE_DIR_NAME);
-  if (next !== _shareDir) _dirReady = false;
+  // refresh.js 와 main.js 가 각자 rev-parse 결과로 부른다. 드라이브 문자 대소문자만 다른
+  // 같은 경로로 번갈아 불려도 매번 디렉터리를 다시 만들지 않게 대소문자를 무시해 견준다.
+  if (normalizePath(next) !== normalizePath(_shareDir)) _dirReady = false;
   _shareDir = next;
   const nextKey = hashKey(normalizePath(cwd));
   if (nextKey !== _cwdKey) { _peerSeenAt = {}; _lastPublishAt = {}; }
@@ -116,6 +118,100 @@ async function readRepoJson(kind) {
 async function writeRepoJson(kind, value) {
   if (!isEnabled() || !await ensureDir()) return false;
   return await writeJson(sharedPath(kind, false), value);
+}
+
+// ── 저장소 단위 조회 결과 공유 ──────────────────────────────────────────────
+//
+// 같은 저장소의 워크트리마다 창을 하나씩 띄우는 쓰임에서는 한 워크트리의 커밋 하나가 공용
+// refs 를 바꾸고, 모든 창이 같은 조회를 동시에 각자 돌렸다(2026-11-18 Com2uX 실측: 워크트리
+// 30여 개에 창 14개, 메타 조회 1,356회가 실제로는 303번의 변경이었고 한 번에 최대 13개 창이
+// 함께 돌았다 — git 시간의 63%). 결과가 워크트리와 무관한 조회는 여기서 한 번만 돌린다:
+//   1. 같은 입력(key)으로 저장된 결과가 있으면 그대로 쓴다.
+//   2. 다른 창이 같은 입력으로 조회 중이면 끝나기를 기다렸다가 그 결과를 쓴다.
+//   3. 아니면 직접 돌리고, 성공한 결과를 저장한다.
+// key 는 그 조회가 읽는 파일들의 지문이다 — 지문이 같으면 결과도 같다는 것이 전제다.
+// 기다림은 상대가 살아 있는(heartbeat) 동안, 최대 SHARED_QUERY_MAX_WAIT_MS 까지다. 그 뒤에는
+// 남의 조회를 건드리지 않고 내 것을 따로 돌린다 — 기다리다 화면이 묶이는 것보다 낫다.
+const SHARED_QUERY_HEARTBEAT_MS = 5000;
+const SHARED_QUERY_STALE_MS = 15000;
+const SHARED_QUERY_POLL_MS = 300;
+const SHARED_QUERY_MAX_WAIT_MS = 60000;
+
+async function readSharedResult(kind, key, maxAgeMs, validate) {
+  const cached = await readRepoJson(kind + 'cache');
+  if (!cached || cached.key !== key || cached.value === undefined) return undefined;
+  if (maxAgeMs > 0) {
+    const age = Date.now() - (cached.savedAt || 0);
+    // 시계 역행으로 생긴 미래 시각도 신선한 것으로 치지 않는다.
+    if (!(age >= 0 && age < maxAgeMs)) return undefined;
+  }
+  // 다른 버전의 코드가 남긴 모양이 다른 값은 미스로 친다.
+  if (validate && !validate(cached.value)) return undefined;
+  return cached.value;
+}
+
+// run() 은 { value, share } 를 돌려준다. value 는 이 창이 쓸 결과, share 는 다른 창에 넘길
+// 결과다 — share 가 undefined 면(실패한 조회) 저장하지 않는다. 실패를 저장하면 지문이 바뀔
+// 때까지 모든 창이 빈 목록에 묶인다.
+// 반환: { value, shared }. shared 가 true 면 value 는 저장돼 있던(남이 돌린) share 값이다.
+// opts.force     저장된 결과와 진행 중인 남의 조회를 무시하고 직접 돌린다(결과는 저장한다).
+// opts.maxAgeMs  저장된 결과의 유효 기간 — 지문으로 다 잡을 수 없는 입력이 있는 조회용.
+// opts.validate  저장된 값이 쓸 만한 모양인지.
+async function sharedRepoQuery(kind, key, run, opts) {
+  const force = !!(opts && opts.force);
+  const maxAgeMs = (opts && opts.maxAgeMs) || 0;
+  const validate = opts && opts.validate;
+  if (!key || !isEnabled() || !await ensureDir()) {
+    const own = await run();
+    return { value: own ? own.value : undefined, shared: false };
+  }
+  // 진행 기록에는 지문 대신 해시만 적는다 — 지문은 refs 목록이라 수십 KB 가 되고, 진행
+  // 기록은 기다리는 창들이 짧은 간격으로 읽는다. 해시가 우연히 겹쳐도 결과를 받을 때
+  // 지문 전체를 견주므로 엉뚱한 결과를 쓰지는 않는다(기다린 시간만 버린다).
+  const keyHash = hashKey(key);
+  if (!force) {
+    const hit = await readSharedResult(kind, key, maxAgeMs, validate);
+    if (hit !== undefined) return { value: hit, shared: true };
+    const deadline = Date.now() + SHARED_QUERY_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      const flight = await readRepoJson(kind + 'flight');
+      if (!flight || flight.owner === INSTANCE_ID || flight.keyHash !== keyHash) break;
+      if (flight.finishedAt) {
+        const done = await readSharedResult(kind, key, maxAgeMs, validate);
+        if (done !== undefined) return { value: done, shared: true };
+        break; // 상대의 조회가 실패로 끝났다 — 직접 돌린다.
+      }
+      if (Date.now() - (flight.heartbeatAt || 0) >= SHARED_QUERY_STALE_MS) break;
+      await new Promise(resolve => setTimeout(resolve, SHARED_QUERY_POLL_MS));
+    }
+  }
+  const record = { owner: INSTANCE_ID, keyHash, startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: 0 };
+  await writeRepoJson(kind + 'flight', record);
+  // heartbeat 쓰기를 한 줄로 세운다 — 늦게 끝난 heartbeat 가 완료 기록을 덮으면 기다리는
+  // 창들이 만료(SHARED_QUERY_STALE_MS)까지 헛되이 기다린다.
+  let pending = Promise.resolve();
+  const timer = setInterval(() => {
+    pending = pending.then(() => {
+      if (record.finishedAt) return null;
+      record.heartbeatAt = Date.now();
+      return writeRepoJson(kind + 'flight', record);
+    }).catch(() => null);
+  }, SHARED_QUERY_HEARTBEAT_MS);
+  if (timer && timer.unref) timer.unref();
+  let ownResult;
+  try {
+    ownResult = await run();
+    if (ownResult && ownResult.share !== undefined) {
+      // 완료 표시보다 먼저 써야 기다리던 창이 결과를 놓치지 않는다.
+      await writeRepoJson(kind + 'cache', { key, savedAt: Date.now(), owner: INSTANCE_ID, value: ownResult.share });
+    }
+  } finally {
+    clearInterval(timer);
+    record.finishedAt = Date.now();
+    await pending;
+    await writeRepoJson(kind + 'flight', record);
+  }
+  return { value: ownResult ? ownResult.value : undefined, shared: false };
 }
 
 // 동작 시간 기록(timing.js)의 저장. 인스턴스마다 한 파일(suffix 'prev' 는 직전 묶음)이다.
@@ -344,6 +440,8 @@ module.exports = {
   publishSharedSnapshot,
   readRepoJson,
   writeRepoJson,
+  sharedRepoQuery,
+  hashKey,
   beginNetworkOp,
   claimNetworkOp,
   endNetworkOp,
