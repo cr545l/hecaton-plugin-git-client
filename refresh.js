@@ -1,7 +1,7 @@
 const { readRebaseProgress } = require('./rebase-progress');
 const { t } = require('./i18n');
 const { state, ui, isCollapsedFileDir, toggleCollapsedFileDir, collapsedFileDirsVersion } = require('./state');
-const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, gitWorktreeListRaw, parseWorktreeList, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
+const { gitExec, gitExecChecked, gitReadJob, gitProcessSucceeded, gitStatusSplit, gitStatusPorcelain, gitStatusPaths, statusPathsFit, parseStatusPorcelain, statusSnapshotFromOutput, gitWorktreeListRaw, parseWorktreeList, gitReflogRecoveries, gitReadConflictFile, splitUpstreamRef, parseUpstreamTrack } = require('./git');
 
 const FRESH_TIME_WINDOWS = [
   { get label() { return t('refresh.pending'); }, days: 0 },
@@ -944,55 +944,11 @@ function currentBranchRemote() {
 // 통째로 비므로 status와 같은 수준으로 여유를 준다.
 const REFS_TIMEOUT_MS = 15000;
 
-// .git/refs 하위 loose ref 트리의 지문.
-// 디렉터리 mtime은 "직접 자식"이 바뀔 때만 갱신된다. refs/remotes/origin/foo를
-// 지우면 refs/remotes/origin의 mtime만 바뀌고 refs·refs/remotes는 그대로다.
-// 그래서 refs 한 곳만 stat하면 원격 브랜치 삭제/prune, 태그 추가/삭제,
-// 중첩 이름(feature/x) 브랜치 변경을 통째로 놓친다. 트리를 직접 훑어
-// "경로:mtime:size" 목록을 지문으로 만든다. packed-refs에 묶인 ref는
-// packed-refs 파일 mtime으로 별도 추적된다.
-const REFS_SCAN_MAX_ENTRIES = 4000;
-
-async function collectRefEntries(dirPath, relPath, out, budget) {
-  let res = null;
-  try {
-    res = await hecaton.fs.read_dir({ path: dirPath });
-  } catch { return; }
-  if (!res || !res.ok || !Array.isArray(res.entries)) return;
-  budget.scanned = true;
-  const sep = (process.platform === 'win32') ? '\\' : '/';
-  const subdirs = [];
-  for (const entry of res.entries) {
-    if (!entry || !entry.name) continue;
-    if (budget.remaining <= 0) { budget.truncated = true; break; }
-    budget.remaining--;
-    const rel = relPath ? relPath + '/' + entry.name : entry.name;
-    if (entry.is_dir) {
-      out.push(rel + '/');
-      subdirs.push([dirPath + sep + entry.name, rel]);
-    } else {
-      out.push(rel + ':' + (entry.mtime_ms || 0) + ':' + (entry.size_bytes || 0));
-    }
-  }
-  await Promise.all(subdirs.map(([p, r]) => collectRefEntries(p, r, out, budget)));
-}
-
-// refs 트리 지문 문자열. read_dir을 제공하지 않는 호스트나 스캔 실패 시 ''를
-// 반환해, 호출자가 기존 mtime 지문만으로 판단하도록(= 종전 동작) 폴백한다.
-async function computeRefsTreeSignature(gitDir) {
-  if (!gitDir) return '';
-  if (!hecaton || !hecaton.fs || typeof hecaton.fs.read_dir !== 'function') return '';
-  const sep = (process.platform === 'win32') ? '\\' : '/';
-  const out = [];
-  const budget = { remaining: REFS_SCAN_MAX_ENTRIES, truncated: false, scanned: false };
-  await collectRefEntries(gitDir + sep + 'refs', '', out, budget);
-  if (!budget.scanned) return '';
-  // read_dir 순서는 플랫폼/파일시스템마다 다르므로 정렬해 안정화한다.
-  out.sort();
-  // ref가 상한을 넘는 저장소는 부분 지문만 남는다. 지문 자체는 안정적이므로
-  // 오탐은 없고, 잘린 구간의 변경만 놓친다(= 종전 동작 수준).
-  if (budget.truncated) out.push(t('refresh.truncated'));
-  return "refs\n" + out.join('\n');  // i18n-ok: 캐시 지문 — 화면에 나가지 않는다
+// .git/refs 하위 loose ref 트리의 지문. 계산은 meta-signature.js 에 있다 — 서비스도 같은 것을 쓴다.
+// read_dir을 제공하지 않는 호스트나 스캔 실패 시 ''를 반환해, 호출자가 기존 mtime 지문만으로
+// 판단하도록(= 종전 동작) 폴백한다.
+function computeRefsTreeSignature(gitDir) {
+  return require('./meta-signature').computeRefsTreeSignature(hecaton, gitDir, t('refresh.truncated'));
 }
 
 // linked worktree에서는 HEAD/logs/HEAD만 per-worktree git dir에 있고
@@ -1034,7 +990,7 @@ async function computeMetaFingerprint(cwd, gitDir, commonDir) {
     Promise.all(targets.map(statMtimeOrMissing)),
     computeRefsTreeSignature(common).catch(() => ''),
   ]);
-  return stats.join('|') + '\x1e' + refsSig;
+  return stats.join('|') + '' + refsSig;
 }
 
 // 링크된 워크트리마다의 HEAD 시각 — "이름=mtime" 을 이름순으로 잇는다. `worktree list` 와
@@ -1205,7 +1161,11 @@ function shouldIncludeIgnored(options) {
   return options.includeIgnored === true || ui.collapsedSections.ignored === false;
 }
 
+// 지금 목록이 반영하는 status 가 적용된 시각. 이보다 늦게 시작한 조회만 목록보다 새것이다.
+let _statusAppliedAt = 0;
+
 function applyStatusSnapshot(snapshot, includeIgnored) {
+  _statusAppliedAt = Date.now();
   state._prevFileList = buildFileList();
   state.staged = snapshot.staged || [];
   state.unstaged = snapshot.unstaged || [];
@@ -1236,6 +1196,7 @@ function applyPathsSnapshot(snapshot, paths, dropEntries) {
     for (const entry of list) touched.add(entry.file);
   }
   const keep = list => (list || []).filter(entry => !touched.has(entry.file));
+  _statusAppliedAt = Date.now();
   state._prevFileList = buildFileList();
   state.staged = keep(state.staged).concat(snapshot.staged).sort(compareStatusPath);
   state.unstaged = keep(state.unstaged).concat(snapshot.unstaged).sort(compareStatusPath);
@@ -1275,6 +1236,38 @@ function statusOutputMatchesState(raw) {
   ].sort().join('\0');
   return keys(snapshot.staged, snapshot.unstaged, snapshot.untracked)
     === keys(state.staged || [], state.unstaged || [], state.untracked || []);
+}
+
+// 감시 폴링이 읽은 status 출력을 목록에 그대로 적용한다. 예전에는 폴링이 "바뀌었다"만 알리고
+// 창이 같은 status 를 한 번 더 돌렸다 — 밖에서 파일이 바뀔 때마다 창 수만큼 git 이 더 떴다.
+// 적용했으면 true. false 면 호출부가 예전처럼 refresh 를 건다.
+//
+// 그대로 써도 되는 것은 그 출력이 창이 직접 돌렸을 status 와 같은 조회이고(추적 안 된 파일
+// 표시, 무시 파일 미포함), 지금 목록보다 새것일 때뿐이다. 서비스는 대기 구간 동안 직전
+// 결과를 다시 내주므로 "처음 받았다"가 "새것이다"를 뜻하지 않는다. startedAt(그 조회가 시작된
+// 시각)이 마지막 목록 적용과 마지막 쓰기 완료보다 늦어야 한다 — 아니면 방금 스테이징한 파일이
+// 쓰기 이전의 조회 결과로 되돌아가 보인다.
+function applyPolledStatus(raw, startedAt) {
+  if (typeof raw !== 'string' || !state.isGitRepo || !(startedAt > 0)) return false;
+  if (_refreshRunning || _refreshQueued) return false;
+  if (!_guiConfigLoaded || _guiConfigCwd !== state.cwd) return false;
+  if (_cachedUntrackedFlag === '-uno' || shouldIncludeIgnored({})) return false;
+  const gitProcess = require('./git-process');
+  const inFlight = typeof gitProcess.writesInFlight === 'function' ? gitProcess.writesInFlight() : 1;
+  if (inFlight > 0) return false;
+  const lastWrite = typeof gitProcess.lastWriteDoneAt === 'function' ? gitProcess.lastWriteDoneAt() : Infinity;
+  if (startedAt <= Math.max(_statusAppliedAt, lastWrite)) return false;
+  const snapshot = statusSnapshotFromOutput(raw, {
+    displayUntracked: true,
+    includeIgnored: false,
+    maxFilesDisplayed: _cachedMaxFilesDisplayed,
+  });
+  if (!state.spinnerActive) state.error = null;
+  applyStatusSnapshot(snapshot, false);
+  // 전체 status refresh 가 함께 하던 일 — 밖에서 생긴 index.lock 표시를 놓치지 않는다.
+  const wasLocked = state.indexLocked;
+  detectIndexLock().then(() => { if (state.indexLocked !== wasLocked) renderNow(); }).catch(() => null);
+  return true;
 }
 
 // .git/index.lock 경로 — worktree에서는 per-worktree git dir에 위치하므로 gitDir 우선 사용
@@ -3176,7 +3169,7 @@ module.exports = {
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,
   refreshTouchedInBackground,
-  statusOutputMatchesState,
+  statusOutputMatchesState, applyPolledStatus,
   getLastUserRefreshTime, touchUserRefreshTime, applyStageToState, applyUnstageToState,
   removeIndexLock,
   invalidateCommitterCache,

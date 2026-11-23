@@ -23,12 +23,12 @@
 const { t } = require('./i18n');
 const i18n = require('./i18n');
 const { state, ui, init: initState } = require('./state');
-const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, computeRefsTreeSignature, statusOutputMatchesState, updateDiff } = require('./refresh');
+const { refreshAsync, refreshLog, refreshFresh, refreshInBackground, getLastUserRefreshTime, statusOutputMatchesState, applyPolledStatus, updateDiff } = require('./refresh');
 const gitProcess = require('./git-process');
 const { render } = require('./render');
 const { handleKey, handleMouseData, cleanup, handleContextMenuRequest, maybeLoadMoreLog } = require('./input');
 const { handleContextMenuAction, handleDialogResult } = require('./context-menu');
-const { resolveWorkTreeRoot, findGitDirFromDisk } = require('./git');
+const { resolveWorkTreeRoot, findGitDirFromDisk, commonDirFromDisk } = require('./git');
 const hostScroll = require('./scroll');
 const tooltip = require('./tooltip');
 const persist = require('./persist');
@@ -37,6 +37,7 @@ const reap = require('./reap');
 const perms = require('./permissions');
 const path = require('path');
 const { createPollingClient } = require('./polling-client');
+const { createMetaReader } = require('./meta-signature');
 const { buildWorktreeSnapshot: collectWorktreeSnapshot } = require('./worktree-snapshot');
 const { onlyIndexChanged, refreshScopeFor, mergeAutoRefreshOptions } = require('./poll-change');
 
@@ -103,6 +104,7 @@ async function main() {
   hostScroll.init({ render, maybeLoadMoreLog });
 
   process.stdin.on('data', async (data) => {
+    noteActivity();
     // 초기 로딩 중에만 전체 입력을 막는다. 쓰기 작업(spinnerActive) 중에는 입력을
     // 통과시키고, 지금 불가능한 액션만 각 dispatch 지점의 actions.guardAction이 막는다 —
     // 히스토리 조회/리비전 선택/스크롤 같은 읽기 인터렉션은 작업 중에도 동작해야 한다.
@@ -225,6 +227,9 @@ async function primeInitialBranchFromDisk() {
   // rev-parse 판정으로 넘긴다.
   if (!branch) return false;
   state.gitDir = gitDir;
+  // 공용 git dir 도 디스크에서 구해 둔다 — 비어 있으면 감시 준비와 첫 전체 갱신이 각각
+  // rev-parse 를 띄운다. 구하지 못하면 비워 두고 그쪽 rev-parse 에 맡긴다.
+  if (!state.gitCommonDir) state.gitCommonDir = await commonDirFromDisk(gitDir).catch(() => '');
   state.isGitRepo = true;
   state.branch = branch || 'HEAD';
   state.error = null;
@@ -243,6 +248,20 @@ async function readBranchFromGitDir(gitDir) {
 }
 
 let _gitWatcherCleanup = null;
+
+// 서비스에 "이 저장소를 쓰고 있다"를 알린다(유휴 정리가 언제 돌고 멈출지의 근거, maintenance.js).
+// 입력마다 보내지 않는다 — 마우스가 창 위를 지나가기만 해도 입력이 쏟아진다. 서비스는 분
+// 단위로 판단하므로 이 간격이면 충분하다.
+const ACTIVITY_NOTIFY_INTERVAL_MS = 20000;
+let _notifyActivity = null;
+let _lastActivityNotifyAt = 0;
+function noteActivity() {
+  if (!_notifyActivity) return;
+  const now = Date.now();
+  if (now - _lastActivityNotifyAt < ACTIVITY_NOTIFY_INTERVAL_MS) return;
+  _lastActivityNotifyAt = now;
+  _notifyActivity();
+}
 const GIT_MTIME_POLL_INTERVAL_MS = 2000;
 const GIT_WORKTREE_POLL_INTERVAL_MS = 3000;
 const USER_ACTION_REFRESH_SUPPRESS_MS = 1500;
@@ -289,6 +308,9 @@ const _gitOptimizationsAppliedFor = new Set();
 // index 파일 크기로 추적 파일 수를 근사한다(엔트리당 대략 60~100바이트). 이미 폴링에서
 // stat하는 파일이라 추가 비용이 없고, ls-files로 세는 것과 달리 git을 스폰하지 않는다.
 const FSMONITOR_MIN_INDEX_BYTES = 2 * 1024 * 1024;
+const GIT_OPTIMIZATION_MARK_VERSION = 1;
+const GIT_OPTIMIZATION_RECHECK_MS = 7 * 24 * 60 * 60 * 1000;
+const GIT_OPTIMIZATION_PENDING_MS = 5 * 60 * 1000;
 
 // status 가속을 위해 core.untrackedCache, core.fsmonitor를 자동 활성화한다.
 // - 이미 사용자가 true/false로 명시한 경우는 건드리지 않는다 (의도 존중).
@@ -298,6 +320,28 @@ async function applyGitOptimizations(cwd, gitDir) {
   if (_gitOptimizationsAppliedFor.has(cwd)) return;
   _gitOptimizationsAppliedFor.add(cwd);
 
+  // 이 확인은 창이 뜰 때마다 git 을 한두 개 띄운다(config --get, 큰 저장소면 --version 까지).
+  // 설정은 저장소에 남으므로 한 번 확인했으면 다른 창과 다음 실행에서 되풀이할 이유가 없다 —
+  // 저장소 단위 표시를 남기고, 그 표시가 새것인 동안은 건너뛴다. 사용자가 그 사이 설정을
+  // 지웠더라도 기한이 지나면 다시 확인한다.
+  //
+  // 표시는 두 번 쓴다. 시작할 때의 표시(done 없음)는 함께 뜬 창들이 같은 확인을 겹쳐 돌리지
+  // 않게 하는 용도라 짧게만 유효하다 — 확인 도중 창이 닫혀도 다음 창이 곧 이어받는다.
+  try {
+    const mark = await coordinate.readRepoJson('gitopt');
+    const age = mark && typeof mark.at === 'number' ? Date.now() - mark.at : -1;
+    const validFor = mark && mark.done ? GIT_OPTIMIZATION_RECHECK_MS : GIT_OPTIMIZATION_PENDING_MS;
+    if (mark && mark.version === GIT_OPTIMIZATION_MARK_VERSION && age >= 0 && age < validFor) return;
+  } catch { /* 표시를 못 읽으면 종전대로 확인한다 */ }
+  await coordinate.writeRepoJson('gitopt', { version: GIT_OPTIMIZATION_MARK_VERSION, at: Date.now() }).catch(() => null);
+  try {
+    await checkGitOptimizations(cwd, gitDir);
+  } finally {
+    coordinate.writeRepoJson('gitopt', { version: GIT_OPTIMIZATION_MARK_VERSION, at: Date.now(), done: true }).catch(() => null);
+  }
+}
+
+async function checkGitOptimizations(cwd, gitDir) {
   // core.untrackedCache
   try {
     const cur = await perms.execGit({
@@ -442,52 +486,26 @@ async function setupGitWatcher() {
   // 겹치지 않게 뒤로 미루고, 결과는 기다리지 않는다.
   const reapTimer = setTimeout(() => {
     reap.reapOrphanedPollProcesses(coordinate).catch(() => null);
+    // 이미 끝난 창들이 남긴 진단 기록·폴링 파일 정리.
+    coordinate.sweepShareDir().catch(() => null);
   }, 5000);
-  // refs 하위는 mtime만으로 변경을 잡을 수 없어(디렉터리 mtime은 직접 자식만 반영)
-  // computeRefsTreeSignature로 따로 감시한다. 여기 남긴 refs/refs/heads는
-  // read_dir을 제공하지 않는 호스트에서의 폴백이다.
-  // 순서가 뜻을 가진다: 앞 세 칸은 이 워크트리의 status 를 바꾸는 것(poll-change.js 의
-  // OWN_STATUS_TARGETS), 나머지는 브랜치·원격 목록과 히스토리에만 영향을 준다.
-  const pollTargets = [
-    gitDir + sep + 'index',
-    gitDir + sep + 'HEAD',
-    gitDir + sep + 'logs' + sep + 'HEAD',
-    gitDir + sep + 'FETCH_HEAD',
-    commonDir + sep + 'refs',
-    commonDir + sep + 'refs' + sep + 'heads',
-    commonDir + sep + 'packed-refs',
-    commonDir + sep + 'worktrees',
-  ];
-
-  async function statMtime(filePath) {
-    try {
-      const r = await hecaton.fs.stat({ path: filePath });
-      return (r && r.exists && r.mtime_ms) ? r.mtime_ms : 0;
-    } catch { return 0; }
-  }
-
   const pollingClient = createPollingClient(hecaton);
+  // { snapshot, startedAt, viaService } — startedAt 은 그 스냅샷을 만든 status 가 시작된 시각이다.
   async function buildWorktreeSnapshot() {
-    return pollingClient.snapshot(state.cwd, () =>
+    return pollingClient.read(state.cwd, () =>
       collectWorktreeSnapshot(state.cwd, hecaton, gitProcess.read));
   }
 
-  let lastRefsSig = '';
-
-  // .git 메타 상태를 하나의 문자열로 압축한다. 인스턴스 간에 그대로 주고받으려면
-  // 같은 상태에서 같은 값이 나와야 하므로, 배열 비교 대신 결정적인 문자열을 쓴다.
-  // refs 스캔이 예외로 실패한 틱은 직전 값으로 때우는데 그 값은 인스턴스마다 다를 수
-  // 있어, 그때만 공유 대상에서 뺀다(shareable=false).
-  async function computeMetaSignature() {
-    let refsFailed = false;
-    const [mtimes, refsSig] = await Promise.all([
-      Promise.all(pollTargets.map(statMtime)),
-      // 스캔 실패 시 직전 값을 그대로 써서 오탐 refresh를 만들지 않는다.
-      computeRefsTreeSignature(commonDir).catch(() => { refsFailed = true; return lastRefsSig; }),
-    ]);
-    lastRefsSig = refsSig;
-    return { sig: mtimes.join('|') + '\x1e' + refsSig, shareable: !refsFailed };
-  }
+  // .git 메타 상태를 하나의 문자열로 압축한 지문(meta-signature.js). 같은 상태에서 같은 값이
+  // 나오는 결정적인 문자열이라 창끼리, 그리고 서비스와 그대로 주고받을 수 있다.
+  //
+  // 서비스가 있으면 서비스에 묻는다 — 저장소당 한 번만 계산해 창들에 나눠 준다. 이 창이 직접
+  // 계산하는 것은 서비스를 못 쓰는 호스트이거나 서비스가 답하지 못한 틱뿐이다. 두 쪽의 계산이
+  // 같은 모듈이라 값이 같고, 번갈아 받아도 "바뀌었다"로 오판하지 않는다.
+  const localMetaReader = createMetaReader(hecaton);
+  const readLocalMeta = () => localMetaReader.read({ gitDir, commonDir });
+  // 서비스가 지문을 맡으면 창끼리의 파일 공유(meta-*.json)를 건너뛴다.
+  let metaViaService = false;
 
   // 이 창의 쓰기 명령(스테이징 등)이 끝난 횟수. 인덱스 시각만 바뀌었고 그 사이 이 창이
   // 쓰기를 끝냈다면 그 변경은 이 창이 만든 것이다 — 쓰기 뒤 갱신이 이미 목록을 맞췄으므로
@@ -495,7 +513,7 @@ async function setupGitWatcher() {
   // 틱에 인덱스를 바꿨다면 아래 워크트리 폴링이 목록 차이로 잡는다.
   const writesDone = () => (typeof gitProcess.completedWrites === 'function' ? gitProcess.completedWrites() : -1);
   let metaPollWrites = writesDone();
-  let lastMetaSig = (await computeMetaSignature()).sig;
+  let lastMetaSig = (await readLocalMeta()).sig;
   let metaPolling = false;
   let metaPollingSince = 0;
   let metaTick = 0;
@@ -514,13 +532,17 @@ async function setupGitWatcher() {
       const writes = writesDone();
       // 같은 워크트리를 보는 다른 인스턴스가 방금 계산해 둔 값이 있으면 그대로 쓴다.
       let sig;
-      const shared = await coordinate.readSharedSnapshot('meta', SHARED_META_MAX_AGE_MS);
+      const shared = metaViaService
+        ? null
+        : await coordinate.readSharedSnapshot('meta', SHARED_META_MAX_AGE_MS);
       if (shared) {
         sig = shared.value;
       } else {
-        const computed = await computeMetaSignature();
+        const computed = await pollingClient.metaSignature(gitDir, commonDir, readLocalMeta);
+        if (!computed) return; // 창이 닫히는 중이다
         sig = computed.sig;
-        if (computed.shareable) coordinate.publishSharedSnapshot('meta', sig, { soloThrottle: true }).catch(() => null);
+        metaViaService = computed.viaService === true;
+        if (!metaViaService && computed.shareable) coordinate.publishSharedSnapshot('meta', sig, { soloThrottle: true }).catch(() => null);
       }
 
       if (sig !== lastMetaSig) {
@@ -538,7 +560,19 @@ async function setupGitWatcher() {
 
   // Worktree edits do not touch .git/index. Track names plus mtimes so
   // repeated edits to an already-modified file also refresh the diff/status.
-  let lastStatusSnapshot = await buildWorktreeSnapshot().catch(() => '') || '';
+  // 기준 스냅샷을 여기서 따로 받지 않는다. 예전에는 창이 뜨자마자 한 번 받아 두었는데, 그
+  // status 는 방금 끝난 첫 화면용 status 와 같은 일을 한 번 더 하는 것이었다 — 창들이 한꺼번에
+  // 뜨는 구간에 워크트리마다 git 이 하나씩 더 떴다. 첫 폴링 틱의 결과가 기준이 된다: 그 출력이
+  // 지금 목록과 같으면 diff 만 다시 읽고, 다르면(그 사이 밖에서 바뀌었다) 목록에 적용한다.
+  let lastStatusSnapshot = '';
+  // 서비스가 스냅샷을 맡으면 창끼리 파일로 주고받을 이유가 없다 — 서비스가 이미 워크트리당
+  // 조회 하나로 묶고 결과를 나눠 준다. 그때는 틱마다 하던 공유 파일 읽기·쓰기를 건너뛴다.
+  // 서비스를 못 쓰는 호스트(또는 실행을 거부한 경우)에서만 종전의 파일 공유로 조율한다.
+  let snapshotViaService = false;
+  // 서비스에 붙은 뒤 한 번, 이 창이 이 저장소를 열었다고 알린다. 입력이 한 번도 없는 창의
+  // 저장소도 유휴 정리 대상에 들어가야 한다.
+  let activityAttached = false;
+  _notifyActivity = () => pollingClient.activity(state.cwd, commonDir);
   let statusPolling = false;
   let statusPollingSince = 0;
   // 다음 스냅샷을 허용할 시각. 직전 실행이 오래 걸렸으면 그만큼 뒤로 밀린다.
@@ -564,19 +598,34 @@ async function setupGitWatcher() {
         // diff-files+ls-files 시절과 달라졌다. 이름을 그대로 두면 아직 옛 코드로 도는
         // 인스턴스와 번갈아 publish 하면서 매 틱 "바뀌었다"고 오판한다.
         let snapshot = null;
-        const shared = await coordinate.readSharedSnapshot('worktree-status', SHARED_WORKTREE_MAX_AGE_MS);
+        // 그 스냅샷을 만든 status 가 시작된 시각. 모르면 0 — 그때는 목록에 바로 적용하지 않는다.
+        let snapshotStartedAt = 0;
+        const shared = snapshotViaService
+          ? null
+          : await coordinate.readSharedSnapshot('worktree-status', SHARED_WORKTREE_MAX_AGE_MS);
         if (shared) {
           snapshot = shared.value;
+          snapshotStartedAt = shared.startedAt || 0;
         } else {
           // 남의 결과를 받아 쓴 틱은 재는 의미가 없다 — 비싼 것은 git 스폰뿐이다.
           const startedAt = Date.now();
-          snapshot = await buildWorktreeSnapshot();
+          const built = await buildWorktreeSnapshot();
+          snapshot = built.snapshot;
+          snapshotStartedAt = built.startedAt || 0;
+          snapshotViaService = built.viaService === true;
+          if (snapshotViaService && !activityAttached) {
+            activityAttached = true;
+            _lastActivityNotifyAt = Date.now();
+            if (_notifyActivity) _notifyActivity();
+          }
           const elapsed = Date.now() - startedAt;
           statusPollNextAllowedAt = Date.now() + Math.min(
             WORKTREE_POLL_MAX_INTERVAL_MS,
             Math.max(GIT_WORKTREE_POLL_INTERVAL_MS, elapsed * WORKTREE_POLL_BACKOFF),
           );
-          if (snapshot !== null) coordinate.publishSharedSnapshot('worktree-status', snapshot, { soloThrottle: true }).catch(() => null);
+          if (snapshot !== null && !snapshotViaService) {
+            coordinate.publishSharedSnapshot('worktree-status', snapshot, { soloThrottle: true, startedAt: snapshotStartedAt }).catch(() => null);
+          }
         }
         if (snapshot !== null && snapshot !== lastStatusSnapshot) {
           lastStatusSnapshot = snapshot;
@@ -586,6 +635,11 @@ async function setupGitWatcher() {
           const raw = typeof snapshot === 'string' ? snapshot.split('\x1e', 1)[0] : null;
           if (raw !== null && statusOutputMatchesState(raw)) {
             updateDiff();
+            render();
+          } else if (raw !== null && applyPolledStatus(raw, snapshotStartedAt)) {
+            // 목록이 다르지만 그 차이를 이미 폴링이 읽어 왔다 — 같은 status 를 또 띄우지 않고
+            // 받은 출력을 그대로 적용한다. 목록보다 새것이 아니면 false 라 아래 refresh 로 간다.
+            if (state.rightView === 'fresh') refreshFresh();
             render();
           } else {
             triggerRefresh({ statusOnly: true });
@@ -598,6 +652,7 @@ async function setupGitWatcher() {
   }, GIT_WORKTREE_POLL_INTERVAL_MS);
 
   _gitWatcherCleanup = () => {
+    _notifyActivity = null;
     if (debounceTimer) clearTimeout(debounceTimer);
     clearTimeout(reapTimer);
     clearInterval(pollInterval);

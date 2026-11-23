@@ -165,3 +165,48 @@ test('real Git: 57 clients execute one status and later edits produce a new snap
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// 대기 구간에는 직전 결과를 다시 내준다. 받는 창이 자기 목록보다 새것인지 가릴 수 있도록
+// 그 결과를 만든 조회가 시작된 시각을 함께 준다.
+test('snapshot2 reports when the query that produced the snapshot started', async () => {
+  let time = 1000, calls = 0;
+  const service = createPollingService({ now: () => time, buildSnapshot: async () => { calls++; time += 200; return 'v' + calls; } });
+  assert.deepEqual(await service.request(1, 'worktree.snapshot2', { cwd }), { snapshot: 'v1', startedAt: 1000 });
+  time = 2500;
+  // 대기 구간: 같은 결과, 같은 시작 시각 — "방금 받았다"가 "방금 읽었다"는 아니다.
+  assert.deepEqual(await service.request(2, 'worktree.snapshot2', { cwd }), { snapshot: 'v1', startedAt: 1000 });
+  assert.equal(await service.request(3, 'worktree.snapshot', { cwd }), 'v1');
+  time = 5000;
+  assert.deepEqual(await service.request(2, 'worktree.snapshot2', { cwd }), { snapshot: 'v2', startedAt: 5000 });
+  assert.equal(calls, 2);
+});
+
+test('client reads the start time from the service and falls back to the old method on an older service', async () => {
+  const service = createPollingService({ now: () => 7000, buildSnapshot: async () => 'shared' });
+  const client = createPollingClient({ serviceChannel: () => ({
+    connect: async () => {}, request: (method, params) => service.request(1, method, params), close: async () => {},
+  }) });
+  assert.deepEqual(await client.read(cwd, () => assert.fail('local Git')), { snapshot: 'shared', startedAt: 7000, viaService: true });
+
+  // 이 창보다 먼저 떠 있던 이전 버전 서비스는 새 메서드를 거절한다.
+  const methods = [];
+  const older = createPollingClient({ serviceChannel: () => ({
+    connect: async () => {},
+    request: async (method) => {
+      methods.push(method);
+      if (method !== 'worktree.snapshot') throw new Error('Invalid polling request');
+      return 'legacy';
+    },
+    close: async () => {},
+  }) });
+  assert.deepEqual(await older.read(cwd, () => assert.fail('local Git')), { snapshot: 'legacy', startedAt: 0, viaService: true });
+  await older.read(cwd, () => assert.fail('local Git'));
+  assert.deepEqual(methods, ['worktree.snapshot2', 'worktree.snapshot', 'worktree.snapshot'], 'the new method is tried once');
+
+  // 서비스가 없는 호스트: 이 창이 직접 읽고, 시작 시각은 읽기 직전이다.
+  const before = Date.now();
+  const local = await createPollingClient({}).read(cwd, async () => 'local');
+  assert.equal(local.snapshot, 'local');
+  assert.equal(local.viaService, false);
+  assert.ok(local.startedAt >= before && local.startedAt <= Date.now());
+});

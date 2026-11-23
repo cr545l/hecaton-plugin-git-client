@@ -224,6 +224,60 @@ async function writeTimingLog(content, suffix) {
   } catch { return false; }
 }
 
+// ── 공유 폴더 청소 ──
+//
+// 창마다 timing-<인스턴스>.log 를 남기고 워크트리마다 meta-/reap-/worktree-status- 파일을
+// 남기는데, 지우는 곳이 없었다(2026-11-12 실측: 저장소 하나에 timing 로그 274개). 이름이
+// 인스턴스·워크트리마다 달라 다시 쓰이지도 않는다. 오래된 것만 지운다 — 살아 있는 창의 파일은
+// 계속 다시 쓰여 수정 시각이 새롭다.
+//
+// 지우는 대상은 이 플러그인이 만든 이름 꼴과 정확히 맞는 파일뿐이다. 캐시(logcache 등)와
+// 조율 파일(netop)은 건드리지 않는다.
+const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const SWEEP_MAX_DELETES = 400;
+const SWEEP_RULES = [
+  // 진단 기록은 "방금 느렸던 일"을 되짚는 용도다. 사흘이면 충분하다.
+  { pattern: /^timing-\d+-[a-z0-9]+(?:\.prev)?\.log$/, maxAgeMs: 3 * 24 * 60 * 60 * 1000 },
+  // 워크트리별 폴링 파일. 그 워크트리를 여는 창이 있으면 계속 다시 쓰인다.
+  { pattern: /^(?:meta|reap|worktree|worktree-status)-[0-9a-f]{8}\.json$/, maxAgeMs: 14 * 24 * 60 * 60 * 1000 },
+];
+
+function sweepTargets(entries, nowMs) {
+  const targets = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || entry.is_dir || typeof entry.name !== 'string') continue;
+    // 수정 시각을 모르면 나이도 모른다 — 그런 파일은 두고 간다.
+    if (!(entry.mtime_ms > 0)) continue;
+    const rule = SWEEP_RULES.find(r => r.pattern.test(entry.name));
+    if (!rule || (nowMs - entry.mtime_ms) < rule.maxAgeMs) continue;
+    targets.push(entry.name);
+    if (targets.length >= SWEEP_MAX_DELETES) break;
+  }
+  return targets;
+}
+
+// 지운 개수를 돌려준다. 어느 단계가 실패해도 조용히 넘어간다 — 청소는 덤이다.
+async function sweepShareDir() {
+  if (!isEnabled() || !await ensureDir()) return 0;
+  if (typeof hecaton.fs.read_dir !== 'function' || typeof hecaton.fs.delete !== 'function') return 0;
+  // 창이 여럿이어도 한 번만 훑도록 저장소 단위로 마지막 청소 시각을 남긴다.
+  const marker = await readJson(sharedPath('sweep', false));
+  const now = Date.now();
+  if (marker && typeof marker.at === 'number' && now - marker.at >= 0 && now - marker.at < SWEEP_INTERVAL_MS) return 0;
+  await writeJson(sharedPath('sweep', false), { at: now, owner: INSTANCE_ID });
+  let listed = null;
+  try { listed = await hecaton.fs.read_dir({ path: _shareDir }); } catch { return 0; }
+  if (!listed || listed.ok === false || !Array.isArray(listed.entries)) return 0;
+  let deleted = 0;
+  for (const name of sweepTargets(listed.entries, now)) {
+    try {
+      await hecaton.fs.delete({ path: nodePath.join(_shareDir, name) });
+      deleted++;
+    } catch { /* 다른 창이 먼저 지웠거나 잠겨 있다 */ }
+  }
+  return deleted;
+}
+
 // 다른 인스턴스가 maxAgeMs 안에 올려둔 폴링 결과가 있으면 그대로 쓴다.
 // 반환값이 null이면 호출부가 직접 git을 돌려야 한다는 뜻이다.
 async function readSharedSnapshot(kind, maxAgeMs) {
@@ -236,7 +290,11 @@ async function readSharedSnapshot(kind, maxAgeMs) {
   // 시계 역행이나 남의 저장소에서 복사된 파일 같은 이상값은 신선한 것으로 오인하지 않는다.
   if (age < 0 || age > maxAgeMs) return null;
   if (data.value === undefined) return null;
-  return { value: data.value, ageMs: age, owner: data.owner || '' };
+  // startedAt: 그 값을 만든 조회가 시작된 시각(적어 둔 인스턴스만). 없으면 0.
+  return {
+    value: data.value, ageMs: age, owner: data.owner || '',
+    startedAt: typeof data.startedAt === 'number' ? data.startedAt : 0,
+  };
 }
 
 // opts.soloThrottle: 받아 갈 상대를 본 적이 없으면 SOLO_PUBLISH_INTERVAL_MS 에 한 번만 쓴다.
@@ -251,6 +309,7 @@ async function publishSharedSnapshot(kind, value, opts) {
     publishedAt: Date.now(),
     owner: INSTANCE_ID,
     value,
+    ...(opts && opts.startedAt > 0 ? { startedAt: opts.startedAt } : {}),
   });
 }
 
@@ -389,4 +448,7 @@ module.exports = {
   isNetworkOpInFlight,
   waitForNetworkOp,
   writeTimingLog,
+  sweepShareDir,
+  // 테스트용 노출
+  sweepTargets,
 };
