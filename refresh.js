@@ -2445,6 +2445,32 @@ function applyLogGraphRows(graphRows) {
   }
 }
 
+let pendingLogHead = null;
+
+function selectLogHead() {
+  if (state.logLoading) {
+    pendingLogHead = { seq: _logSeq, cwd: state.cwd, cursor: state.logCursor };
+    return false;
+  }
+  const cursor = state.logSelectables.findIndex(i => {
+    const decoration = state.logItems[i].decoration || '';
+    return decoration.replace(/^\s*\(/, '').replace(/\)$/, '').split(', ')
+      .some(ref => ref === 'HEAD');
+  });
+  if (cursor < 0) return false;
+  state.logCursor = cursor;
+  state.diffScrollOffset = 0;
+  ui.logScrollPin = undefined;
+  return true;
+}
+
+function selectPendingLogHead(previousCursor) {
+  const pending = pendingLogHead;
+  pendingLogHead = null;
+  return !!pending && pending.seq === _logSeq && pending.cwd === state.cwd &&
+    state.rightView === 'log' && pending.cursor === previousCursor && selectLogHead();
+}
+
 function refreshLog(options = {}) {
   if (!state.cwd || !state.isGitRepo) {
     state.logItems = [];
@@ -2511,8 +2537,10 @@ function refreshLog(options = {}) {
     if (cacheHit) {
       // 커밋은 그대로여도 리커버리 토글·필터 지정은 그 사이 바뀌었을 수 있다.
       // 원본 커밋 캐시로 다시 그려 현재 표시 설정을 반영한다.
+      const previousCursor = state.logCursor;
       rebuildLogGraphRows({ keepView: true });
       state.logLoading = false;
+      selectPendingLogHead(previousCursor);
       if (state.rightView === 'log') {
         updateLogDetail();
         require('./render').render();
@@ -2558,13 +2586,15 @@ function refreshLog(options = {}) {
     }
     state.logLoadFailed = false;
     const commits = parseLogRaw(logRes.text, { refsByHash: {} }, new Set());
+    const previousCursor = state.logCursor;
     applyLogGraphRows(buildLogGraphRows(commits, stashFullHashes));
     _lastGraphHasRecovery = false;
     state.logLoadedLimit = commits.length;
     state.logHasMore = commits.length >= limit;
     state.logLoading = false;
+    const selectedHead = selectPendingLogHead(previousCursor);
     if (state.rightView === 'log') {
-      updateLogDetail({ headerOnly: true });
+      updateLogDetail({ headerOnly: !selectedHead });
       require('./render').render();
     }
 
@@ -3164,7 +3194,7 @@ function updateFreshDetail() {
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   expandFileTargets, stageAllPaths, sectionRangeAt, setFileTreeView, toggleFileDir,
-  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, cancelSlowReads, invalidateDiffCache, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, cancelSlowReads, invalidateDiffCache, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, selectLogHead, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,

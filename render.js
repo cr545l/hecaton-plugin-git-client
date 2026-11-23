@@ -1402,7 +1402,7 @@ function buildLeftPanel(w, h) {
 
   // Branch name + worktree 표기 + rebase state
   // Branches 목록의 현재 브랜치와 같은 표기(✓ + green)를 쓰고, 클릭하면 목록의 그 줄로 스크롤한다.
-  // detached HEAD면 목록에도 ✓ 줄이 없으므로 표기도 클릭도 붙이지 않는다.
+  // detached HEAD는 현재 커밋으로 이동할 수 있다.
   const currentBranchEntry = state.branches.find(b => b.isCurrent) || null;
 
   // 현재 브랜치와 같은 커밋에 올라탄 로컬 브랜치를 목록에서 짚어 주기 위한 대조표.
@@ -1448,7 +1448,9 @@ function buildLeftPanel(w, h) {
     const nameColor = currentBranchEntry ? colors.green : colors.value;
     // Branches 목록의 브랜치 줄과 같은 액션을 사용해 히스토리 전환/커밋 이동도 동일하게 처리한다.
     // reveal은 이 줄에만 붙인다 — 목록의 같은 줄이 접혀 있으면 펼치고 거기로 스크롤하라는 표시다.
-    const branchEntry = currentBranchEntry ? { action: 'goto-branch', branch: currentBranchEntry.name, refKey: localRefKey(currentBranchEntry.name), reveal: true } : null;
+    const branchEntry = currentBranchEntry
+      ? { action: 'goto-branch', branch: currentBranchEntry.name, refKey: localRefKey(currentBranchEntry.name), reveal: true }
+      : (state.branch === t('git.headDetached') || state.branch === 'HEAD') ? { action: 'goto-head' } : null;
     const availW = innerW - 1 - mark.length;
     let branchName = state.branch || '...';
     const slashIdx = branchName.lastIndexOf('/');

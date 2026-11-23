@@ -7,13 +7,13 @@ const assert = require('node:assert/strict');
 global.hecaton = { fs: {}, process: {}, window: {}, terminal: {}, initialState: { cols: 120, rows: 40 } };
 
 const { state, ui } = require('../state');
-const { refreshLog } = require('../refresh');
+const { refreshLog, selectLogHead } = require('../refresh');
 
 const SEP = process.platform === 'win32' ? '\\' : '/';
 
 // 커밋 하나짜리 로그. refreshLog 가 파싱하는 형식 그대로.
-function logRecord(hash, subject) {
-  return '\x01' + [hash, '', '', 'Alice', 'a@x', '2026-01-01T00:00:00+00:00',
+function logRecord(hash, subject, refs = '') {
+  return '\x01' + [hash, '', refs, 'Alice', 'a@x', '2026-01-01T00:00:00+00:00',
     'Alice', 'a@x', '2026-01-01T00:00:00+00:00', subject].join('\x00') + '\n';
 }
 
@@ -80,6 +80,31 @@ async function settle() {
     if (!state.logLoading) return;
   }
 }
+
+test('a HEAD selection made during loading is applied when the log becomes available', async t => {
+  const cwd = 'C:/log-detached-head';
+  installHost(cwd);
+  resetState(cwd);
+  state.rightView = 'log';
+  ui.logShowRecovery = false;
+  const previousSortMode = ui.logSortMode;
+  ui.logSortMode = 'date';
+  t.after(() => { ui.logSortMode = previousSortMode; });
+  t.mock.method(require('../render'), 'render', () => {});
+  hecaton.process.exec = async ({ args }) => ({
+    ok: true, exit_code: 0,
+    stdout: args.includes('log')
+      ? logRecord('a'.repeat(40), 'branch tip', 'refs/heads/main')
+        + logRecord('b'.repeat(40), 'detached tip', 'HEAD')
+      : '',
+  });
+
+  refreshLog({ force: true });
+  assert.equal(selectLogHead(), false);
+  await settle();
+
+  assert.equal(state.logItems[state.logSelectables[state.logCursor]].hash, 'b'.repeat(40));
+});
 
 test('recovery spinner remains active after base log loads until reflog finishes', async () => {
   const cwd = 'C:/log-recovery-spinner';

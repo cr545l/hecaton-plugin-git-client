@@ -148,6 +148,24 @@ function leftRowHighlighted(refKey) {
   return lines[idx].includes(colors.cursorBg);
 }
 
+test('상단 detached HEAD를 클릭하면 히스토리에서 HEAD 커밋을 선택한다', async () => {
+  await ready([
+    commit(0, { decoration: ' (origin/HEAD, tag: HEAD)' }),
+    commit(1, { decoration: ' (HEAD, tag: v1.0)' }),
+  ]);
+  state.branch = require('../i18n').t('git.headDetached');
+  state.branches[0].isCurrent = false;
+  state.rightView = 'diff';
+  frame();
+
+  await press({ col: ui.lastLayout.startCol + 1, row: geometry().bodyTop });
+
+  assert.equal(state.rightView, 'log');
+  assert.equal(state.logCursor, 1);
+  assert.equal(state.diffScrollOffset, 0);
+  assert.deepEqual(selected(), []);
+});
+
 test('브랜치 이름을 누르면 그 커밋과 함께 브랜치를 고른다 — 로컬 이름과 @리모트를 따로 고른다', async () => {
   await ready();
   const develop = screenColOf(1, 'develop@origin');

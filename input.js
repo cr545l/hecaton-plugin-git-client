@@ -26,7 +26,7 @@ const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
 const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
-const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
+const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, selectLogHead, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, requestRender, revealBranch, logBranchRefAt } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildBranchesContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -2159,21 +2159,24 @@ async function handleMouseData(data) {
             } else if (entry.action === 'toggle-group') {
               ui.collapsedGroups[entry.group] = !ui.collapsedGroups[entry.group];
               render();
-            } else if (entry.action === 'goto-branch') {
-              branchSelection.select(entry);
-              if (branchSelection.entryRef(entry).startsWith('refs/remotes/')) {
-                ui.remoteRecentBranchUsage[entry.branch] = Date.now();
+            } else if (entry.action === 'goto-branch' || entry.action === 'goto-head') {
+              const gotoHead = entry.action === 'goto-head';
+              if (!gotoHead) {
+                branchSelection.select(entry);
+                if (branchSelection.entryRef(entry).startsWith('refs/remotes/')) {
+                  ui.remoteRecentBranchUsage[entry.branch] = Date.now();
+                }
+                // 로컬 브랜치는 여기서부터 끌어 옮길 수 있다. 아직 끌기로 올리지는 않는다 —
+                // 다른 줄로 넘어가야 끌기가 되므로(motion 처리 참고) 평범한 클릭은 그대로다.
+                // 리모트 추적 브랜치는 로컬에서 이름을 바꿀 대상이 아니라 잡지 않는다.
+                // 상단 브랜치명 줄(reveal)도 트리의 그 줄이 따로 있으므로 잡지 않는다.
+                ui.branchDragCandidate = (!entry.reveal && branchSelection.entryRef(entry).startsWith('refs/heads/'))
+                  ? { branch: entry.branch, row: bodyRowIdx2 }
+                  : null;
+                ui.leftPanelActiveBranch = entry.branch;
+                // 상단 브랜치명 줄 클릭 — 목록의 그 줄까지 상위 토글을 펼치고 스크롤한다.
+                if (entry.reveal) revealBranch(entry.branch);
               }
-              // 로컬 브랜치는 여기서부터 끌어 옮길 수 있다. 아직 끌기로 올리지는 않는다 —
-              // 다른 줄로 넘어가야 끌기가 되므로(motion 처리 참고) 평범한 클릭은 그대로다.
-              // 리모트 추적 브랜치는 로컬에서 이름을 바꿀 대상이 아니라 잡지 않는다.
-              // 상단 브랜치명 줄(reveal)도 트리의 그 줄이 따로 있으므로 잡지 않는다.
-              ui.branchDragCandidate = (!entry.reveal && branchSelection.entryRef(entry).startsWith('refs/heads/'))
-                ? { branch: entry.branch, row: bodyRowIdx2 }
-                : null;
-              ui.leftPanelActiveBranch = entry.branch;
-              // 상단 브랜치명 줄 클릭 — 목록의 그 줄까지 상위 토글을 펼치고 스크롤한다.
-              if (entry.reveal) revealBranch(entry.branch);
               if (state.rightView !== 'log') {
                 state.rightView = 'log';
                 refreshLog();
@@ -2182,29 +2185,33 @@ async function handleMouseData(data) {
                 state.diffScrollOffset = 0;
                 updateLogDetail();
               }
-              const targetBranch = entry.branch;
-              let foundIdx = -1;
-              // Check if target is the current branch (may be detached HEAD)
-              const isCurrentBranch = state.branches.some(b => b.isCurrent && b.name === targetBranch);
-              for (let si = 0; si < state.logItems.length; si++) {
-                const item = state.logItems[si];
-                if (item.type !== 'commit' || !item.decoration) continue;
-                const refs = item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '').split(', ');
-                for (const ref of refs) {
-                  const trimmed = ref.trim();
-                  const cleaned = trimmed.startsWith('HEAD -> ') ? trimmed.substring(8) : trimmed;
-                  if (cleaned === targetBranch) { foundIdx = si; break; }
-                  // Detached HEAD: decoration is bare "HEAD", match if clicking current branch
-                  if (isCurrentBranch && trimmed === 'HEAD') { foundIdx = si; break; }
+              if (gotoHead) {
+                if (selectLogHead()) updateLogDetail();
+              } else {
+                const targetBranch = entry.branch;
+                let foundIdx = -1;
+                // Check if target is the current branch (may be detached HEAD)
+                const isCurrentBranch = state.branches.some(b => b.isCurrent && b.name === targetBranch);
+                for (let si = 0; si < state.logItems.length; si++) {
+                  const item = state.logItems[si];
+                  if (item.type !== 'commit' || !item.decoration) continue;
+                  const refs = item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '').split(', ');
+                  for (const ref of refs) {
+                    const trimmed = ref.trim();
+                    const cleaned = trimmed.startsWith('HEAD -> ') ? trimmed.substring(8) : trimmed;
+                    if (cleaned === targetBranch) { foundIdx = si; break; }
+                    // Detached HEAD: decoration is bare "HEAD", match if clicking current branch
+                    if (isCurrentBranch && trimmed === 'HEAD') { foundIdx = si; break; }
+                  }
+                  if (foundIdx >= 0) break;
                 }
-                if (foundIdx >= 0) break;
-              }
-              if (foundIdx >= 0) {
-                const selectIdx = state.logSelectables.indexOf(foundIdx);
-                if (selectIdx >= 0) {
-                  state.logCursor = selectIdx;
-                  state.diffScrollOffset = 0;
-                  updateLogDetail();
+                if (foundIdx >= 0) {
+                  const selectIdx = state.logSelectables.indexOf(foundIdx);
+                  if (selectIdx >= 0) {
+                    state.logCursor = selectIdx;
+                    state.diffScrollOffset = 0;
+                    updateLogDetail();
+                  }
                 }
               }
               state.focusPanel = 'status';

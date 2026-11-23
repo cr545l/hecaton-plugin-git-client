@@ -6,6 +6,7 @@ global.hecaton = { fs: {}, process: {}, window: {}, initialState: { cols: 120, r
 
 const { state, ui } = require('../state');
 const { buildLeftPanel, revealBranch } = require('../render');
+const { t } = require('../i18n');
 
 const PANEL_W = 40;
 const PANEL_H = 60;
@@ -54,11 +55,11 @@ test('상단 브랜치명은 현재 브랜치 색(green)으로 칠한다', () =>
   assert.ok(codes.includes(GREEN), 'green이 적용돼야 한다');
 });
 
-test('detached HEAD면 ✓도 클릭 액션도 붙지 않는다', () => {
-  resetState({ branch: 'HEAD (detached)', branches: [{ name: 'main', isCurrent: false }] });
+test('detached HEAD 행은 HEAD 이동 액션을 사용한다', () => {
+  resetState({ branch: t('git.headDetached'), branches: [{ name: 'main', isCurrent: false }] });
   const out = plain(buildLeftPanel(PANEL_W, PANEL_H));
   assert.equal(out[0].includes('✓'), false);
-  assert.equal(ui.leftPanelClickMap[0], null);
+  assert.deepEqual(ui.leftPanelClickMap[0], { action: 'goto-head' });
 });
 
 test('rebase 진행 중에도 ✓와 작업 표기가 함께 나온다', () => {
