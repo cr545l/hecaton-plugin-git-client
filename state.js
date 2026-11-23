@@ -36,6 +36,7 @@ const state = {
   logLoadedLimit: 0,
   logCursor: 0,           // index into logSelectables
   logScrollOffset: 0,
+  logScrollX: 0,          // 히스토리 목록의 가로 스크롤 위치(칸) — 넘치는 줄(긴 제목·브랜치 장식)을 옆으로 넘겨 본다
   logDetailLines: [],
   branches: [],           // [{ name, isCurrent }]
   remoteBranches: [],     // ['origin/main', ...]
@@ -122,7 +123,8 @@ const ui = {
   fileLineMap: [],
   lastLayout: { startRow: 0, startCol: 0, width: 0, height: 0, leftW: 0, divider1W: 0, middleW: 0, divider2W: 0, rightW: 0, bodyH: 0 },
   rightDiffH: 0,
-  lastLogListH: 0,
+  lastLogListH: 0,        // 히스토리 목록 칸의 높이(가로 스크롤바 줄 포함) — 아래 구분선 위치의 기준
+  lastLogListRows: 0,     // 그중 커밋 줄이 보이는 줄 수(가로 스크롤바 줄 제외) — 줄 클릭·호버·세로 스크롤의 기준
   lastDetailContentH: 0,
   commitInputRow: -1,
   commitButtonZone: null,

@@ -1,6 +1,6 @@
 const { t } = require('./i18n');
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
-const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderCombinedGraphPixels, encodeSixel, encodeSixelClear } = require('./sixel');
+const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderCombinedGraphPixels, cropPixelColumns, encodeSixel, encodeSixelClear } = require('./sixel');
 const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine } = require('./text');
 const { state, ui, isPinnedBranch, localRefKey, remoteRefKey, isFilteredRef, isHiddenRef } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
@@ -1113,11 +1113,12 @@ function renderBody() {
   // host maps to one row above the list viewport (and scrolls/clips it with
   // the region).
   if (SIXEL_ENABLED && ui.logSixelOverlay && state.rightView === 'log') {
-    const graphCol = startCol + leftW + divider1W + 1;
+    const sz = ui.logSixelOverlaySize;
+    // 가로로 스크롤했으면 그래프의 보이는 부분이 패널 첫 칸부터 놓인다(buildLogPanel 이 정한 col).
+    const graphCol = startCol + leftW + divider1W + (sz && sz.col !== undefined ? sz.col : 1);
     const screenRow = ui.logSixelAnchorBank
       ? hostScroll.bankRow('logList') + 1
       : startRow + titleRows + 1;
-    const sz = ui.logSixelOverlaySize;
     const old = ui.logSixelRegion;
     // 새 sixel이 이전 영역을 완전히 덮으면(같은 위치 + 같거나 큰 크기) 텍스트 레이어가
     // 그래프 셀을 먼저 다시 칠하고 그 위에 새 sixel을 얹으므로 잔상이 없다 → clear 불필요.
@@ -1190,8 +1191,8 @@ function renderBody() {
       }
     } else if (state.rightView === 'log') {
       // Log history list
-      if (rightW > 0 && ui.lastLogListH > 0) {
-        addScrollbar(state.logScrollOffset, ui.logListMaxScroll, ui.lastLogListH, sbBodyTop, startCol + width - 1, 'logList');
+      if (rightW > 0 && ui.lastLogListRows > 0) {
+        addScrollbar(state.logScrollOffset, ui.logListMaxScroll, ui.lastLogListRows, sbBodyTop, startCol + width - 1, 'logList');
       }
       // Log detail
       if (rightW > 0 && ui.lastDetailContentH > 0) {
@@ -2415,21 +2416,38 @@ function buildDiffCommitPanel(w, h) {
 
 // ── Right panel (log mode): history + detail (top/bottom split) ──
 
-// 그래프 열 폭 — 불러온 목록 전체에서 가장 넓은 줄의 폭(naturalWidth). 예전에는 보이는 줄만 보고
-// 정해서, 갈래가 많은 구간이 화면에 들어오고 나갈 때마다 폭이 바뀌어 스크롤하는 동안 목록 전체가
-// 옆으로 밀렸다(호스트가 줄을 미는 동안 다음 프레임에서 모든 줄의 글자 위치가 바뀐다 — 2026-11-18
-// Com2uX: 폭 1~26칸, 4,453줄을 내리는 동안 39번). 목록은 새로 읽을 때 배열째 바뀌므로 그것으로 캐시한다.
-let _logGraphWidthCache = { items: null, length: -1, width: 1 };
-function logGraphWidth(items) {
-  const c = _logGraphWidthCache;
-  if (c.items === items && c.length === items.length) return c.width;
-  let width = 1;
-  for (const item of items) {
-    if (item && item.naturalWidth > width) width = item.naturalWidth;
-  }
-  _logGraphWidthCache = { items, length: items.length, width };
+// 히스토리 한 줄에 쓰는 제목. %s 는 첫 문단을 한 줄로 이은 것이라, 빈 줄 없이 쓴 메시지는 통째로
+// 들어온다. 가로 스크롤 캔버스가 그런 한 줄을 따라 한없이 넓어지지 않게 여기서 끊는다 — 전문은
+// 아래 상세에 나온다.
+const LOG_SUBJECT_MAX_COLS = 500;
+function logSubjectText(item) {
+  return truncate((item.subject || '').replace(/[\r\n]/g, ''), LOG_SUBJECT_MAX_COLS);
+}
+
+// 커밋 줄의 장식(브랜치·태그). "HEAD -> " 표기는 떼고, 같은 이름의 로컬·원격은 한 토큰으로 묶는다.
+function logDecoTokens(item, currentBranch) {
+  const raw = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
+  const tokens = buildDecoTokens(raw.split(', ').map(r =>
+    r.startsWith('HEAD -> ') ? r.substring(8) : r
+  ).join(', '), currentBranch);
+  return { raw, tokens };
+}
+
+// 커밋 줄에서 그래프 뒤 글자 부분(제목 + 공백 + 장식)의 폭 — renderLogRow 가 자르지 않고 쓸 때의 폭과
+// 같다. 가로로 넘겨 볼 폭은 지금 목록 칸에 든 줄로 정하므로 프레임마다 그 줄 수만큼 부른다 — 항목마다
+// 기억해 둔다. 장식 묶음은 지금 브랜치에 따라 달라지고 항목이 제자리에서 바뀔 수도 있어 함께 비교한다.
+const _logTextWidthMemo = new WeakMap();
+function logRowTextWidth(item, currentBranch) {
+  const m = _logTextWidthMemo.get(item);
+  if (m && m.branch === currentBranch && m.subject === item.subject && m.decoration === item.decoration) return m.width;
+  const deco = item.decoration ? decoPlainText(logDecoTokens(item, currentBranch).tokens) : '';
+  const width = visLen(logSubjectText(item)) + (deco ? 1 + visLen(deco) : 0);
+  _logTextWidthMemo.set(item, { branch: currentBranch, subject: item.subject, decoration: item.decoration, width });
   return width;
 }
+
+// 히스토리 줄 끝의 해시 칸: 공백 한 칸 + 7자 해시(graph.js 가 hash 앞 7자로 만든다).
+const LOG_HASH_COLS = 8;
 
 function buildLogPanel(w, h) {
   if (state.logItems.length === 0) {
@@ -2482,18 +2500,93 @@ function buildLogPanel(w, h) {
 
   const logPinned = ui.logScrollPin !== undefined && ui.logScrollPin === state.logCursor;
   if (ui.logScrollPin !== undefined && ui.logScrollPin !== state.logCursor) ui.logScrollPin = undefined;
-  if (!logPinned && selectedItemIdx >= 0) {
-    if (selectedItemIdx < state.logScrollOffset) {
-      state.logScrollOffset = selectedItemIdx;
-    } else if (selectedItemIdx >= state.logScrollOffset + listH) {
-      state.logScrollOffset = selectedItemIdx - listH + 1;
+  // 커서가 rows 줄 안에 보이도록 옮긴 맨 윗줄(호스트가 스크롤을 쥐고 있으면 옮기지 않는다).
+  const logItemCount = state.logItems.length;
+  function followCursor(off, rows) {
+    if (!logPinned && selectedItemIdx >= 0) {
+      if (selectedItemIdx < off) off = selectedItemIdx;
+      else if (selectedItemIdx >= off + rows) off = selectedItemIdx - rows + 1;
+    }
+    return Math.max(0, Math.min(off, Math.max(0, logItemCount - rows)));
+  }
+
+  // ── 가로 스크롤 ──
+  // 커밋 줄은 ' ' + 그래프 + ' ' + 제목 + ' ' + 장식(앞부분)과 ' ' + 해시(7칸)다. 예전에는 패널 폭에 맞춰
+  // 장식부터 잘라서, 제목이 긴 커밋은 브랜치 이름이 "…"로 끊긴 채 볼 방법이 없었다. 호스트가 가로
+  // 스크롤을 맡으면 앞부분은 자르지 않고 옆으로 넘겨 보게 하고, 해시는 넘기는 동안에도 보이는 칸의
+  // 오른쪽 끝에 붙여 둔다(textViewW 가 앞부분이 보이는 폭이다).
+  // 넘겨 볼 폭과 스크롤바는 지금 목록 칸에 든 줄로 정한다. 목록 전체로 정하면 보이는 줄이 다 들어가도
+  // 스크롤바가 남고, 화면에 없는 긴 줄의 폭만큼 빈 칸을 넘기게 된다(2026-11-20 사용자 지적). 그래서
+  // 세로로 스크롤하는 동안 폭이 바뀌고 스크롤바가 생겼다 없어진다 — 바뀌는 것은 가로 내용 폭뿐이라
+  // scroll.js 가 이를 가볍게 다시 등록한다.
+  // 목록 칸이 한 줄뿐이면 스크롤바 줄을 내줄 수 없으니 예전처럼 잘라 그린다.
+  const textViewW = innerW - LOG_HASH_COLS;
+  const canHScroll = hostScroll.isActive() && listH >= 2 && textViewW > 0;
+  // ── 그래프 열 폭 ──
+  // 커밋 메시지는 지금 목록 칸에 든 줄 가운데 가장 넓은 트리의 오른쪽 끝에서 한 칸 띄운다(2026-11-20
+  // 사용자 결정). 그전에는 불러온 목록 전체에서 가장 넓은 폭으로 정해, 화면의 트리는 좁은데 메시지가
+  // 멀리 떨어져 있었다(Com2uX 는 트리 폭이 1~26칸). 그 대신 세로로 내리다 트리가 넓거나 좁은 구간이
+  // 들어오면 메시지 열이 옆으로 옮겨 간다 — 전체 폭은 이것을 막으려던 것이었지만(2026-11-18, 4,453줄을
+  // 내리는 동안 39번), 사용자는 간격 쪽을 골랐다. 화면 밖 여분 줄(bank)의 트리가 더 넓으면 그 줄이
+  // 드러나는 동안만 그래프 오른쪽이 잘린다(sixel 버퍼 폭에서 끊긴다).
+  //
+  // off 부터 목록 칸 높이(listH)만큼의 줄로 트리 폭(graphW)과 앞부분(' ' + 그래프 + ' ' + 제목 + ' ' +
+  // 장식)의 가장 넓은 폭(headW)을 잰다. 스크롤바가 덮을 맨 아랫줄까지 센다 — 그 줄을 빼고 정하면, 그 줄만
+  // 넘칠 때 스크롤바를 두면 넘치는 줄이 안 보이고 치우면 다시 보이는 되먹임이 생긴다.
+  function measureLogRows(off) {
+    let graphW = 1, textW = -1;
+    for (let i = off, end = Math.min(logItemCount, off + listH); i < end; i++) {
+      const item = state.logItems[i];
+      if (!item) continue;
+      if (item.naturalWidth > graphW) graphW = item.naturalWidth;
+      if (item.type === 'commit') {
+        const w = logRowTextWidth(item, state.branch);
+        if (w > textW) textW = w;
+      }
+    }
+    return { graphW, headW: textW >= 0 ? 1 + graphW + 1 + textW : 1 + graphW };
+  }
+  // 스크롤바 없이(목록 칸 전체가 커밋 줄) 맞으면 그대로 두고, 넘치는 줄이 있으면 맨 아랫줄을 스크롤바에
+  // 내준다(diff 패널과 같다). 스크롤바 줄 때문에 커서가 가려지면 한 줄 내리는데, 내린 자리에 넘치는 줄이
+  // 없으면(넘치던 줄이 맨 윗줄 하나였다) 스크롤바 없이 그 줄을 잘라 둔다 — 어느 쪽도 다음 프레임에서 다시
+  // 같은 답이 나와, 그릴 때마다 스크롤바가 생겼다 없어졌다 하지 않는다.
+  //
+  // 옆으로 넘겨 둔 동안(logScrollX > 0)에는 폭을 지금 위치 아래로 줄이지 않고 스크롤바도 둔다. 줄이면
+  // 세로로 내리다 짧은 줄 구간에 들어설 때마다 가로 위치가 당겨지는데, 호스트는 그 소식을 받기 전까지
+  // 예전 가로 위치로 새 프레임을 밀어 그려 해시 줄이 옆으로 어긋난다(2026-11-20 Com2uX 창 기록: 빠르게
+  // 내리는 동안 scroll-set 이 가로 위치만 50→29→4, 24→4→0 으로 당김 — 사용자가 "빠르게 스크롤하면
+  // 잠시 정렬이 흐트러진다"고 함). 세로 스크롤은 가로 위치를 건드리지 않는다. 폭은 왼쪽으로 되넘기면서 줄어든다.
+  const keepLeft = canHScroll ? Math.max(0, state.logScrollX || 0) : 0;
+  let rowsH = listH, headW = 0;
+  state.logScrollOffset = followCursor(state.logScrollOffset, listH);
+  let measured = measureLogRows(state.logScrollOffset);
+  if (canHScroll) {
+    headW = measured.headW;
+    if (headW > textViewW || keepLeft > 0) {
+      const off = followCursor(state.logScrollOffset, listH - 1);
+      const m = measureLogRows(off);
+      if (m.headW > textViewW || keepLeft > 0) {
+        rowsH = listH - 1;
+        state.logScrollOffset = off;
+        measured = m;
+        headW = m.headW;
+      } else {
+        headW = 0;
+      }
     }
   }
-  state.logScrollOffset = Math.max(0, Math.min(state.logScrollOffset, Math.max(0, state.logItems.length - listH)));
+  const maxNaturalWidth = measured.graphW;
+  const rowFixedW = 1 + maxNaturalWidth + 1 + 1 + 7;
+  const hasHScroll = rowsH < listH;
+  const canvasW = hasHScroll ? Math.max(headW + LOG_HASH_COLS, keepLeft + innerW) : innerW;
+  ui.lastLogListRows = rowsH;
+  state.logScrollX = Math.max(0, Math.min(state.logScrollX || 0, canvasW - innerW));
+  const logScrollX = state.logScrollX;
+  const logDepth = hostScroll.depthOf('logList');
+  // 한 줄을 만들 폭: 보이는 칸과 호스트가 가로 스크롤용으로 받아 두는 여분까지(renderableWidth).
+  const rowRenderW = hasHScroll ? renderableWidth(canvasW, logScrollX, innerW, 'logList') : innerW;
 
   // -- Item list --
-  // 그래프 열 폭은 목록 전체에서 가장 넓은 줄에 맞춘다(logGraphWidth 주석 참고).
-  const maxNaturalWidth = logGraphWidth(state.logItems);
   const graphRows = [];
   let graphWidth = 0;
   const logFocused = state.focusPanel === 'status';
@@ -2513,17 +2606,14 @@ function buildLogPanel(w, h) {
       // 그려진다. (예전엔 CUF로 이 칸을 건너뛰어 깜빡임을 줄였으나, 밑바탕 셀이 옛 텍스트를
       // 계속 들고 있어 빠른 host-scroll 중 sixel이 못 덮는 순간 stale 텍스트가 새어 나왔다.)
       const graphPart = ' '.repeat(graphVisLen) + ' ';
-      const fixedLen = 1 + graphVisLen + 1 + 7 + 1;
-      const available = innerW - fixedLen;
-      const decoRawOrig = item.decoration ? item.decoration.replace(/^\s*\(/, '').replace(/\)$/, '') : '';
+      // 가로로 넘겨 볼 수 있으면 앞부분을 자르지 않는다 — 보이는 칸만 아래에서 떼어 낸다.
+      const available = canHScroll ? Infinity : innerW - rowFixedW;
+      const { raw: decoRawOrig, tokens: decoTokens } = logDecoTokens(item, state.branch);
       const isHead = /(?:^|,\s*)HEAD(?:\s*->|,|\s*$)/.test(decoRawOrig);
-      const decoTokens = buildDecoTokens(decoRawOrig.split(', ').map(r =>
-        r.startsWith('HEAD -> ') ? r.substring(8) : r
-      ).join(', '), state.branch);
       // 폭 계산은 축약된 표기 기준이어야 subject 잘림 위치가 어긋나지 않는다
       const decoRaw = decoPlainText(decoTokens);
       const decoColorized = decoRaw ? colorizeDecoTokens(decoTokens, state.branch, isHead) : '';
-      const safeSubject = (item.subject || '').replace(/[\r\n]/g, '');
+      const safeSubject = logSubjectText(item);
       let subjStr, decoPart;
       if (available <= 0) {
         subjStr = ''; decoPart = '';
@@ -2549,14 +2639,33 @@ function buildLogPanel(w, h) {
         : (isHead ? colors.green + ansi.bold : colors.yellow);
       const subjPart = (isHead ? ansi.bold : '') + subjectStyle + subjStr + resetTo;
       const hashPart = hashStyle + item.ref + resetTo;
-      const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
-      const pad = Math.max(1, innerW - usedLen - 7);
       const decoPartFixed = isCursor ? decoPart.replace(/\x1b\[0m/g, resetTo) : decoPart;
-      let line = prefix + graphPart + subjPart + decoPartFixed + ' '.repeat(pad) + hashPart;
+      const head = prefix + graphPart + subjPart + decoPartFixed;
+      let line;
+      if (canHScroll) {
+        // 앞부분을 보이는 칸의 끝(viewEnd)까지 쓰고 그 뒤, 곧 보이는 칸의 오른쪽 끝에 해시를 붙인다.
+        // 줄 글은 캔버스 좌표다 — 그릴 때 logScrollX 기준으로 잘라 가고, 그보다 앞 칸은 호스트가 가로
+        // 스크롤 중 드러낼 왼쪽 여분 칸 말고는 읽지 않는다. 앞부분이 viewEnd 안에 다 들어가면(대부분의
+        // 줄) 자르지 않고 공백만 채운다 — 줄마다 매 프레임 글자를 훑으면 jitless 로 0.5ms 가 늘었다.
+        // 호스트가 가로로 미는 동안에는 해시도 함께 밀렸다가 다음 프레임에 제자리로 온다(호스트 영역에는
+        // 고정 칸이 없다).
+        const viewEnd = logScrollX + textViewW;
+        const rowHeadW = 1 + graphVisLen + 1 + logRowTextWidth(item, state.branch);
+        const headPart = rowHeadW <= viewEnd ? head + ' '.repeat(viewEnd - rowHeadW) : hostScroll.sliceLine(head, 0, viewEnd);
+        line = headPart + resetTo + ' ' + hashStyle + String(item.ref || '').slice(0, 7).padEnd(7) + resetTo;
+      } else {
+        const usedLen = 1 + graphVisLen + 1 + visLen(subjStr) + visLen(decoPart);
+        const pad = Math.max(1, innerW - usedLen - 7);
+        line = head + ' '.repeat(pad) + hashPart;
+      }
       if (isDim) line = ansi.dim + line.replace(/\x1b\[0m/g, ansi.reset + ansi.dim).replace(/\x1b\[1m/g, '');
       if (item.chars && item.chars.length > graphWidth) graphWidth = item.chars.length;
       return {
-        text: (isCursor ? cursorBgColor : '') + padRight(line, innerW) + ansi.reset,
+        // 가로로 스크롤하면 커서 배경이 보이는 끝까지 이어지도록 그릴 폭만큼 채운다. 가로로 넘겨 볼 수
+        // 있으면 줄 폭이 정확히 logScrollX + innerW 라(앞부분을 viewEnd 까지 맞췄다) 다시 세지 않는다.
+        text: (isCursor ? cursorBgColor : '')
+          + (canHScroll ? line + ' '.repeat(Math.max(0, rowRenderW - logScrollX - innerW)) : padRight(line, rowRenderW))
+          + ansi.reset,
         graph: item.chars ? {
           chars: graphItem.chars, charColors: graphItem.charColors, charColorsH: graphItem.charColorsH,
           charStyles: graphItem.charStyles, charStylesH: graphItem.charStylesH,
@@ -2581,15 +2690,23 @@ function buildLogPanel(w, h) {
       };
     }
   }
-  for (let i = 0; i < listH; i++) {
-    const row = renderLogRow(state.logScrollOffset + i);
-    lines.push(row.text);
+  // 한 프레임 안에서 같은 줄을 두 번 만들지 않는다 — 가로 스크롤 여분 칸(bank 열)을 쓸 때 보이는
+  // 줄을 다시 꺼내 간다(getLine).
+  const rowMemo = new Map();
+  function logRowAt(itemIdx) {
+    let row = rowMemo.get(itemIdx);
+    if (!row) { row = renderLogRow(itemIdx); rowMemo.set(itemIdx, row); }
+    return row;
+  }
+  for (let i = 0; i < rowsH; i++) {
+    const row = logRowAt(state.logScrollOffset + i);
+    lines.push(hasHScroll ? hostScroll.sliceLine(row.text, logScrollX, innerW) : row.text);
     graphRows.push(row.graph);
   }
 
   // Apply hover highlight to log list
   const hoverRow = ui.hoveredLogRow;
-  if (hoverRow >= 0 && hoverRow < listH) {
+  if (hoverRow >= 0 && hoverRow < rowsH) {
     const itemIdx = state.logScrollOffset + hoverRow;
     const item = state.logItems[itemIdx];
     // Only apply hover to commit items (not graph-only rows) and not to cursor
@@ -2603,6 +2720,8 @@ function buildLogPanel(w, h) {
       }
     }
   }
+  // 가로 스크롤바 줄 — 호스트가 그 위에 스크롤바를 그린다.
+  if (hasHScroll) lines.push('');
 
   // Host-owned scroll: register the list as a region with its negotiated
   // overscan bank rows (rows above the viewport + rows below) so the host can
@@ -2615,30 +2734,32 @@ function buildLogPanel(w, h) {
   // 나타나지 않는다 — 커밋 수가 적은 저장소에서 브랜치 트리가 통째로 사라지던 원인이다.
   // 스크롤이 불가능할 땐 bank를 쓰지 않고 보이는 행에 직접 그린다(원래 호스트 확인 전에
   // 쓰던 경로와 같다).
-  const listScrollable = state.logItems.length > listH;
-  const useHostScroll = hostScroll.isActive() && listH > 0 && listScrollable
+  const listScrollable = state.logItems.length > rowsH;
+  const useHostScroll = hostScroll.isActive() && rowsH > 0 && listScrollable
     && hostScroll.isReady('logList');
-  const logDepth = hostScroll.depthOf('logList');
   let logBankRows = null;
-  if (hostScroll.isActive() && listH > 0) {
+  if (hostScroll.isActive() && rowsH > 0) {
     const off = state.logScrollOffset;
     if (useHostScroll) {
       // Same order as buildBank: `before` rows above (oldest first), then
       // `after` rows below. Kept as row objects because the graph column needs
       // the per-row glyph data, not just the text.
       logBankRows = [];
-      for (let i = logDepth.before; i >= 1; i--) logBankRows.push(renderLogRow(off - i));
-      for (let i = 0; i < logDepth.after; i++) logBankRows.push(renderLogRow(off + listH + i));
+      for (let i = logDepth.before; i >= 1; i--) logBankRows.push(logRowAt(off - i));
+      for (let i = 0; i < logDepth.after; i++) logBankRows.push(logRowAt(off + rowsH + i));
     }
+    // 줄 글(bank·getLine)은 캔버스 좌표 그대로 넘기고, 보이는 칸과 여분 칸은 프레임을 쓸 때 left 로 잘라 낸다.
     ui.hostScrollRegions.push({
-      id: 'logList', panel: 'right', relRow: 0, width: innerW, height: listH,
+      id: 'logList', panel: 'right', relRow: 0, width: innerW, height: rowsH,
       contentRows: state.logItems.length, off,
+      contentCols: canvasW, left: logScrollX,
+      getLine: hasHScroll ? (i => logRowAt(i).text) : null,
       bank: logBankRows ? logBankRows.map(r => r.text) : [],
     });
   }
 
   // Sixel. With host scroll the graph covers the overscan range too
-  // ([off-before, off+listH+after-1]) and is anchored at the first bank row,
+  // ([off-before, off+rowsH+after-1]) and is anchored at the first bank row,
   // which the host maps to `before` rows above the viewport.
   if (SIXEL_ENABLED && graphRows.length > 0 && maxNaturalWidth > 0) {
     const off = state.logScrollOffset;
@@ -2649,13 +2770,25 @@ function buildLogPanel(w, h) {
           ...logBankRows.slice(logDepth.before).map(r => r.graph),
         ]
       : graphRows;
-    const pixBuf = renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH);
+    // 그래프는 내용의 1번 칸부터 maxNaturalWidth 칸을 차지한다. sixel 은 셀이 아니라 픽셀이라 패널
+    // 가장자리에서 잘리지 않으므로, 가로 스크롤 위치에서 보이는 칸 [from, to) 만 떼어 그 자리에 그린다.
+    // (가로로 다 넘겨 그래프가 보이지 않으면 그리지 않는다.) 오른쪽 끝 해시 칸은 덮지 않는다.
+    const from = Math.max(1, logScrollX);
+    const to = Math.min(1 + maxNaturalWidth, logScrollX + (canHScroll ? textViewW : innerW));
+    const pixBuf = to > from ? renderCombinedGraphPixels(sixelGraphRows, maxNaturalWidth, ui.cellW, ui.cellH) : null;
     if (pixBuf) {
-      const pixelW = maxNaturalWidth * ui.cellW;
+      const fullW = maxNaturalWidth * ui.cellW;
+      const pixelW = (to - from) * ui.cellW;
       const pixelH = sixelGraphRows.length * ui.cellH;
-      ui.logSixelOverlay = encodeSixel(pixBuf, pixelW, pixelH, SIXEL_PALETTE);
-      ui.logSixelOverlaySize = { pixelW, pixelH };
+      const visible = cropPixelColumns(pixBuf, fullW, pixelH, (from - 1) * ui.cellW, (to - 1) * ui.cellW);
+      ui.logSixelOverlay = encodeSixel(visible, pixelW, pixelH, SIXEL_PALETTE);
+      // col: 패널 첫 칸에서 몇 칸 떨어진 곳에 그리는가(스크롤하지 않았으면 맨 앞 공백 다음인 1).
+      ui.logSixelOverlaySize = { pixelW, pixelH, col: from - logScrollX };
       ui.logSixelAnchorBank = useHostScroll;
+    } else {
+      ui.logSixelOverlay = null;
+      ui.logSixelOverlaySize = null;
+      ui.logSixelAnchorBank = false;
     }
   } else {
     ui.logSixelOverlay = null;
@@ -2664,8 +2797,8 @@ function buildLogPanel(w, h) {
   }
 
   // Scroll pct for title
-  if (listH > 0 && state.logItems.length > listH) {
-    const maxScroll = Math.max(1, state.logItems.length - listH);
+  if (rowsH > 0 && state.logItems.length > rowsH) {
+    const maxScroll = Math.max(1, state.logItems.length - rowsH);
     ui.logListMaxScroll = maxScroll;
     ui.scrollPct.history = Math.round((state.logScrollOffset / maxScroll) * 100);
   } else {

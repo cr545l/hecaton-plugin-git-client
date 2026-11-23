@@ -290,6 +290,18 @@ function renderCombinedGraphPixels(graphRows, numCols, cellW, cellH) {
   return buf;
 }
 
+// 픽셀 버퍼에서 가로 [x0, x1) 만 떼어 낸다. 가로로 스크롤한 히스토리 목록에서 그래프의 보이는
+// 부분만 그리는 데 쓴다 — sixel 은 셀이 아니라 픽셀 오버레이라 패널 밖으로 삐져나가도 잘리지 않는다.
+function cropPixelColumns(buf, w, h, x0, x1) {
+  x0 = Math.max(0, Math.min(w, x0));
+  x1 = Math.max(x0, Math.min(w, x1));
+  if (x0 === 0 && x1 === w) return buf;
+  const cw = x1 - x0;
+  const out = new Uint8Array(cw * h);
+  for (let y = 0; y < h; y++) out.set(buf.subarray(y * w + x0, y * w + x1), y * cw);
+  return out;
+}
+
 function encodeSixel(buf, w, h, palette) {
   let out = '\x1bP0;1;0q';
   out += '"1;1;' + w + ';' + h;
@@ -401,5 +413,5 @@ module.exports = {
   SIXEL_PALETTE,
   SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE,
   renderScrollbarPixels,
-  renderCombinedGraphPixels, encodeSixel, encodeSixelClear,
+  renderCombinedGraphPixels, cropPixelColumns, encodeSixel, encodeSixelClear,
 };

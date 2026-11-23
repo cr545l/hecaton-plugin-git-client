@@ -118,3 +118,63 @@ test('sliceLine 은 넓은 글자가 경계에 걸리면 공백으로 채우고 
   assert.equal(stripAnsi(scroll.sliceLine('a\x1bb', 0, 2)), 'a\x1bb');
   assert.equal(scroll.sliceLine('ab', 0, 4), 'ab  \x1b[0m');
 });
+
+// sliceLine 은 U+1100 아래 글자만 이어진 구간을 한 번에 건너뛴다(빠른 길). 글자 하나씩 세던 원래 방식과
+// 결과가 바이트 단위로 같아야 한다 — 넓은 글자·서로게이트·홀로 선 ESC·덜 끝난 SGR 이 섞인 입력으로 비교한다.
+test('sliceLine 의 빠른 길은 글자 단위로 세는 방식과 결과가 같다', () => {
+  const { isWide } = require('../text');
+  function sgrEndRef(text, i) {
+    if (text.charCodeAt(i + 1) !== 0x5b) return i + 1;
+    let j = i + 2;
+    while (j < text.length) {
+      const c = text.charCodeAt(j);
+      if ((c >= 0x30 && c <= 0x39) || c === 0x3b) j++;
+      else break;
+    }
+    return text.charCodeAt(j) === 0x6d ? j + 1 : i + 1;
+  }
+  function sliceRef(text, start, width) {
+    start = Math.max(0, start); width = Math.max(0, width);
+    const end = start + width;
+    let out = '', col = 0, used = 0, i = 0;
+    while (i < text.length) {
+      if (text.charCodeAt(i) === 0x1b) { const e = sgrEndRef(text, i); out += text.substring(i, e); i = e; continue; }
+      if (col >= end) break;
+      const cp = text.codePointAt(i);
+      const units = cp > 0xFFFF ? 2 : 1;
+      const n = isWide(cp) ? 2 : 1;
+      const overlap = Math.max(0, Math.min(end, col + n) - Math.max(start, col));
+      if (overlap) { out += overlap === n ? text.substring(i, i + units) : ' '.repeat(overlap); used += overlap; }
+      col += n; i += units;
+    }
+    return out + ' '.repeat(Math.max(0, width - used)) + '\x1b[0m';
+  }
+  const pieces = ['a', ' ', 'xyz', '\t', '\x1b[31m', '\x1b[0m', '\x1b[48;2;1;2;3m', '\x1b', '\x1b[', '\x1b[12', '한', '글',
+    '\u2500', '\u2026', '\uD83D\uDE00', '\uD840\uDC00', '\uD83D', '\uDE00', '\u3000', '\uFF21', '\u1100', '\u10FF', '\uFFFF'];
+  let seed = 20261120;
+  const rnd = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+  for (let t = 0; t < 20000; t++) {
+    let s = '';
+    const len = rnd(t % 10 === 0 ? 200 : 30);
+    for (let k = 0; k < len; k++) s += pieces[rnd(pieces.length)];
+    const start = rnd(40) - 3, width = rnd(40) - 3;
+    const want = sliceRef(s, start, width);
+    const got = scroll.sliceLine(s, start, width);
+    if (got !== want) assert.fail('sliceLine(' + JSON.stringify(s) + ', ' + start + ', ' + width + ')\n got ' + JSON.stringify(got) + '\nwant ' + JSON.stringify(want));
+  }
+});
+
+// 빠른 길이 줄 끝까지 찾아보면(정규식·indexOf) V8 에서는 빨라 위 시간 검사를 지나치지만 QuickJS 에서는
+// 55만 자 줄을 자를 때마다 줄 전체를 훑는다. 같은 칸을 자르는 비용이 줄 길이와 무관한지 짧은 줄과 견준다.
+test('sliceLine 의 빠른 길도 보이는 칸 너머는 훑지 않는다', () => {
+  const cost = (line) => {
+    const t0 = process.hrtime.bigint();
+    for (let i = 0; i < 300; i++) scroll.sliceLine(line, 10, 80);
+    return Number(process.hrtime.bigint() - t0);
+  };
+  const short = '\x1b[32m' + 'x'.repeat(2000) + '\x1b[0m';
+  const long = '\x1b[32m' + 'x'.repeat(2000000) + '\x1b[0m';
+  cost(short); cost(long); // 정규식 준비
+  const ratio = Math.min(cost(long), cost(long)) / Math.max(1, Math.max(cost(short), cost(short)));
+  assert.ok(ratio < 20, '200만 자 줄이 2천 자 줄보다 ' + ratio.toFixed(1) + '배 느리다');
+});

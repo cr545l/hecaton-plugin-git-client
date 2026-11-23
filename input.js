@@ -263,7 +263,7 @@ function maybeLoadMoreLog() {
   const cursorRemaining = state.logSelectables.length > 0
     ? state.logSelectables.length - 1 - state.logCursor
     : Infinity;
-  const scrollRemaining = state.logItems.length - (state.logScrollOffset + (ui.lastLogListH || 0));
+  const scrollRemaining = state.logItems.length - (state.logScrollOffset + (ui.lastLogListRows || 0));
   if (cursorRemaining <= 50 || scrollRemaining <= 50) loadMoreLog();
 }
 
@@ -685,7 +685,7 @@ async function handleKey(key) {
   if (key === CSI + 'C' || key === CSI + 'D') {
     const target = state.focusPanel === 'diff'
       ? (state.rightView === 'log' ? 'logDetail' : state.rightView === 'fresh' ? 'freshDetail' : 'diff')
-      : 'files';
+      : (state.rightView === 'log' ? 'logList' : 'files');
     hostScroll.moveHorizontal(target, key === CSI + 'C' ? 2 : -2);
     render();
     return;
@@ -1478,7 +1478,8 @@ async function handleMouseData(data) {
         const inRight = cx >= rightStart && cx < L.startCol + L.width;
         if (inRight) {
           const bodyRowIdx = cy - (bodyTop);
-          if (bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
+          // 목록 칸 맨 아랫줄이 가로 스크롤바일 수 있다 — 커밋 줄까지만 본다.
+          if (bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListRows) {
             newLogRowHover = bodyRowIdx;
           }
         }
@@ -1770,10 +1771,13 @@ async function handleMouseData(data) {
       const inBody = cy >= bodyTop && cy < bodyTop + L.bodyH;
       if (isHorizontalWheel || isShiftWheel) {
         if (inBody && (inMiddle || inRight)) {
-          const target = inMiddle ? 'files' : state.rightView === 'log' ? 'logDetail'
+          // 히스토리 화면은 위가 커밋 목록, 아래가 상세다 — 포인터가 있는 쪽을 옮긴다.
+          const inLogList = inRight && state.rightView === 'log' && cy - bodyTop < ui.lastLogListH;
+          const target = inMiddle ? 'files' : inLogList ? 'logList'
+            : state.rightView === 'log' ? 'logDetail'
             : state.rightView === 'fresh' ? 'freshDetail' : 'diff';
           hostScroll.moveHorizontal(target, wheelStep);
-          state.focusPanel = inMiddle ? 'status' : 'diff';
+          state.focusPanel = inMiddle || inLogList ? 'status' : 'diff';
           render();
         }
         continue;
@@ -2487,7 +2491,8 @@ async function handleMouseData(data) {
         } else if (state.rightView === 'log') {
           // Log mode: top = log list, bottom = detail
           if (bodyRowIdx < ui.lastLogListH) {
-            const itemIdx = state.logScrollOffset + bodyRowIdx;
+            // 목록 칸 맨 아랫줄은 가로 스크롤바일 수 있다(호스트가 그린다) — 커밋을 고르지 않는다.
+            const itemIdx = bodyRowIdx < ui.lastLogListRows ? state.logScrollOffset + bodyRowIdx : -1;
             const selectIdx = state.logSelectables.indexOf(itemIdx);
             if (selectIdx >= 0) {
               state.logCursor = selectIdx;
@@ -2655,7 +2660,7 @@ function handleContextMenuRequest(col, row) {
     const bodyRowIdx = cy - bodyTop;
     const rightStart2 = midStart + L.middleW + L.divider2W;
     const inRight2 = cx >= rightStart2 && cx < L.startCol + L.width;
-    if (inRight2 && bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListH) {
+    if (inRight2 && bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListRows) {
       const itemIdx = state.logScrollOffset + bodyRowIdx;
       const selectIdx = state.logSelectables.indexOf(itemIdx);
       if (selectIdx >= 0) {

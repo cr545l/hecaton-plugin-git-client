@@ -172,13 +172,20 @@ function applyOffset(target, offset) {
 
 function applyLeft(id, left) {
   if (id === 'files') state.filesScrollX = left;
+  else if (id === 'logList') state.logScrollX = left;
   else if (['diff', 'logDetail', 'freshDetail'].includes(id)) state.diffScrollX = left;
+}
+
+function currentLeft(id) {
+  if (id === 'files') return state.filesScrollX;
+  if (id === 'logList') return state.logScrollX;
+  return state.diffScrollX;
 }
 
 function moveHorizontal(id, delta) {
   const d = _definitions.get(id);
   if (!isActive() || !d) return;
-  const current = id === 'files' ? state.filesScrollX : state.diffScrollX;
+  const current = currentLeft(id);
   const left = Math.max(0, Math.min(d.contentCols - d.width, current + delta));
   applyLeft(id, left);
   _hostLeft.set(id, left);
@@ -191,6 +198,15 @@ function moveHorizontal(id, delta) {
 // 줄 수 × 55만 개의 토큰을 만들었다(JIT 없는 Node 로 한 프레임 250ms, QuickJS 는 그보다 느리다).
 // 결과는 종전과 같다: SGR(ESC[…m)과 홀로 선 ESC 는 칸을 차지하지 않고, 보이는 칸이 끝난 뒤의
 // 첫 글자에서 멈추며(그 앞의 ESC 시퀀스는 담는다), 넓은 글자가 경계에 걸리면 공백으로 채운다.
+//
+// U+1100 아래 글자만 이어진 구간은 한 번에 건너뛰거나 잘라 담는다. isWide 가 두 칸으로 세는 글자와
+// 서로게이트는 모두 U+1100 이상이라, 그 아래 글자는 글자 수가 곧 칸 수다. 히스토리 목록이 가로로
+// 스크롤되면서 매 프레임 보이는 줄과 bank 열(줄마다 두 번)을 자르게 됐는데, 글자 단위로 훑으니
+// JIT 없는 Node 로 그리기가 두 배 가까이 늘었다(2026-11-20, 6,000 커밋 목록 2.8 → 5.5ms).
+// 구간을 찾는 정규식은 보이는 칸이 끝나는 데까지만(한 칸 더) 본다 — 줄 끝까지 찾으면 55만 자짜리
+// 한 줄에서 위의 문제가 되살아난다. QuickJS 에서는 글자 단위 순회가 정규식 한 번보다 훨씬 느리다.
+const RUN_STOP = /[\x1b\u1100-\uffff]/;
+
 function sliceLine(value, start, width) {
   start = Math.max(0, start);
   width = Math.max(0, width);
@@ -198,13 +214,28 @@ function sliceLine(value, start, width) {
   const text = String(value || '');
   let out = '', col = 0, used = 0, i = 0;
   while (i < text.length) {  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
-    if (text.charCodeAt(i) === 0x1b) {
+    const c0 = text.charCodeAt(i);
+    if (c0 === 0x1b) {
       const seqEnd = sgrEnd(text, i);
       out += text.substring(i, seqEnd);
       i = seqEnd;
       continue;
     }
     if (col >= end) break;
+    if (c0 < 0x1100) {
+      // 한 칸짜리 글자만 이어진 구간 [i, j) — 다음 ESC 나 넓을 수 있는 글자 앞까지. end - col 칸을
+      // 지나면 어차피 멈추므로 그 한 칸 뒤까지만 찾는다.
+      const lim = Math.min(text.length, i + (end - col) + 1);  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
+      const k = text.substring(i + 1, lim).search(RUN_STOP);
+      const j = k < 0 ? lim : i + 1 + k;
+      const len = j - i;
+      const a = Math.max(start, col), b = Math.min(end, col + len);
+      if (b > a) { out += text.substring(i + a - col, i + b - col); used += b - a; }
+      if (col + len > end) break; // 보이는 칸을 넘는 글자가 이 구간 안에 있다 — 거기서 멈춘다
+      col += len;
+      i = j;
+      continue;
+    }
     const cp = text.codePointAt(i);
     const units = cp > 0xFFFF ? 2 : 1;
     const n = isWide(cp) ? 2 : 1;
@@ -247,19 +278,30 @@ function syncRegions(defs) {
     const gutterRows = d.contentCols > d.width ? 1 : 0;
     const sig = d.row + ',' + d.col + ',' + d.width + ',' + d.height + ','
       + d.contentRows + ',' + d.contentCols + ',' + d.overscanRow + ',' + gutter + ',' + gutterRows + ',' + d.overscanCol;
-    if (_sentRegions.get(d.id) !== sig) {
-      const prevSig = _sentRegions.get(d.id);
-      if (prevSig !== undefined) {
+    // 가로 내용 폭만 다른 시그니처 — 가로 스크롤바 줄은 영역 안에서 커밋 줄 하나와 자리를 바꿀 뿐이라
+    // 영역 전체 높이(height + gutterRows)로 비교한다.
+    const shape = d.row + ',' + d.col + ',' + d.width + ',' + (d.height + gutterRows) + ','
+      + d.contentRows + ',' + d.overscanRow + ',' + gutter + ',' + d.overscanCol;
+    const prev = _sentRegions.get(d.id);
+    if (!prev || prev.sig !== sig) {
+      // 가로 내용 폭(과 그에 딸린 가로 스크롤바 줄)만 바뀌었다. 히스토리 목록은 넘겨 볼 폭을 지금 보이는
+      // 줄로 정해서, 세로로 스크롤하는 동안 자주 이렇게 된다. 버퍼 자리와 크기는 그대로이므로 호스트
+      // 확인을 버리지 않고(버리면 확인이 다시 올 때까지 여분 줄과 그래프를 bank 에 못 쓴다) 호스트가 알던
+      // 위치도 잊지 않는다(잊으면 두 축을 다 scroll.set 으로 다시 보내, 그 사이 호스트가 더 움직인 만큼
+      // 되돌린다). 호스트는 등록을 받으며 위치를 새 범위 안으로 맞추고, 플러그인도 같은 범위로 맞춰
+      // 그렸으니 달라진 축만 아래에서 보낸다. 정상 동작이라 이상 징후 기록에도 남기지 않는다.
+      const colsOnly = !!prev && prev.shape === shape;
+      if (prev && !colsOnly) {
         const since = _lastUpdateAt.has(d.id) ? Date.now() - _lastUpdateAt.get(d.id) : -1;
-        traceScroll('scroll-region', { id: d.id, from: prevSig, to: sig, sinceUpdateMs: since });
+        traceScroll('scroll-region', { id: d.id, from: prev.sig, to: sig, sinceUpdateMs: since });
       }
-      _sentRegions.set(d.id, sig);
+      _sentRegions.set(d.id, { sig, shape });
       // Geometry changed (resize/font/layout): the previous confirmation no
       // longer describes the buffer the host holds. Drop it so isReady() is
       // false until the host confirms the NEW geometry — otherwise bank rows
       // and the bank-anchored graph sixel get written to off-screen buffer
       // rows the host hasn't enlarged yet, and the graph vanishes.
-      _confirmed.delete(d.id);
+      if (!colsOnly) _confirmed.delete(d.id);
       hecaton.scroll.region({
         id: d.id,
         row: d.row,
@@ -294,19 +336,28 @@ function syncRegions(defs) {
       }).catch(() => {});
       // Geometry (re)registration clamps host-side; make sure the host's
       // position matches what this frame actually rendered.
-      _hostOffsets.delete(d.id);
-      _hostLeft.delete(d.id);
+      if (!colsOnly) {
+        _hostOffsets.delete(d.id);
+        _hostLeft.delete(d.id);
+      }
     }
     const left = d.left || 0;
-    if (_hostOffsets.get(d.id) !== d.off || _hostLeft.get(d.id) !== left) {
+    const knownTop = _hostOffsets.get(d.id), knownLeft = _hostLeft.get(d.id);
+    if (knownTop !== d.off || knownLeft !== left) {
       // 호스트가 알던 위치를 바꾼다. 방금(1초 안) 호스트가 스크롤을 갱신한 영역이면 튐의 후보다.
       if (_hostOffsets.has(d.id) && _lastUpdateAt.has(d.id) && Date.now() - _lastUpdateAt.get(d.id) < 1000) {
-        traceScroll('scroll-set', { id: d.id, top: d.off, host: _hostOffsets.get(d.id), left, hostLeft: _hostLeft.get(d.id),
+        traceScroll('scroll-set', { id: d.id, top: d.off, host: knownTop, left, hostLeft: knownLeft,
           sinceUpdateMs: Date.now() - _lastUpdateAt.get(d.id) });
       }
       _hostOffsets.set(d.id, d.off);
       _hostLeft.set(d.id, left);
-      hecaton.scroll.set({ id: d.id, top_row: d.off, left_col: left }).catch(() => {});
+      // 달라진 축만 보낸다. 그대로인 축까지 보내면, 호스트가 그 축으로 더 움직였는데 그 소식(scroll.update)이
+      // 아직 오지 않았을 때 예전 위치로 되돌린다 — 히스토리 목록의 가로 폭이 줄어 왼쪽 위치만 맞추는 동안
+      // 세로로 내리던 목록이 거슬러 올라간다.
+      const p = { id: d.id };
+      if (knownTop !== d.off) p.top_row = d.off;
+      if (knownLeft !== left) p.left_col = left;
+      hecaton.scroll.set(p).catch(() => {});
     }
   }
   for (const id of Array.from(_sentRegions.keys())) {

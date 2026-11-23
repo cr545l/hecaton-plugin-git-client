@@ -4,7 +4,9 @@
 // 줄)에서 채운 뒤, 새 프레임이 오면 그것으로 바꾼다. 같은 내용 줄이 직전 프레임(밀린 것·bank)과 새
 // 프레임에서 다르게 그려지면 그 순간 그 줄이 바뀌어 "튄다". 2026-11-18 에 실제로 겪은 두 경우:
 //   - 히스토리 목록: 그래프 열 폭을 보이는 줄만 보고 정해, 갈래가 많은 구간이 들어오면 목록 전체가
-//     옆으로 밀렸다(Com2uX 4,453줄을 내리는 동안 39번).
+//     옆으로 밀렸다(Com2uX 4,453줄을 내리는 동안 39번). 그래서 목록 전체 폭으로 바꿨는데, 2026-11-20
+//     사용자가 메시지가 트리에서 너무 멀다며 보이는 트리 기준을 골랐다 — 이제 이 이동은 의도된 것이고,
+//     폭이 바뀐 프레임에서만 일어나는지를 본다.
 //   - 커밋 상세: 파일 이름 고정 줄을 영역 첫 줄에 겹쳐 그려, 한 줄 밀 때마다 맨 윗줄이 튀었다.
 // 영역 위치·bank 위치는 플러그인이 보낸 scroll.region 파라미터(호스트가 아는 것)를 그대로 쓴다.
 const test = require('node:test');
@@ -119,9 +121,10 @@ function baseState() {
 }
 
 // 구간마다 그래프 폭이 다른 목록 — 갈래가 많은 구간(폭 12)과 적은 구간(폭 2)이 번갈아 나온다.
-function commits(n) {
+const sectionWidth = i => Math.floor(i / 25) % 2 === 0 ? 2 : 12;
+function commits(n, widthAt = sectionWidth) {
   return Array.from({ length: n }, (_, i) => {
-    const width = Math.floor(i / 25) % 2 === 0 ? 2 : 12;
+    const width = widthAt(i);
     const chars = ['*'].concat(Array(width - 1).fill('|'));
     return { type: 'commit', hash: String(1000000 + i), subject: 'commit subject ' + i, decoration: '',
       naturalWidth: width, chars, charColors: chars.map(() => 0) };
@@ -133,19 +136,42 @@ function fileDiff(name, n) {
   return out;
 }
 
-test('히스토리 목록: 갈래가 많은 구간을 지나도 목록이 옆으로 밀리지 않는다', async () => {
+test('히스토리 목록: 메시지는 보이는 트리 끝에서 한 칸 — 줄 모습은 그 폭이 바뀔 때만 달라진다', async () => {
   baseState();
   state.logItems = commits(200);
   state.logSelectables = state.logItems.map((_, i) => i);
   state.logCursor = 0; state.logScrollOffset = 0;
   state.logDetailLines = ['commit 1000000'];
-  const jumps = await jumpsWhileScrolling('logList', 120);
-  assert.deepEqual(jumps.slice(0, 3), [], jumps.length + '줄이 스크롤 중 바뀌었다');
+  frame(); await settle(); frame(); await settle();
+  const update = handlers.get('scroll.update');
+  const p = regions.get('logList');
+  const listH = ui.lastLogListH;
+  let prevWidth = -1, prev = null, shifts = 0;
+  for (let top = 0; top <= 120; top++) {
+    update({ id: 'logList', top_row: top, left_col: 0 });
+    const out = frame();
+    // 목록 칸에 든 줄 가운데 가장 넓은 트리 + 앞 공백 한 칸 + 사이 공백 한 칸 뒤에서 메시지가 시작한다.
+    let width = 1;
+    for (let i = top; i < Math.min(200, top + listH); i++) width = Math.max(width, sectionWidth(i));
+    const now = strip(paint(out), p, top);
+    const first = now.get(top).replace(/{[^}]*}/g, ''); // paint 가 칸마다 붙인 색 표시를 뗀다
+    assert.equal(first.indexOf('commit subject ' + top), 1 + width + 1, 'top ' + top + ': ' + JSON.stringify(first.slice(0, 30)));
+    assert.equal(ui.logSixelRegion.pixelW, width * ui.cellW, 'top ' + top + ': 그래프 그림도 같은 폭');
+    if (prev) {
+      let changed = 0;
+      for (const [ci, a] of prev) { const b = now.get(ci); if (b !== undefined && a !== b) changed++; }
+      if (width === prevWidth) assert.equal(changed, 0, 'top ' + top + ': 폭이 그대로인데 줄이 바뀌었다');
+      else shifts++;
+    }
+    prev = now; prevWidth = width;
+  }
+  assert.ok(shifts > 0, '넓은 구간이 들어오고 나갈 때 메시지 열이 옮겨 간다');
 });
 
 test('히스토리 목록: 포인터를 목록 위에 둔 채 스크롤해도 호버 강조 줄이 튀지 않는다', async () => {
   baseState();
-  state.logItems = commits(200);
+  // 트리 폭이 고른 목록 — 메시지 열 이동(위 테스트)과 섞이지 않게 호버만 본다.
+  state.logItems = commits(200, () => 4);
   state.logSelectables = state.logItems.map((_, i) => i);
   state.logCursor = 0; state.logScrollOffset = 0;
   state.logDetailLines = ['commit 1000000'];
