@@ -1619,7 +1619,7 @@ function buildLeftPanel(w, h) {
         if (!groupCollapsed) {
           for (const item of items) {
             const fullName = prefix + '/' + item.shortName;
-            if (revealTarget && fullName === revealTarget) revealLineIdx = lines.length;
+            if (revealTarget && localRefKey(fullName) === revealTarget) revealLineIdx = lines.length;
             pushLine(branchLine(6, item.shortName, fullName, item.isCurrent, false,
               item.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(fullName),
               isPinnedBranch(fullName) ? branchTrackParts(item) : null), { action: 'goto-branch', branch: fullName, refKey: localRefKey(fullName) });
@@ -1627,7 +1627,7 @@ function buildLeftPanel(w, h) {
         }
       }
       for (const b of topLevel) {
-        if (revealTarget && b.name === revealTarget) revealLineIdx = lines.length;
+        if (revealTarget && localRefKey(b.name) === revealTarget) revealLineIdx = lines.length;
         pushLine(branchLine(4, b.name, b.name, b.isCurrent, false,
           b.isCurrent ? currentBranchTag : '', branchesInOtherWorktrees.has(b.name),
           isPinnedBranch(b.name) ? branchTrackParts(b) : null), { action: 'goto-branch', branch: b.name, refKey: localRefKey(b.name) });
@@ -1696,11 +1696,13 @@ function buildLeftPanel(w, h) {
             pushLine(colors.dim + '     ' + (subCollapsed ? ARROW_CLOSED : ARROW_OPEN) + ' ' + prefix + '/' + ansi.reset, { action: 'toggle-group', group: subKey });
             if (!subCollapsed) {
               for (const item of items) {
+                if (revealTarget && remoteRefKey(item.fullRef) === revealTarget) revealLineIdx = lines.length;
                 pushLine(branchLine(8, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef, refKey: remoteRefKey(item.fullRef) });
               }
             }
           }
           for (const item of topLevel) {
+            if (revealTarget && remoteRefKey(item.fullRef) === revealTarget) revealLineIdx = lines.length;
             pushLine(branchLine(6, item.shortName, item.fullRef, false, true), { action: 'goto-branch', branch: item.fullRef, refKey: remoteRefKey(item.fullRef) });
           }
         }
@@ -1824,15 +1826,30 @@ function buildLeftPanel(w, h) {
   return visibleLines;
 }
 
-// 상단 브랜치명 클릭 처리 — Branches 목록의 그 브랜치 줄을 화면에 드러낸다.
+// 상단 브랜치명·히스토리 브랜치 이름 클릭 처리 — 목록의 그 브랜치 줄을 화면에 드러낸다.
 // 섹션이나 prefix 그룹이 접혀 있으면 그 줄 자체가 그려지지 않아 스크롤할 대상이 없으므로,
 // 상위 토글을 모두 펼친 뒤 실제 스크롤은 다음 buildLeftPanel에서 (펼친 뒤의) 줄 인덱스로 한다.
-function revealBranch(branchName) {
+// refKey 가 리모트 추적 브랜치(refs/remotes/...)면 Remotes 목록에서 찾는다. 로컬 "origin/a" 와 리모트
+// "origin/a" 가 함께 있을 수 있어 이름만으로는 어느 쪽인지 가릴 수 없다.
+function revealBranch(branchName, refKey = localRefKey(branchName)) {
   if (!branchName) return;
-  ui.collapsedSections.branches = false;
-  const slashIdx = branchName.indexOf('/');
-  if (slashIdx > 0) ui.collapsedGroups['b:' + branchName.substring(0, slashIdx)] = false;
-  ui.leftRevealBranch = branchName;
+  if (refKey.startsWith('refs/remotes/')) {
+    // Remotes 목록과 같은 기준으로 묶는다: 첫 '/' 앞이 리모트, 나머지의 첫 '/' 앞이 하위 그룹.
+    ui.collapsedSections.remotes = false;
+    const slashIdx = branchName.indexOf('/');
+    if (slashIdx > 0) {
+      const remote = branchName.substring(0, slashIdx);
+      const rest = branchName.substring(slashIdx + 1);
+      ui.collapsedGroups['r:' + remote] = false;
+      const subIdx = rest.indexOf('/');
+      if (subIdx >= 0) ui.collapsedGroups['r:' + remote + '/' + rest.substring(0, subIdx)] = false;
+    }
+  } else {
+    ui.collapsedSections.branches = false;
+    const slashIdx = branchName.indexOf('/');
+    if (slashIdx > 0) ui.collapsedGroups['b:' + branchName.substring(0, slashIdx)] = false;
+  }
+  ui.leftRevealBranch = refKey;
 }
 
 // ── Middle panel (diff mode): file list ──
@@ -2446,6 +2463,71 @@ function logRowTextWidth(item, currentBranch) {
   return width;
 }
 
+// 커밋 줄의 앞부분 폭(available) 안에서 제목과 장식을 어떻게 나누는가. 그리기(renderLogRow)와 브랜치
+// 이름 클릭 판정(logBranchRefAt)이 함께 쓴다 — 두 곳이 따로 셈하면 잘린 줄에서 누른 칸과 그려진 이름이
+// 어긋난다. decoW 는 장식이 쓸 폭(앞 공백 제외, 0 이면 장식 없음), decoFull 은 장식을 자르지 않는다는 뜻이다.
+function logRowSplit(safeSubject, decoRaw, available) {
+  if (available <= 0) return { subjStr: '', decoW: 0, decoFull: false };
+  if (!decoRaw) return { subjStr: truncate(safeSubject, available), decoW: 0, decoFull: false };
+  const subjNeed = visLen(safeSubject);
+  const decoNeed = visLen(decoRaw) + 1;
+  if (subjNeed + decoNeed <= available) return { subjStr: safeSubject, decoW: decoNeed - 1, decoFull: true };
+  const subjW = Math.min(subjNeed, available - Math.min(decoNeed, Math.max(4, available - subjNeed)));
+  const subjStr = truncate(safeSubject, subjW);
+  const decoW = available - visLen(subjStr);
+  if (decoW >= 4) return { subjStr, decoW: decoW - 1, decoFull: false };
+  return { subjStr: truncate(safeSubject, available), decoW: 0, decoFull: false };
+}
+
+// 히스토리 줄의 relCol(목록 칸 첫 칸에서 센 화면 칸)에 그려진 브랜치 이름 — 없으면 null.
+// 지난 프레임이 줄을 나눈 기준(ui.logRowGeom)으로 그 커밋 줄 하나만 다시 잰다. 줄마다 클릭 영역을 만들어
+// 두면 그리는 비용이 늘고, 클릭·호버는 한 줄만 보면 된다. 브랜치로 고를 수 있는 것은 지금 목록에 있는
+// 로컬·리모트 추적 브랜치뿐이다 — HEAD(detached)·태그·stash·recovery 는 고를 브랜치가 아니다.
+// "develop@origin" 처럼 묶인 토큰은 앞 이름이 로컬, "@origin" 이 리모트 추적 브랜치다.
+function logBranchRefAt(itemIdx, relCol) {
+  const g = ui.logRowGeom;
+  const item = itemIdx >= 0 ? state.logItems[itemIdx] : null;
+  if (!g || !item || item.type !== 'commit' || !item.decoration) return null;
+  if (relCol < 0 || relCol >= g.viewW) return null;
+  const col = relCol + (g.canHScroll ? Math.max(0, state.logScrollX || 0) : 0);
+  const { tokens } = logDecoTokens(item, state.branch);
+  const decoRaw = decoPlainText(tokens);
+  const split = logRowSplit(logSubjectText(item), decoRaw, g.available);
+  if (split.decoW <= 0) return null;
+  const start = 1 + g.graphW + 1 + visLen(split.subjStr) + 1;
+  const rawW = visLen(decoRaw);
+  // 잘렸으면 마지막 칸은 '…' 이다 — 이름의 보이는 부분까지만 누를 수 있다.
+  const end = start + (split.decoFull || rawW <= split.decoW ? rawW : split.decoW - 1);
+  if (col < start || col >= end) return null;
+  const localHit = name => state.branches.some(b => b.name === name)
+    ? { branch: name, refKey: localRefKey(name) } : null;
+  const remoteHit = name => state.remoteBranches.includes(name)
+    ? { branch: name, refKey: remoteRefKey(name) } : null;
+  let c = start;
+  for (const token of tokens) {
+    const nameW = visLen(token.name);
+    if (col < c + nameW) {
+      if (token.kind === 'local') return localHit(token.name);
+      if (token.kind === 'remote') return remoteHit(token.name);
+      return null;
+    }
+    c += nameW;
+    // '@' 는 첫 리모트에 붙여 "@origin" 전체를 누를 자리로 삼는다(그릴 때 밑줄도 같이 긋는다).
+    for (let i = 0; i < token.remotes.length; i++) {
+      const w = (i === 0 ? REMOTE_MARK.length : 0) + visLen(token.remotes[i]);
+      if (col < c + w) return remoteHit(token.remotes[i] + '/' + token.name);
+      c += w;
+      if (i < token.remotes.length - 1) {
+        if (col < c + 1) return null;  // 리모트 사이 ','
+        c += 1;
+      }
+    }
+    if (col < c + 2) return null;  // 토큰 사이 ', '
+    c += 2;
+  }
+  return null;
+}
+
 // 히스토리 줄 끝의 해시 칸: 공백 한 칸 + 7자 해시(graph.js 가 hash 앞 7자로 만든다).
 const LOG_HASH_COLS = 8;
 
@@ -2591,6 +2673,14 @@ function buildLogPanel(w, h) {
   let graphWidth = 0;
   const logFocused = state.focusPanel === 'status';
   const cursorBgColor = listCursorBg();
+  const hoveredBranch = ui.hoveredLogBranch;
+  // 브랜치 이름 클릭 판정(logBranchRefAt)이 이 프레임과 같은 식으로 줄을 나누게 기준을 남긴다.
+  // viewW 는 앞부분이 보이는 폭이다 — 가로로 넘겨 볼 때 오른쪽 끝 해시 칸은 장식이 아니다.
+  ui.logRowGeom = {
+    graphW: maxNaturalWidth, canHScroll,
+    available: canHScroll ? Infinity : innerW - rowFixedW,
+    viewW: canHScroll ? textViewW : innerW,
+  };
   function renderLogRow(itemIdx) {
     const item = itemIdx >= 0 ? state.logItems[itemIdx] : null;
     if (!item) return { text: '', graph: null };
@@ -2612,26 +2702,13 @@ function buildLogPanel(w, h) {
       const isHead = /(?:^|,\s*)HEAD(?:\s*->|,|\s*$)/.test(decoRawOrig);
       // 폭 계산은 축약된 표기 기준이어야 subject 잘림 위치가 어긋나지 않는다
       const decoRaw = decoPlainText(decoTokens);
-      const decoColorized = decoRaw ? colorizeDecoTokens(decoTokens, state.branch, isHead) : '';
-      const safeSubject = logSubjectText(item);
-      let subjStr, decoPart;
-      if (available <= 0) {
-        subjStr = ''; decoPart = '';
-      } else if (!decoRaw) {
-        subjStr = truncate(safeSubject, available); decoPart = '';
-      } else {
-        const subjNeed = visLen(safeSubject);
-        const decoNeed = visLen(decoRaw) + 1;
-        if (subjNeed + decoNeed <= available) {
-          subjStr = safeSubject; decoPart = ' ' + decoColorized;
-        } else {
-          const subjW = Math.min(subjNeed, available - Math.min(decoNeed, Math.max(4, available - subjNeed)));
-          subjStr = truncate(safeSubject, subjW);
-          const decoW = available - visLen(subjStr);
-          if (decoW >= 4) { decoPart = ' ' + truncate(decoColorized, decoW - 1); }
-          else { subjStr = truncate(safeSubject, available); decoPart = ''; }
-        }
-      }
+      // 마우스가 올라간 브랜치 이름에는 밑줄을 긋는다 — 눌러서 그 브랜치를 고를 수 있다는 표시다.
+      const hotRef = hoveredBranch && hoveredBranch.itemIdx === itemIdx ? hoveredBranch.refKey : null;
+      const decoColorized = decoRaw ? colorizeDecoTokens(decoTokens, state.branch, isHead, hotRef) : '';
+      const split = logRowSplit(logSubjectText(item), decoRaw, available);
+      const subjStr = split.subjStr;
+      const decoPart = split.decoW <= 0 ? ''
+        : ' ' + (split.decoFull ? decoColorized : truncate(decoColorized, split.decoW));
       const resetTo = isCursor ? ansi.reset + cursorBgColor : ansi.reset;
       const subjectStyle = item.isRecovery ? RECOVERY_TEXT : colors.value;
       const hashStyle = item.isRecovery
@@ -3405,9 +3482,15 @@ function decoPlainText(tokens) {
     .join(', ');
 }
 
-function colorizeDecoTokens(tokens, currentBranch, isHead) {
+// hotRef: 밑줄을 그을 브랜치의 refname(히스토리에서 마우스가 올라간 이름). 클릭 판정(logBranchRefAt)과
+// 같은 칸에 긋는다 — 로컬 이름, 리모트 추적 브랜치 이름, 묶인 리모트는 '@' 를 첫 리모트에 붙인다.
+const UNDERLINE = CSI + '4m';
+const UNDERLINE_OFF = CSI + '24m';
+function colorizeDecoTokens(tokens, currentBranch, isHead, hotRef = null) {
   const parts = [];
   const PINNED_STYLE = colors.pinned + ansi.bold;
+  const ul = (text, remote, name) => hotRef && (remote ? remoteRefKey(name) : localRefKey(name)) === hotRef
+    ? UNDERLINE + text + UNDERLINE_OFF : text;
   for (const token of tokens) {
     // 핀 고정 브랜치는 history에서도 같은 색으로 눈에 띄게 한다. 리모트 추적 브랜치는
     // 동명 로컬 브랜치의 핀을 따라가고(origin/develop ← develop), 현재 브랜치는
@@ -3425,17 +3508,20 @@ function colorizeDecoTokens(tokens, currentBranch, isHead) {
     } else if (token.kind === 'tag') {
       part = colors.yellow + token.name + ansi.reset;
     } else if (token.kind === 'remote') {
-      part = (pinned ? PINNED_STYLE : colors.red) + token.name + ansi.reset;
+      part = (pinned ? PINNED_STYLE : colors.red) + ul(token.name, true, token.name) + ansi.reset;
     } else if (token.name === currentBranch) {
-      part = colors.green + (isHead ? ansi.bold : '') + token.name + ansi.reset;
+      part = colors.green + (isHead ? ansi.bold : '') + ul(token.name, false, token.name) + ansi.reset;
     } else if (pinned) {
-      part = PINNED_STYLE + token.name + ansi.reset;
+      part = PINNED_STYLE + ul(token.name, false, token.name) + ansi.reset;
     } else {
-      part = colors.cyan + token.name + ansi.reset;
+      part = colors.cyan + ul(token.name, false, token.name) + ansi.reset;
     }
     if (token.remotes.length) {
       // "develop@origin"의 접미도 흡수된 리모트 짝이므로 로컬 이름과 같은 색으로 묶는다.
-      part += (pinned ? PINNED_STYLE : colors.red) + REMOTE_MARK + token.remotes.join(',') + ansi.reset;
+      const suffix = hotRef
+        ? token.remotes.map((r, i) => ul((i === 0 ? REMOTE_MARK : '') + r, true, r + '/' + token.name)).join(',')
+        : REMOTE_MARK + token.remotes.join(',');
+      part += (pinned ? PINNED_STYLE : colors.red) + suffix + ansi.reset;
     }
     parts.push(part);
   }
@@ -4238,4 +4324,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, requestRender, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, buildDecoTokens, decoPlainText, colorizeDecoration };
+module.exports = { render, requestRender, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, logBranchRefAt, buildDecoTokens, decoPlainText, colorizeDecoration };

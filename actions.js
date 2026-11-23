@@ -411,6 +411,8 @@ const READ_ONLY_ACTIONS = new Set([
   'file_external_diff_head', 'file_external_diff_index',
   'file_blame', 'file_history',
   'worktree_copy_path',
+  // 브랜치를 체크아웃한 워크트리 경로(서브메뉴 부모 — 자식은 READ_ONLY_PREFIXES)
+  'branch_worktrees', 'remotebranch_worktrees',
   // 파일/탐색기 열기 (현재 저장소를 바꾸지 않음)
   'file_open', 'file_open_explorer', 'file_show_in_explorer',
   'dir_open_explorer', 'dir_show_in_explorer',
@@ -440,6 +442,7 @@ const READ_ONLY_ACTIONS = new Set([
 
 const READ_ONLY_PREFIXES = [
   'history_branch_page:', 'branch_tracking_page:', 'tag_menu:',
+  'branch_worktree_path:', 'remotebranch_worktree_path:',
 ];
 
 function isReadOnlyAction(id) {

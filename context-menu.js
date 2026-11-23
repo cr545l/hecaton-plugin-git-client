@@ -468,6 +468,17 @@ function orderedTrackingRefs(branchName, upstream) {
   return (current ? [current] : []).concat(sameName, rest);
 }
 
+// 브랜치를 체크아웃한 워크트리들. 리모트 추적 브랜치는 같은 이름의 로컬 브랜치를 본다 — 브랜치 메뉴의
+// Checkout 과 히스토리의 "develop@origin" 이 짝짓는 방식과 같다(origin/develop → develop). 업스트림으로
+// 찾으면 origin/develop 에서 딴 기능 브랜치(branch.autoSetupMerge)까지 전부 걸린다.
+// git 은 다른 워크트리가 잡은 브랜치를 --force 없이는 체크아웃하지 않아 보통 0~1개다 — 메뉴 payload 가
+// 저장소 크기를 따라 커지지 않는다(REF_INLINE_MAX 참고).
+function branchWorktrees(entry) {
+  const localName = entry.local ? entry.name : splitUpstreamRef(entry.name, state.remotes).branch;
+  if (!localName) return [];
+  return state.worktrees.filter(w => w.path && w.branch === localName);
+}
+
 function trackingEntry(rb, upstream) {
   return { id: 'branch_track:' + rb, label: rb + (rb === upstream ? t('menu.current') : '') };
 }
@@ -562,6 +573,20 @@ function buildBranchesContextMenuItems(target) {
     { id: 'branch_new_tag', label: t('menu.newTag'), icon: 'tag', shortcut: 'Ctrl+Shift+T', enabled: !multiple },
     { id: 'worktree_new', label: t('menu.newWorktree'), icon: 'add', enabled: !multiple },
   ];
+  // 이 브랜치를 체크아웃해 작업 중인 워크트리. 왼쪽 목록은 절대경로를 그리지 않으므로 경로는 여기서
+  // 라벨로 보여 주고, 누르면 복사한다.
+  const holders = multiple ? [] : branchWorktrees(first);
+  items.push({
+    id: prefix + 'worktrees',
+    label: holders.length ? t('menu.branchWorktrees', { count: holders.length }) : t('menu.branchNoWorktree'),
+    icon: 'folder-opened',
+    children: holders.map(w => ({
+      id: prefix + 'worktree_path:' + w.path,
+      label: w.path + (w.isCurrent ? t('menu.thisWindow') : ''),
+      icon: 'copy',
+    })),
+    enabled: holders.length > 0,
+  });
   const trackingChildren = allLocal ? orderedTrackingRefs(first.name, first.upstream).map(rb => trackingEntry(rb, first.upstream)) : [];
   if (allLocal && first.upstream) {
     trackingChildren.push({ type: 'separator' }, { id: 'branch_untrack', label: t('menu.unsetUpstream'), icon: 'remove' });
@@ -618,6 +643,10 @@ async function handleBranchesAction(action, target = ui.contextMenuBranches) {
 }
 
 function branchMenuBatchAction(id, target) {
+  // ':' 뒤에 대상을 싣는 항목(branch_track:<리모트 브랜치>, branch_worktree_path:<경로>)은 묶음 동작이
+  // 아니다. 아래의 endsWith 판정에 넣으면 이름·경로가 "_hide" 따위로 끝날 때 엉뚱한 동작으로 샌다
+  // (예: branch_track:origin/fix_hide 가 Hide 로 처리됐다).
+  if (id.includes(':')) return null;
   const entries = branchSelection.resolve(target);
   if (id.endsWith('_copy_name')) return 'copy';
   if (id === 'branch_pin') return entries.every(e => isPinnedBranch(e.name)) ? 'unpin' : 'pin';
@@ -937,6 +966,16 @@ async function handleContextMenuAction(actionId) {
   // 실패는 각 분기가 오류 창으로 알리므로, 여기서는 예약 실행이 미처리 거부로 새지
   // 않게만 받아 둔다.
   if (!guardOrQueue(actionId, () => { handleContextMenuAction(actionId).catch(() => null); })) return;
+
+  // 브랜치 메뉴의 "작업 중인 워크트리" 경로 — 누르면 복사한다. 그 워크트리가 지금도 그 브랜치를 잡고
+  // 있는지는 위의 브랜치 메뉴 게이트가 메뉴를 다시 만들어 확인했다(아니면 "바뀌었다"고 알리고 멈춘다).
+  const worktreePath = /^(?:remote)?branch_worktree_path:(.+)$/.exec(actionId);
+  if (worktreePath) {
+    const copied = await perms.clipboardWrite(worktreePath[1], 'permission.reason.clipboardWrite', 'permission.denied.clipboardWrite');
+    // 거부는 권한 쪽이 이미 알렸다 — 복사했다는 말은 실제로 썼을 때만 한다.
+    if (copied && !copied.error_code && copied.ok !== false) showToast(t('input.copied') + worktreePath[1]);
+    return;
+  }
 
   // Tab context menu actions
   if (actionId === 'tab_refresh') {

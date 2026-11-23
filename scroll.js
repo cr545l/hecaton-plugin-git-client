@@ -144,7 +144,7 @@ function clearHoverFor(id) {
   switch (id) {
     case 'left': ui.hoveredLeftPanelRow = -1; break;
     case 'files': ui.hoveredFileRow = -1; break;
-    case 'logList': ui.hoveredLogRow = -1; break;
+    case 'logList': ui.hoveredLogRow = -1; ui.hoveredLogBranch = null; break;
     case 'freshList': ui.hoveredFreshRow = -1; break;
     case 'diff': case 'logDetail': case 'freshDetail':
       ui.hoveredDetailCopyZone = null;

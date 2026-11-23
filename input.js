@@ -27,7 +27,7 @@ const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
 const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
-const { render, requestRender, revealBranch } = require('./render');
+const { render, requestRender, revealBranch, logBranchRefAt } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildBranchesContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
 
@@ -1474,6 +1474,7 @@ async function handleMouseData(data) {
 
       // Hover: log list (right panel)
       let newLogRowHover = -1;
+      let newLogBranchHover = null;
       if (state.rightView === 'log' && inBody) {
         const inRight = cx >= rightStart && cx < L.startCol + L.width;
         if (inRight) {
@@ -1481,9 +1482,14 @@ async function handleMouseData(data) {
           // 목록 칸 맨 아랫줄이 가로 스크롤바일 수 있다 — 커밋 줄까지만 본다.
           if (bodyRowIdx >= 0 && bodyRowIdx < ui.lastLogListRows) {
             newLogRowHover = bodyRowIdx;
+            // 누를 수 있는 브랜치 이름 위면 밑줄과 손가락 커서로 알린다.
+            newLogBranchHover = historyBranchAt(cx, cy);
           }
         }
       }
+      const prevLogBranchHover = ui.hoveredLogBranch;
+      const logBranchHoverChanged = !newLogBranchHover !== !prevLogBranchHover || (newLogBranchHover
+        && (newLogBranchHover.itemIdx !== prevLogBranchHover.itemIdx || newLogBranchHover.refKey !== prevLogBranchHover.refKey));
 
       // Hover: fresh list (right panel)
       let newFreshRowHover = -1;
@@ -1624,7 +1630,7 @@ async function handleMouseData(data) {
       const newDisabledReason = newHoveredAction ? disabledReason(newHoveredAction) : null;
 
       if (newHoveredAction !== ui.hoveredAction
-        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newRepoSetupHover !== ui.hoveredRepoSetupAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear) {
+        || newHover !== ui.hoveredAreaIndex || newCommitterHover !== ui.hoveredCommitterAction || newRepoSetupHover !== ui.hoveredRepoSetupAction || newTitleHover !== ui.hoveredTitleZoneIndex || newDivHover !== ui.hoveredDivider || newFileHeaderHover !== ui.hoveredFileHeaderIdx || newLeftPanelHover !== ui.hoveredLeftPanelRow || newFileRowHover !== ui.hoveredFileRow || newLogRowHover !== ui.hoveredLogRow || newFreshRowHover !== ui.hoveredFreshRow || newFreshWindowHover !== ui.hoveredFreshWindow || newScrollbarHover !== ui.hoveredScrollbarTarget || newCommitButtonHover !== ui.hoveredCommitButton || newMergeApplyHover !== ui.hoveredMergeApplyButton || newMergeZoneHover !== ui.hoveredMergeZoneIndex || newDetailCopyZone !== ui.hoveredDetailCopyZone || newCollapseAllHover !== ui.hoveredCollapseAllButton || newDiffHunkHover !== ui.hoveredDiffHunkIdx || newCommitAmendHover !== ui.hoveredCommitAmend || newCommitClearHover !== ui.hoveredCommitClear || logBranchHoverChanged) {
         ui.hoveredAreaIndex = newHover;
         ui.hoveredCommitterAction = newCommitterHover;
         ui.hoveredRepoSetupAction = newRepoSetupHover;
@@ -1634,6 +1640,7 @@ async function handleMouseData(data) {
         ui.hoveredLeftPanelRow = newLeftPanelHover;
         ui.hoveredFileRow = newFileRowHover;
         ui.hoveredLogRow = newLogRowHover;
+        ui.hoveredLogBranch = newLogBranchHover ? { itemIdx: newLogBranchHover.itemIdx, refKey: newLogBranchHover.refKey } : null;
         ui.hoveredFreshRow = newFreshRowHover;
         ui.hoveredFreshWindow = newFreshWindowHover;
         ui.hoveredScrollbarTarget = newScrollbarHover;
@@ -1657,7 +1664,7 @@ async function handleMouseData(data) {
             setMouseShape('ns-resize');
           } else if (newDisabledReason) {
             setMouseShape('not-allowed');
-          } else if (newRepoSetupHover || newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newMergeZoneHover >= 0 || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover) {
+          } else if (newRepoSetupHover || newTitleHover >= 0 || newFileHeaderHover >= 0 || newLeftPanelHover >= 0 || newCommitButtonHover || newMergeApplyHover || newMergeZoneHover >= 0 || newFreshWindowHover || newHover >= 0 || newCommitterHover || newDetailCopyZone || newCollapseAllHover || newDiffHunkHover >= 0 || newCommitAmendHover || newCommitClearHover || newLogBranchHover) {
             setMouseShape('pointer');
           } else {
             setMouseShape('default');
@@ -1709,6 +1716,12 @@ async function handleMouseData(data) {
       const row = cy - bodyTop;
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
       if (inLeft && branchSelection.select(ui.leftPanelClickMap[row], cb === 16 ? 'toggle' : 'range')) {
+        render();
+        continue;
+      }
+      // 히스토리의 브랜치 이름도 Ctrl 로 더하고 뺀다. Shift 범위는 왼쪽 목록의 줄 순서라 히스토리에서는 쓰지 않는다.
+      const branchHit = cb === 16 ? historyBranchAt(cx, cy) : null;
+      if (branchHit && selectHistoryBranch(branchHit, 'toggle')) {
         render();
         continue;
       }
@@ -2499,6 +2512,9 @@ async function handleMouseData(data) {
               state.diffScrollOffset = 0;
               updateLogDetail();
             }
+            // 브랜치 이름 위를 눌렀으면 그 커밋과 함께 브랜치도 고른다.
+            const branchHit = historyBranchAt(cx, cy);
+            if (branchHit) selectHistoryBranch(branchHit, 'single');
             state.focusPanel = 'status';
           } else {
             // Detail area: check for copy zone click
@@ -2670,6 +2686,20 @@ function handleContextMenuRequest(col, row) {
         state.focusPanel = 'status';
       }
     }
+    // 브랜치 이름 위면 커밋 메뉴 대신 왼쪽 목록과 같은 브랜치 메뉴를 띄운다. 이미 고른 브랜치 위면
+    // 다중 선택을 그대로 대상으로 삼는다(capture 의 'context').
+    const branchHit = historyBranchAt(cx, cy);
+    if (branchHit) {
+      const entry = { action: 'goto-branch', branch: branchHit.branch, refKey: branchHit.refKey };
+      const target = branchSelection.capture(entry);
+      revealBranch(branchHit.branch, branchHit.refKey);
+      ui.contextMenuBranch = entry.branch;
+      ui.contextMenuRemoteBranch = entry.branch;
+      ui.contextMenuWorktree = null;
+      hecaton.menu.show({ items: buildBranchesContextMenuItems(target) }).catch(() => null);
+      render();
+      return;
+    }
     // stash 커밋이면 stash 전용 컨텍스트 메뉴 표시
     const logItem = selectedLogRef();
     const stashRef = logItem ? ui.stashMap.get(logItem.ref) : null;
@@ -2718,6 +2748,30 @@ function handleContextMenuRequest(col, row) {
       return;
     }
   }
+}
+
+// 히스토리 목록의 (cx, cy) 칸에 그려진 브랜치 이름 { branch, refKey, itemIdx } — 커밋 줄의 브랜치 이름
+// 위가 아니면 null. 목록 칸 맨 아랫줄은 가로 스크롤바일 수 있어 커밋 줄(lastLogListRows)까지만 본다.
+function historyBranchAt(cx, cy) {
+  if (state.rightView !== 'log') return null;
+  const L = ui.lastLayout;
+  const bodyTop = L.startRow + (L.titleRows || 2) + 1;
+  const rightStart = L.startCol + L.leftW + L.divider1W + L.middleW + L.divider2W;
+  const row = cy - bodyTop;
+  if (cx < rightStart || cx >= L.startCol + L.width || row < 0 || row >= ui.lastLogListRows) return null;
+  const itemIdx = state.logScrollOffset + row;
+  const hit = logBranchRefAt(itemIdx, cx - rightStart);
+  return hit ? { ...hit, itemIdx } : null;
+}
+
+// 히스토리에서 누른 브랜치를 고른다 — 왼쪽 목록에서 그 줄을 누른 것과 같은 선택이라 Esc·우클릭 메뉴·
+// Ctrl 다중 선택이 그대로 따른다. 목록의 그 줄이 접혀 있거나 화면 밖이면 펼치고 스크롤해 드러낸다.
+function selectHistoryBranch(hit, mode) {
+  const entry = { action: 'goto-branch', branch: hit.branch, refKey: hit.refKey };
+  if (!branchSelection.select(entry, mode)) return null;
+  if (hit.refKey.startsWith('refs/remotes/')) ui.remoteRecentBranchUsage[hit.branch] = Date.now();
+  if (ui.selectedBranchRefs.has(hit.refKey)) revealBranch(hit.branch, hit.refKey);
+  return entry;
 }
 
 function isRemoteMenuTarget(entry) {

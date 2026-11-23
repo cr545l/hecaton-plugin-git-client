@@ -125,6 +125,7 @@ const ui = {
   rightDiffH: 0,
   lastLogListH: 0,        // 히스토리 목록 칸의 높이(가로 스크롤바 줄 포함) — 아래 구분선 위치의 기준
   lastLogListRows: 0,     // 그중 커밋 줄이 보이는 줄 수(가로 스크롤바 줄 제외) — 줄 클릭·호버·세로 스크롤의 기준
+  logRowGeom: null,       // 지난 프레임에 커밋 줄을 나눈 기준(그래프 폭·앞부분 폭) — 브랜치 이름 클릭 판정이 같은 식으로 다시 잰다
   lastDetailContentH: 0,
   commitInputRow: -1,
   commitButtonZone: null,
@@ -172,12 +173,13 @@ const ui = {
   filteredRefs: [],                // 화이트리스트 — 비어 있지 않으면 여기서 닿는 커밋만 그린다
   hiddenRefs: [],                  // 블랙리스트 — 그래프 루트에서 뺀다(공유 커밋은 남는다)
   leftPanelScrollOffset: 0,
-  leftRevealBranch: null,          // 상단 브랜치명 클릭 → 다음 렌더에서 Branches 목록의 그 줄로 스크롤
+  leftRevealBranch: null,          // 상단 브랜치명·히스토리 브랜치 이름 클릭 → 다음 렌더에서 Branches/Remotes 목록의 그 줄로 스크롤(refname)
   hoveredTitleZoneIndex: -1,
   hoveredFileHeaderIdx: -1,
   hoveredLeftPanelRow: -1,
   hoveredFileRow: -1,         // hover row in file list (middle panel)
   hoveredLogRow: -1,          // hover row in log list (right panel)
+  hoveredLogBranch: null,     // 히스토리 줄에서 마우스가 올라간 브랜치 이름 { itemIdx, refKey } — 밑줄을 긋는다
   hoveredFreshRow: -1,        // hover row in fresh list (right panel)
   hoveredCommitButton: false, // hover on [Commit] button
   // 마우스가 올라간 버튼의 동작 id. 막혀 있으면 힌트바에 사유를 띄운다(actions.js 판정).
