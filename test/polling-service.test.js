@@ -210,3 +210,140 @@ test('client reads the start time from the service and falls back to the old met
   assert.equal(local.viaService, false);
   assert.ok(local.startedAt >= before && local.startedAt <= Date.now());
 });
+
+// ── status 를 띄울지의 판단(변화 감지, 유휴 간격, 동시 실행 상한) ──
+const gitDir = path.join(cwd, '.git');
+function gatedService(overrides = {}) {
+  const s = { time: 0, calls: 0, own: 'a', dirtySame: true, probes: 0, output: 'snap' };
+  s.service = createPollingService({
+    now: () => s.time,
+    buildSnapshot: async () => { s.calls++; return s.output; },
+    readOwn: async () => s.own,
+    dirtyUnchanged: async () => { s.probes++; return s.dirtySame; },
+    ...overrides,
+  });
+  s.ask = (idleMs, link = 1) => s.service.request(link, 'worktree.snapshot2', { cwd, gitDir, idleMs });
+  return s;
+}
+
+test('a window with recent input keeps the 3 second status cadence', async () => {
+  const s = gatedService();
+  await s.ask(0);
+  s.time = 3000; await s.ask(1000);
+  s.time = 6000; await s.ask(29999 - 6000 + 6000 - 1); // 마지막 입력이 30초 안쪽이다
+  assert.equal(s.calls, 3);
+  assert.equal(s.probes, 0);
+});
+
+test('an idle worktree is checked without Git and status backs off while nothing changes', async () => {
+  const s = gatedService();
+  const idle = () => s.ask(600000);
+  await idle();                       // 첫 조회는 늘 돈다
+  assert.equal(s.calls, 1);
+  const ran = [];
+  for (s.time = 3000; s.time <= 180000; s.time += 3000) {
+    const before = s.calls;
+    await idle();
+    if (s.calls !== before) ran.push(s.time);
+  }
+  // 간격이 3 → 6 → 12 → 30 → 60초로 늘어난다(각 간격은 직전 status 기준).
+  assert.deepEqual(ran, [3000, 9000, 21000, 51000, 111000, 171000]);
+  assert.ok(s.probes > 40, 'the ticks in between only re-stat');
+});
+
+test('an index change or an edit to an already dirty file runs status at once and resets the backoff', async () => {
+  const s = gatedService();
+  const idle = () => s.ask(600000);
+  await idle();
+  s.time = 3000; await idle();        // 결과가 같다 — 다음 status 는 6초 뒤
+  assert.equal(s.calls, 2);
+  s.time = 6000; s.own = 'b'; await idle();
+  assert.equal(s.calls, 3, 'index/HEAD moved');
+  s.time = 9000; s.dirtySame = false; s.output = 'snap2';
+  const changed = await idle();
+  assert.equal(s.calls, 4, 'a dirty file was edited again');
+  assert.deepEqual(changed, { snapshot: 'snap2', startedAt: 9000 });
+  s.dirtySame = true;
+  s.time = 12000; await idle();
+  assert.equal(s.calls, 5, 'a changed result restarts at the shortest interval');
+});
+
+test('windows on the same idle worktree share one check; input from any of them wakes it', async () => {
+  const s = gatedService();
+  await s.ask(600000, 1);
+  s.time = 3000; await s.ask(600000, 1);
+  s.time = 6000;
+  await Promise.all([s.ask(600000, 1), s.ask(600000, 2), s.ask(600000, 3)]);
+  assert.equal(s.probes, 1);
+  assert.equal(s.calls, 2);
+  s.time = 7000; await s.ask(600000, 2);
+  assert.equal(s.probes, 1, 'the check itself is rate limited');
+  s.time = 9000; await s.ask(500, 3);
+  assert.equal(s.calls, 3);
+});
+
+test('older windows that send no hints, and a failed check, fall back to running status', async () => {
+  const s = gatedService();
+  await s.service.request(1, 'worktree.snapshot2', { cwd });
+  s.time = 3000; await s.service.request(1, 'worktree.snapshot2', { cwd });
+  assert.equal(s.calls, 2);
+  const broken = gatedService({ dirtyUnchanged: async () => { throw new Error('stat failed'); } });
+  await broken.ask(600000);
+  broken.time = 3000; await broken.ask(600000);
+  broken.time = 6000; await broken.ask(600000);
+  assert.equal(broken.calls, 3);
+});
+
+test('at most two status processes run at once; a window with input goes first', async () => {
+  const gates = new Map();
+  const started = [];
+  let time = 0;
+  const service = createPollingService({
+    now: () => time,
+    buildSnapshot: dir => { started.push(path.basename(dir)); const g = deferred(); gates.set(path.basename(dir), g); return g.promise; },
+    readOwn: async () => 'a', dirtyUnchanged: async () => true,
+  });
+  const ask = (name, idleMs) => service.request(name, 'worktree.snapshot2', { cwd: path.join(cwd, name), gitDir: path.join(cwd, name, '.git'), idleMs });
+  // 첫 조회는 모두 status 가 필요하다. 유휴 창 셋이 먼저 줄을 서고, 입력이 있던 창이 뒤에 온다.
+  time = 40000;
+  const all = [ask('a', 40000), ask('b', 40000), ask('c', 40000), ask('d', 0)];
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started, ['a', 'b']);
+  gates.get('a').resolve('A');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started, ['a', 'b', 'd'], 'the active window jumps the queue');
+  gates.get('b').resolve('B');
+  await new Promise(resolve => setImmediate(resolve));
+  gates.get('d').resolve('D');
+  gates.get('c').resolve('C');
+  assert.deepEqual((await Promise.all(all)).map(r => r.snapshot), ['A', 'B', 'C', 'D']);
+});
+
+test('re-statting the dirty files of a snapshot detects another edit without Git', async () => {
+  const { dirtyFilesUnchanged } = require('../worktree-snapshot');
+  let mtime = 1, execs = 0;
+  const api = { fs: { stat: async () => ({ exists: true, mtime_ms: mtime, size: 4 }) } };
+  const exec = async () => { execs++; return { ok: true, exit_code: 0, stdout: ' M dirty\0?? new\0' }; };
+  const snapshot = await buildWorktreeSnapshot(cwd, api, exec);
+  assert.equal(await dirtyFilesUnchanged(cwd, api, snapshot), true);
+  mtime = 2;
+  assert.equal(await dirtyFilesUnchanged(cwd, api, snapshot), false);
+  assert.equal(await dirtyFilesUnchanged(cwd, api, null), false);
+  assert.equal(execs, 1);
+  // 변경이 없는 워크트리의 스냅샷도 그대로 견준다.
+  const clean = await buildWorktreeSnapshot(cwd, api, async () => ({ ok: true, exit_code: 0, stdout: '' }));
+  assert.equal(await dirtyFilesUnchanged(cwd, api, clean), true);
+});
+
+test('the client sends the hints with each snapshot request', async () => {
+  const sent = [];
+  const client = createPollingClient({ serviceChannel: () => ({
+    connect: async () => {}, request: async (method, params) => { sent.push(params); return { snapshot: 's', startedAt: 1 }; }, close: async () => {},
+  }) });
+  let idleMs = 5;
+  await client.read(cwd, () => assert.fail('local Git'), () => ({ gitDir, idleMs }));
+  idleMs = 9;
+  await client.read(cwd, () => assert.fail('local Git'), () => ({ gitDir, idleMs, cwd: 'ignored' }));
+  await client.read(cwd, () => assert.fail('local Git'));
+  assert.deepEqual(sent, [{ gitDir, idleMs: 5, cwd }, { gitDir, idleMs: 9, cwd }, { cwd }]);
+});

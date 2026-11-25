@@ -10,7 +10,9 @@ function createPollingClient(api) {
 
   // { snapshot, startedAt, viaService } 를 돌려준다. startedAt 은 스냅샷을 만든 조회가 시작된
   // 시각(모르면 0), viaService 는 서비스가 답했는지(= 창끼리의 파일 공유가 필요 없는지)다.
-  async function read(cwd, fallback) {
+  // hints() 는 { gitDir, idleMs } 를 돌려준다 — 서비스가 status 를 띄울지 판단하는 근거다
+  // (polling-service.js). 이전 버전 서비스는 모르는 칸을 무시한다.
+  async function read(cwd, fallback, hints) {
     const local = async () => {
       const startedAt = Date.now();
       return { snapshot: await fallback(), startedAt, viaService: false };
@@ -39,7 +41,8 @@ function createPollingClient(api) {
     try {
       if (!legacyService) {
         try {
-          const result = await channel.request('worktree.snapshot2', { cwd }, 15000);
+          const extra = typeof hints === 'function' ? hints() : null;
+          const result = await channel.request('worktree.snapshot2', { ...(extra || {}), cwd }, 15000);
           if (result && typeof result === 'object') {
             return { snapshot: result.snapshot === undefined ? null : result.snapshot, startedAt: result.startedAt || 0, viaService: true };
           }

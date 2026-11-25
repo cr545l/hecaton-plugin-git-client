@@ -255,7 +255,11 @@ let _gitWatcherCleanup = null;
 const ACTIVITY_NOTIFY_INTERVAL_MS = 20000;
 let _notifyActivity = null;
 let _lastActivityNotifyAt = 0;
+// 마지막 입력 시각. 서비스가 "보고 있는 창"의 워크트리만 촘촘히 조회하는 근거다. 창이 막 떴을
+// 때도 보고 있는 것으로 친다.
+let _lastInputAt = Date.now();
 function noteActivity() {
+  _lastInputAt = Date.now();
   if (!_notifyActivity) return;
   const now = Date.now();
   if (now - _lastActivityNotifyAt < ACTIVITY_NOTIFY_INTERVAL_MS) return;
@@ -493,7 +497,8 @@ async function setupGitWatcher() {
   // { snapshot, startedAt, viaService } — startedAt 은 그 스냅샷을 만든 status 가 시작된 시각이다.
   async function buildWorktreeSnapshot() {
     return pollingClient.read(state.cwd, () =>
-      collectWorktreeSnapshot(state.cwd, hecaton, gitProcess.read));
+      collectWorktreeSnapshot(state.cwd, hecaton, gitProcess.read),
+    () => ({ gitDir, idleMs: Math.max(0, Date.now() - _lastInputAt) }));
   }
 
   // .git 메타 상태를 하나의 문자열로 압축한 지문(meta-signature.js). 같은 상태에서 같은 값이

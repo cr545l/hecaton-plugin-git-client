@@ -166,7 +166,8 @@ function createMetaReader(api, opts = {}) {
     if (cache.size === 0) lastRefsSig.clear();
   }
 
-  return { read, prune };
+  // 워크트리 쪽 네 파일의 시각만(index, HEAD, logs/HEAD, FETCH_HEAD 순). 공용 부분을 훑지 않는다.
+  return { read, readOwn, prune };
 }
 
 module.exports = { computeRefsTreeSignature, createMetaReader, REFS_SCAN_MAX_ENTRIES };

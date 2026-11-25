@@ -1,5 +1,5 @@
 const { createPollingService } = require('./polling-service');
-const { buildWorktreeSnapshot } = require('./worktree-snapshot');
+const { buildWorktreeSnapshot, dirtyFilesUnchanged } = require('./worktree-snapshot');
 const gitProcess = require('./git-process');
 const { createMetaReader } = require('./meta-signature');
 const { createMaintenance } = require('./maintenance');
@@ -55,6 +55,10 @@ if (maintenanceTimer && typeof maintenanceTimer.unref === 'function') maintenanc
 const polling = createPollingService({
   buildSnapshot: cwd => buildWorktreeSnapshot(cwd, hecaton, gitProcess.read),
   readMeta: metaReader.read,
+  // status 결과를 바꾸는 것은 index·HEAD(와 커밋이 남기는 logs/HEAD)다. FETCH_HEAD 는 뺀다 —
+  // fetch 마다 status 를 다시 띄울 이유가 없다.
+  readOwn: async ({ gitDir }) => (await metaReader.readOwn(gitDir)).slice(0, 3).join('|'),
+  dirtyUnchanged: (cwd, snapshot) => dirtyFilesUnchanged(cwd, hecaton, snapshot),
   maintenance,
 });
 const host = hecaton.serviceHost({
