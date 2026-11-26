@@ -84,7 +84,7 @@ function resetState() {
 test('평범한 상태에서는 버튼이 딤이 아니다', () => {
   resetState();
   const out = captureRender();
-  for (const label of [' Fetch ', ' Push ', 'Stage All', 'Unstage All']) {
+  for (const label of [' Fetch ', ' Push ', '*Stage All', '*Unstage All']) {
     assert.equal(isDimmed(out, label), false, label + ' 가 이유 없이 흐리면 안 된다');
   }
 });
@@ -94,7 +94,7 @@ test('쓰기 작업 중에는 스테이징·네트워크 버튼이 모두 딤 �
   state.spinnerActive = true;
   state.error = 'Committing...';
   const out = captureRender();
-  for (const label of [' Fetch ', ' Pull ', ' Push ', ' Stash ', 'Stage All', 'Unstage All']) {
+  for (const label of [' Fetch ', ' Pull ', ' Push ', ' Stash ', '*Stage All', '*Unstage All']) {
     assert.equal(isDimmed(out, label), true, label + ' 가 쓰기 작업 중에도 활성으로 보인다');
   }
   state.spinnerActive = false; state.error = null;
@@ -108,7 +108,7 @@ test('커밋이 끝나도 뒷정리 갱신 중에는 Unstage 가 여전히 딤�
   state.refreshing = true;
   state.refreshMessage = 'Committing...';
   const out = captureRender();
-  for (const label of ['Unstage All', 'Stage All', 'Commit']) {
+  for (const label of ['*Unstage All', '*Stage All', 'Commit']) {
     assert.equal(isDimmed(out, label), true, label + ' 가 뒷정리 중에도 눌릴 것처럼 보인다');
   }
   state.settlingWrite = false; state.refreshing = false; state.refreshMessage = '';
@@ -122,7 +122,7 @@ test('리모트가 없으면 네트워크 버튼만 딤이고 스테이징은 �
   assert.equal(isDimmed(out, ' Fetch '), true);
   assert.equal(isDimmed(out, ' Pull '), true);
   assert.equal(isDimmed(out, ' Push '), true);
-  assert.equal(isDimmed(out, 'Stage All'), false, '로컬 작업까지 막으면 안 된다');
+  assert.equal(isDimmed(out, '*Stage All'), false, '로컬 작업까지 막으면 안 된다');
 });
 
 test('옮길 파일이 없는 쪽 버튼만 딤 처리된다', () => {
@@ -130,8 +130,8 @@ test('옮길 파일이 없는 쪽 버튼만 딤 처리된다', () => {
   state.staged = [];             // Unstage 대상 없음
   state.cursor = 0;              // 커서는 unstaged 파일
   const out = captureRender();
-  assert.equal(isDimmed(out, 'Stage All'), false);
-  assert.equal(isDimmed(out, 'Unstage All'), true, '되돌릴 것이 없는데 활성으로 보인다');
+  assert.equal(isDimmed(out, '*Stage All'), false);
+  assert.equal(isDimmed(out, '*Unstage All'), true, '되돌릴 것이 없는데 활성으로 보인다');
 });
 
 test('rebase 진행 중에는 Stash 가 딤이고 Abort 는 살아 있다', () => {
@@ -142,7 +142,7 @@ test('rebase 진행 중에는 Stash 가 딤이고 Abort 는 살아 있다', () =
   assert.equal(isDimmed(out, ' Abort '), false, '빠져나올 길은 항상 열려 있어야 한다');
   assert.equal(isDimmed(out, ' Skip '), false);
   // 충돌 해결에 쓰는 스테이징도 그대로 열려 있어야 한다.
-  assert.equal(isDimmed(out, 'Stage All'), false);
+  assert.equal(isDimmed(out, '*Stage All'), false);
   state.operationState = null;
 });
 
@@ -169,7 +169,7 @@ test('index.lock 이 있으면 스테이징은 딤이고 Unlock 은 활성이다
   resetState();
   state.indexLocked = true;
   const out = captureRender();
-  assert.equal(isDimmed(out, 'Stage All'), true);
+  assert.equal(isDimmed(out, '*Stage All'), true);
   assert.equal(isDimmed(out, 'Unlock'), false, '락을 풀 길까지 막으면 빠져나올 수 없다');
   state.indexLocked = false;
 });

@@ -269,10 +269,14 @@ test('보이는 [모두 언스테이지] 를 누르면 git 이 실행된다 (판
   ui.rightPanelCollapsed = true;
   const screen = paint(frame());
   const p = panels();
-  const label = find(screen, t('ui.unstageAll').trim(), p.midStart, p.midEnd);
-  assert.ok(label);
+  // 한국어에서는 두 헤더의 전체 버튼 라벨이 똑같이 "모두"다 — 글자로 찾지 말고 Staged 헤더의 존을
+  // 쓰되, 그 칸에 그 라벨이 그려져 있는지 확인한다.
+  const zone = ui.fileHeaderZones.find(z => z.action === 'unstageAll');
+  const bodyTop = ui.lastLayout.startRow + ui.lastLayout.titleRows + 1;
+  const cell = { col: p.midStart + zone.btnColStart, row: bodyTop + zone.lineIdx - state.scrollOffset };
+  assert.ok(rowText(screen, cell.row, cell.col).startsWith('*' + t('ui.unstageAll')), 'Staged 헤더의 [*모두] 칸이어야 한다');
   gitCalls.length = 0;
-  await press(label);
+  await press(cell);
   assert.ok(gitCalls.length > 0, '헤더 버튼 클릭이 git 호출로 드러나야 아래 테스트가 의미가 있다');
 });
 

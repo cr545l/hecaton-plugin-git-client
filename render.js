@@ -2041,6 +2041,12 @@ function revealBranch(branchName, refKey = localRefKey(branchName)) {
 
 // ── Middle panel (diff mode): file list ──
 
+// 파일 목록 헤더 버튼 앞에 붙이는 기호. 라벨만 나란히 두면 "모두 스테이지" 가 버튼 하나처럼
+// 읽힌다 — 전부(*, git add * 의 그 별)와 고른 것(✓, 목록에서 다중 선택한 파일에 붙는 표시와
+// 같은 기호)으로 두 버튼을 가른다. 기호는 라벨의 일부라 눌림·흐림·호버 모양도 함께 따른다.
+const HEADER_ALL_MARK = '*';
+const HEADER_SELECTED_MARK = '✓';
+
 // withCommit: 차이 패널이 접혀 있다 — 커밋 메시지 영역을 목록 아래에 붙인다. 목록은 그만큼
 // 줄어든 높이를 자기 뷰포트로 쓰고(스크롤·호스트 영역·스크롤바 모두), 커밋 영역은 맨 아래에 고정된다.
 function buildFileListPanel(w, h, withCommit) {
@@ -2180,10 +2186,12 @@ function buildFileListRows(w, h) {
     const allOn = actionClickable('stageAll');
     const selOn = actionClickable('stageSelected');
     // 눌린 버튼은 스피너 자리만큼 넓어진다 — 폭 계산 전에 라벨을 정한다(pressedButton 참고).
-    const allPressed = pressedButton('stageAll', t('ui.stageAllBtn'), ui.hoveredFileHeaderIdx === allZoneIdx, allOn);
-    const selPressed = pressedButton('stageSelected', t('menu.stage'), ui.hoveredFileHeaderIdx === zoneIdx, selOn);
-    const allBtnLabel = allPressed ? allPressed.label : t('ui.stageAllBtn');
-    const btnLabel = selPressed ? selPressed.label : t('menu.stage');
+    const allBase = HEADER_ALL_MARK + t('ui.stageAllBtn');
+    const selBase = HEADER_SELECTED_MARK + t('menu.stage');
+    const allPressed = pressedButton('stageAll', allBase, ui.hoveredFileHeaderIdx === allZoneIdx, allOn);
+    const selPressed = pressedButton('stageSelected', selBase, ui.hoveredFileHeaderIdx === zoneIdx, selOn);
+    const allBtnLabel = allPressed ? allPressed.label : allBase;
+    const btnLabel = selPressed ? selPressed.label : selBase;
     const unlockLen = unlockLabel ? visLen(unlockLabel) + 1 : 0;
     const totalBtnLen = unlockLen + visLen(allBtnLabel) + 1 + visLen(btnLabel);
     const headerLabelLen = visLen(headerLabel);
@@ -2222,10 +2230,12 @@ function buildFileListRows(w, h) {
     const allOn = actionClickable('unstageAll');
     const zoneIdx = ui.fileHeaderZones.length + 1;
     const selOn = actionClickable('unstageSelected');
-    const allPressed = pressedButton('unstageAll', t('ui.unstageAll'), ui.hoveredFileHeaderIdx === allZoneIdx, allOn);
-    const selPressed = pressedButton('unstageSelected', t('menu.unstage'), ui.hoveredFileHeaderIdx === zoneIdx, selOn);
-    const allBtnLabel = allPressed ? allPressed.label : t('ui.unstageAll');
-    const btnLabel = selPressed ? selPressed.label : t('menu.unstage');
+    const allBase = HEADER_ALL_MARK + t('ui.unstageAll');
+    const selBase = HEADER_SELECTED_MARK + t('menu.unstage');
+    const allPressed = pressedButton('unstageAll', allBase, ui.hoveredFileHeaderIdx === allZoneIdx, allOn);
+    const selPressed = pressedButton('unstageSelected', selBase, ui.hoveredFileHeaderIdx === zoneIdx, selOn);
+    const allBtnLabel = allPressed ? allPressed.label : allBase;
+    const btnLabel = selPressed ? selPressed.label : selBase;
     const totalBtnLen = visLen(allBtnLabel) + 1 + visLen(btnLabel);
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);

@@ -359,9 +359,10 @@ const HUNK_DIFF = [
 test('Stage All 이 도는 동안 파일 목록 헤더의 그 버튼만 눌린다', () => {
   spinner.startSpinner('Staging all...', [SCOPE.INDEX], 'stageAll');
   const out = captureRender();
-  assert.equal(isPressedLabel(out, 'Stage All'), true);
-  // 'Stage' 는 'Stage All' 의 앞부분이기도 하다 — 버튼 끝(reset)까지 맞춰 본다.
-  for (const label of ['Stage', 'Unstage All', 'Unstage']) {
+  assert.equal(isPressedLabel(out, '*Stage All'), true);
+  // 라벨 앞 기호(* 모두, ✓ 고른 것)부터 버튼 끝(reset)까지 맞춰 본다 — 한 라벨이 다른 라벨의
+  // 앞부분이면 엉뚱한 버튼의 눌림을 보게 된다.
+  for (const label of ['✓Stage', '*Unstage All', '✓Unstage']) {
     assert.equal(isPressedLabel(out, label + ansi.reset), false, label + ' 는 눌리지 않아야 한다');
   }
   assertSpinnerCellsOnGlyphs(out, 1);
@@ -379,8 +380,8 @@ test('헤더의 Stage 버튼을 누르면 git add 가 도는 동안 눌려 있�
   await tick();
   assert.equal(pendingExec.length, 1, 'git add 가 시작돼야 한다');
   const out = captureRender();
-  assert.equal(isPressedLabel(out, 'Stage' + ansi.reset), true);
-  assert.equal(isPressedLabel(out, 'Stage All'), false);
+  assert.equal(isPressedLabel(out, '✓Stage' + ansi.reset), true);
+  assert.equal(isPressedLabel(out, '*Stage All'), false);
   assertSpinnerCellsOnGlyphs(out, 1);
 });
 
