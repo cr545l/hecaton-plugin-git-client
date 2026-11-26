@@ -493,6 +493,15 @@ function renderBody() {
   // overscan bank content) here; banks/acks/regions are emitted after the body.
   ui.hostScrollRegions = [];
 
+  // 커밋 영역은 차이 패널 아래(보통)나 스테이지 패널 아래(차이를 접었을 때)에 그린다. 그린 쪽이
+  // 자리를 적고(buildCommitArea), 아래의 클릭 존·IME 커서가 그 자리를 따른다. 이번 프레임에
+  // 아무도 그리지 않았으면 존도 없다 — 지난 프레임의 자리를 누르면 안 된다.
+  ui.commitAreaPanel = null;
+  ui.commitAreaRelRow = -1;
+  ui.commitAmendBtnOffset = -1;
+  ui.commitClearBtnOffset = -1;
+  ui.commitMsgCursorMaxW = 0;
+
   // Layout 전환 시 화면 강제 erase — sixel 잔상 제거.
   // 단 2J는 "보이는 화면"만 지운다. host-scroll이 켜져 있으면 그래프 sixel은 화면 밖
   // overscan bank 행에 그려두고 호스트가 그걸 region 안으로 합성하는 구조라, 2J로는
@@ -657,6 +666,8 @@ function renderBody() {
       }
     } else {
       rightParts.push({ label: (ui.middlePanelCollapsed ? '  + ' : '  - ') + t('ui.stage'), action: 'toggleFiles', collapsed: ui.middlePanelCollapsed, group: 'fold' });
+      // 차이를 접으면 커밋 메시지 영역은 스테이지 아래로 옮겨 간다(buildFileListPanel).
+      rightParts.push({ label: (ui.rightPanelCollapsed ? '  + ' : '  - ') + t('ui.diffPanel'), action: 'toggleDiffPanel', collapsed: ui.rightPanelCollapsed, group: 'fold' });
       // 파일 목록을 트리로 볼지 — Diff 토글과 같은 성격(보는 방식)이라 나란히 둔다.
       rightParts.push({ label: t('ui.files2'), value: ui.fileTreeView ? 'tree' : 'flat', action: 'toggleFileTree', collapsed: false, group: 'option' });
       rightParts.push({ label: t('ui.diff'), value: state.diffView === 'side' ? 'side' : 'unified', action: 'toggleDiff', collapsed: false, group: 'option' });
@@ -1032,7 +1043,8 @@ function renderBody() {
   } else {
     ui.repoSetupClickZones = [];
     // 3-column body: left | middle (files) | right (diff+commit)
-    const middleLines = middleW > 0 ? buildFileListPanel(middleW, contentH) : [];
+    // 차이 패널이 없으면 커밋 영역은 스테이지 패널 아래에 붙인다. 둘 다 접혀 있으면 그릴 곳이 없다.
+    const middleLines = middleW > 0 ? buildFileListPanel(middleW, contentH, rightW === 0) : [];
     const rightLines = rightW > 0 ? buildDiffCommitPanel(rightW, contentH) : [];
     if (middleW === 0) { ui.fileLineMap = []; ui.fileHeaderZones = []; }
 
@@ -1333,8 +1345,8 @@ function renderBody() {
 
     // Middle panel (files) - diff mode only
     if (state.rightView === 'diff' && middleW > 0) {
-      const filesVSbH = ui.filesMaxScrollX > 0 ? contentH - 1 : contentH;
-      addScrollbar(state.scrollOffset, ui.filesMaxScroll, filesVSbH, sbBodyTop, midStart + middleW - 1, 'files');
+      // 목록이 실제로 쓴 높이를 따른다 — 가로 스크롤바 줄과 (차이를 접었을 때) 커밋 영역은 뺀다.
+      addScrollbar(state.scrollOffset, ui.filesMaxScroll, ui.filesViewH, sbBodyTop, midStart + middleW - 1, 'files');
     }
 
     // Right panels
@@ -1424,17 +1436,25 @@ function renderBody() {
   // Record layout
   ui.lastLayout = { startRow, startCol, width, height, leftW, divider1W, middleW, divider2W, rightW, bodyH, titleRows };
 
-  // Commit button zone (diff mode only)
-  if (!repoSetupMode && state.rightView !== 'log' && state.rightView !== 'fresh' && ui.rightDiffH >= 0) {
-    const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
+  // 커밋 영역이 그려진 패널의 시작 열과 폭. 클릭 존과 IME 커서가 함께 쓴다.
+  const commitPanelCol = ui.commitAreaPanel === 'middle'
+    ? startCol + leftW + divider1W
+    : startCol + leftW + divider1W + middleW + divider2W;
+  const commitPanelW = ui.commitAreaPanel === 'middle' ? middleW : rightW;
+
+  // Commit button zone — 커밋 영역을 그린 자리(ui.commitAreaRelRow = 구분선 줄)에서 센다.
+  if (!repoSetupMode && ui.commitAreaPanel) {
+    const rpStartCol = commitPanelCol;
     const visLines = ui.commitMsgVisibleLines || 1;
-    const hsbOffset = ui.diffMaxScrollX > 0 ? 1 : 0;
     const mergeFooterOffset = state.conflictView ? 1 : 0;
-    ui.commitInputRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1 + mergeFooterOffset;
+    const areaTop = startRow + titleRows + 1 + ui.commitAreaRelRow;
+    ui.commitInputRow = areaTop + 1 + mergeFooterOffset;
+    ui.commitInputColStart = rpStartCol;
+    ui.commitInputColEnd = rpStartCol + commitPanelW - 1;
     const btnIsRebase = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const btnIsMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
     const btnLabelLen = btnIsRebase ? 16 : btnIsMergeOp ? (state.operationState.type === 'merge' ? 13 : state.operationState.type === 'cherry-pick' ? 19 : 14) : 6; // Continue Rebase=16, Commit=6, etc
-    const btnRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + visLines + 1 + mergeFooterOffset;
+    const btnRow = ui.commitInputRow + visLines;
     ui.commitButtonZone = {
       row: btnRow,
       colStart: rpStartCol + 1,
@@ -1464,7 +1484,7 @@ function renderBody() {
       const allSelected = actions.allConflictChunksSelected();
       const applyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
       ui.mergeApplyZone = {
-        row: startRow + titleRows + 1 + ui.rightDiffH + hsbOffset + 1,
+        row: areaTop + 1,
         colStart: rpStartCol + 1,
         colEnd: rpStartCol + visLen(applyLabel),
         enabled: allSelected && caps().isEnabled('merge-apply'),
@@ -1475,6 +1495,8 @@ function renderBody() {
     }
   } else {
     ui.commitInputRow = -1;
+    ui.commitInputColStart = -1;
+    ui.commitInputColEnd = -1;
     ui.commitButtonZone = null;
     ui.commitAmendZone = null;
     ui.commitClearZone = null;
@@ -1502,14 +1524,14 @@ function renderBody() {
   if (ui.hoveredAreaIndex >= ui.clickableAreas.length) ui.hoveredAreaIndex = -1;
 
   // Position cursor at text input location for IME composition
-  if (!repoSetupMode && state.mode === 'commit' && state.rightView !== 'log' && ui.rightDiffH >= 0) {
-    const rpStartCol = startCol + leftW + divider1W + middleW + divider2W;
+  if (!repoSetupMode && state.mode === 'commit' && ui.commitAreaPanel && ui.commitInputRow > 0) {
+    const rpStartCol = commitPanelCol;
     const topLine = ui.commitTopLine || 0;
     const cursorLineIdx = ui.commitCursorLineIdx || 0;
-    const hsbOff = ui.diffMaxScrollX > 0 ? 1 : 0;
-    const cursorRow = startRow + titleRows + 1 + ui.rightDiffH + hsbOff + 1 + (cursorLineIdx - topLine);
+    // 메시지 첫 줄(commitInputRow)에서 센다 — 충돌 뷰의 [해결 적용] 줄도 이미 건너뛰어 있다.
+    const cursorRow = ui.commitInputRow + (cursorLineIdx - topLine);
     // 지우기 버튼이 얹힌 줄은 그만큼 좁게 렌더되므로, 렌더가 실제로 쓴 폭을 그대로 따른다.
-    const maxW = ui.commitMsgCursorMaxW > 0 ? ui.commitMsgCursorMaxW : rightW - 2;
+    const maxW = ui.commitMsgCursorMaxW > 0 ? ui.commitMsgCursorMaxW : commitPanelW - 2;
     const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
     const cursorLineEnd = state.commitMsg.indexOf('\n', state.commitCursor);
     const lineText = state.commitMsg.substring(cursorLineStart, cursorLineEnd === -1 ? state.commitMsg.length : cursorLineEnd);  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
@@ -2019,7 +2041,22 @@ function revealBranch(branchName, refKey = localRefKey(branchName)) {
 
 // ── Middle panel (diff mode): file list ──
 
-function buildFileListPanel(w, h) {
+// withCommit: 차이 패널이 접혀 있다 — 커밋 메시지 영역을 목록 아래에 붙인다. 목록은 그만큼
+// 줄어든 높이를 자기 뷰포트로 쓰고(스크롤·호스트 영역·스크롤바 모두), 커밋 영역은 맨 아래에 고정된다.
+function buildFileListPanel(w, h, withCommit) {
+  const commit = withCommit ? commitAreaLayout(h) : null;
+  if (!commit || commit.height <= 0) return buildFileListRows(w, h);
+  const listH = h - commit.height;
+  // 목록이 짧아도 커밋 영역은 패널 바닥에 둔다 — 파일 수에 따라 입력란이 오르내리면 안 된다.
+  const lines = buildFileListRows(w, listH).slice(0, listH);
+  while (lines.length < listH) lines.push('');
+  ui.commitAreaPanel = 'middle';
+  ui.commitAreaRelRow = lines.length;
+  for (const line of buildCommitArea(w, commit.maxMsgLines)) lines.push(line);
+  return lines;
+}
+
+function buildFileListRows(w, h) {
   const lines = [];
   const lineToFileIdx = [];
   const innerW = w - 1;
@@ -2031,6 +2068,7 @@ function buildFileListPanel(w, h) {
   if (state.loading) {
     ui.fileLineMap = [];
     ui.filesMaxScroll = 0;
+    ui.filesViewH = 0;
     ui.scrollPct.files = -1;
     return [colors.dim + t('ui.loadingStatus') + ansi.reset].slice(0, h);
   }
@@ -2064,6 +2102,7 @@ function buildFileListPanel(w, h) {
   state.filesScrollX = Math.min(state.filesScrollX, preFilesMaxScrollX);
   const hasFilesHScrollbar = preFilesMaxScrollX > 0;
   if (hasFilesHScrollbar && h > 0) h--;
+  ui.filesViewH = h;
 
   function fitLine(content) {
     return visLen(content) > canvasW ? truncate(content, canvasW) : content;
@@ -2301,14 +2340,8 @@ function buildDiffCommitPanel(w, h) {
   const diffItem = selectedItem();
   const diffWrap = state.diffView === 'side' ? state.sideDiffWrap : state.diffWrap;
 
-  let msgLineCount = 1;
-  if (state.mode === 'commit') {
-    msgLineCount = state.commitMsg.split('\n').length;
-  }
-  const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
-  const commitExtraH = state.conflictView ? 1 : 0;
-  // amend 토글은 별도 행이 아니라 Commit 버튼과 같은 행에 표시하므로 높이 추가 없음
-  const commitAreaH = h >= 5 ? (2 + maxMsgLines + commitExtraH) : 0;
+  const commit = commitAreaLayout(h);
+  const commitAreaH = commit.height;
   let diffH = h - commitAreaH;
 
   let preMaxScrollX = 0;
@@ -2340,10 +2373,6 @@ function buildDiffCommitPanel(w, h) {
   if (hasHScrollbar) diffH--;
 
   ui.rightDiffH = diffH;
-  ui.commitMsgVisibleLines = maxMsgLines;
-  ui.commitAmendBtnOffset = -1; // commit 영역이 렌더되면 아래에서 다시 설정
-  ui.commitClearBtnOffset = -1;
-  ui.commitMsgCursorMaxW = 0;
 
   // Hunk 단위 스테이징 버튼 (staged/unstaged diff에서만, untracked/conflict 제외)
   ui.diffHunkZones = [];
@@ -2519,105 +2548,130 @@ function buildDiffCommitPanel(w, h) {
 
   // Commit area
   if (commitAreaH > 0) {
-    lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
-
-    if (state.conflictView) {
-      // 라벨은 "모든 충돌을 골랐는가"만 따르고(무엇을 더 해야 하는지 알려 주는 안내다),
-      // 색은 지금 실제로 누를 수 있는지를 따른다 — 쓰기 작업 중이면 흐려진다.
-      const allSelected = actions.allConflictChunksSelected();
-      const canApply = allSelected && caps().isEnabled('merge-apply');
-      const baseApplyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
-      // 해결을 쓰고 담는 동안은 눌린 채 스피너를 돌린다. 그동안은 막혀 있어 클릭 존(라벨 폭 기준,
-      // renderBody 뒤쪽)이 스피너 두 칸만큼 짧아도 상관없다.
-      const applyPressed = pressedButton('merge-apply', baseApplyLabel, ui.hoveredMergeApplyButton, canApply);
-      const applyLabel = applyPressed ? applyPressed.label : baseApplyLabel;
-      const applyStyle = applyPressed ? applyPressed.style : buttonStyle(canApply, ui.hoveredMergeApplyButton,
-        colors.green + ansi.bold, colors.cursorBg + colors.green + ansi.bold + CSI + '4m');
-      lines.push(' ' + applyStyle + applyLabel + ansi.reset);
-    }
-
-    if (state.mode === 'commit') {
-      const msgLines = state.commitMsg.split('\n');
-      const cursorLineIdx = state.commitMsg.substring(0, state.commitCursor).split('\n').length - 1;
-      const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
-      const cursorCol = state.commitCursor - cursorLineStart;
-
-      // Vertical viewport: ensure cursor line is visible
-      let topLine = Math.max(0, cursorLineIdx - maxMsgLines + 1);
-      topLine = Math.min(topLine, Math.max(0, msgLines.length - maxMsgLines));
-      ui.commitTopLine = topLine;
-      ui.commitCursorLineIdx = cursorLineIdx;
-
-      // 메시지 지우기 버튼: 첫 줄 오른쪽 끝. 지울 내용이 있을 때만 자리를 차지한다.
-      const clearLabel = t('ui.x');
-      const showClear = state.commitMsg.length > 0;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
-
-      for (let i = 0; i < maxMsgLines; i++) {
-        const lineIdx = topLine + i;
-        if (lineIdx < msgLines.length) {
-          // 버튼이 얹히는 첫 줄만 폭을 양보한다 — 나머지 줄은 끝까지 쓴다.
-          const hasBtn = i === 0 && showClear;
-          const lineW = hasBtn ? Math.max(8, w - 3 - visLen(clearLabel)) : w - 2;
-          const body = lineIdx === cursorLineIdx
-            ? viewport(msgLines[lineIdx], cursorCol, lineW)
-            : truncate(msgLines[lineIdx], lineW);
-          // IME 커서는 이 폭을 기준으로 자리를 잡아야 렌더와 어긋나지 않는다.
-          if (lineIdx === cursorLineIdx) ui.commitMsgCursorMaxW = lineW;
-          let line = ' ' + colors.value + body + ansi.reset;
-          if (hasBtn) {
-            const bodyLen = visLen(stripAnsi(body));
-            const pad = Math.max(1, (w - 1 - visLen(clearLabel)) - 1 - bodyLen);
-            const clearStyle = ui.hoveredCommitClear
-              ? colors.red + ansi.bold + CSI + '4m'
-              : colors.dim;
-            line += ' '.repeat(pad) + clearStyle + clearLabel + ansi.reset;
-            ui.commitClearBtnOffset = 1 + bodyLen + pad;
-            ui.commitClearBtnLen = visLen(clearLabel);
-          }
-          lines.push(line);
-        } else {
-          lines.push('');
-        }
-      }
-    } else {
-      // \uc0c1\ud0dc \uc815\ubcf4 \ud589 (\ub2e8\ucd95\ud0a4 hint \uc5c6\uc774 staged \uac1c\uc218\ub9cc \ud45c\uc2dc)
-      const infoText = state.staged.length > 0
-        ?state.staged.length + t('ui.fileSStaged')
-        : t('ui.noFilesStaged');
-      lines.push(' ' + colors.dim + infoText + ansi.reset);
-    }
-
-    const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
-    const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
-    // amend 여부는 오른쪽 토글이 표시하므로 메인 버튼 라벨은 'Commit' 유지(중복 'Amend' 방지)
-    const baseCommitLabel = isRebaseOp ? t('ui.continueRebase2') : isMergeOp ? t('ui.commit4') + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert') : t('ui.commit2');
-    // 커밋 모드에서는 제출, 일반 모드에서는 커밋 모드 진입 — 누르면 실제로 일어나는 일과
-    // 같은 판정을 본다. input.js 의 클릭 처리도 같은 두 id 로 게이트한다.
-    const canCommit = state.mode === 'commit'
-      ? caps().isEnabled('commit-submit')
-      : caps().isEnabled('commit-enter');
-    // 커밋·리베이스 계속이 도는 동안(뒷정리 갱신 포함)은 눌린 채 스피너를 돌린다. 제출하는
-    // 순간 커밋 모드를 벗어나므로 이 줄은 일반 모드 모양으로 그려진다 — 그래도 같은 버튼이다.
-    // 클릭 존은 영어 라벨 길이로 잡혀 있지만 그동안은 막혀 있어 상관없다(renderBody 뒤쪽).
-    const commitPressed = pressedButton('commit-submit', baseCommitLabel, ui.hoveredCommitButton, canCommit);
-    const commitLabel = commitPressed ? commitPressed.label : baseCommitLabel;
-    const commitStyle = commitPressed ? commitPressed.style : buttonStyle(canCommit, ui.hoveredCommitButton,
-      colors.green + ansi.bold, colors.green + ansi.bold + CSI + '4m');
-    let btnLine = ' ' + commitStyle + commitLabel + ansi.reset;
-    // Amend 토글: 작업(merge/rebase 등) 중이 아니면 Commit 버튼 오른쪽에 항상 표시
-    if (!state.operationState) {
-      const amendLabel = (state.commitAmend ? t('ui.x2') : '[ ]') + t('ui.amendLastCommit');
-      const amendOn = caps().isEnabled('commit-amend');
-      const amendStyle = buttonStyle(amendOn, ui.hoveredCommitAmend,
-        state.commitAmend ? colors.yellow : colors.value);
-      ui.commitAmendBtnOffset = 1 + visLen(commitLabel) + 2; // 선행공백 + commitLabel + 간격(2)
-      ui.commitAmendBtnLen = visLen(amendLabel);
-      btnLine += '  ' + amendStyle + amendLabel + ansi.reset;
-    } else {
-      ui.commitAmendBtnOffset = -1;
-    }
-    lines.push(btnLine);
+    ui.commitAreaPanel = 'right';
+    ui.commitAreaRelRow = lines.length;
+    for (const line of buildCommitArea(w, commit.maxMsgLines)) lines.push(line);
   }
+
+  return lines;
+}
+
+// ── 커밋 영역: 구분선 + (충돌 뷰면) [해결 적용] + 메시지 입력/안내 + Commit 버튼 줄 ──
+// 차이 패널 아래에 그리는 것이 보통이고, 차이를 접으면 스테이지 패널 아래에 그린다. 어느 쪽이든
+// 부른 쪽이 ui.commitAreaPanel / ui.commitAreaRelRow 에 자리를 적고, renderBody 가 그 자리로
+// 클릭 존과 IME 커서를 잡는다. 여기서 적는 열 오프셋(ui.commit*BtnOffset)은 패널 기준이다.
+function commitAreaLayout(h) {
+  let msgLineCount = 1;
+  if (state.mode === 'commit') {
+    msgLineCount = state.commitMsg.split('\n').length;
+  }
+  const maxMsgLines = Math.max(1, Math.min(msgLineCount, Math.floor((h - 2) / 2)));
+  const commitExtraH = state.conflictView ? 1 : 0;
+  // amend 토글은 별도 행이 아니라 Commit 버튼과 같은 행에 표시하므로 높이 추가 없음
+  return { maxMsgLines, height: h >= 5 ? (2 + maxMsgLines + commitExtraH) : 0 };
+}
+
+function buildCommitArea(w, maxMsgLines) {
+  const lines = [];
+  ui.commitMsgVisibleLines = maxMsgLines;
+  lines.push(colors.border + '\u2500'.repeat(w) + ansi.reset);
+
+  if (state.conflictView) {
+    // 라벨은 "모든 충돌을 골랐는가"만 따르고(무엇을 더 해야 하는지 알려 주는 안내다),
+    // 색은 지금 실제로 누를 수 있는지를 따른다 — 쓰기 작업 중이면 흐려진다.
+    const allSelected = actions.allConflictChunksSelected();
+    const canApply = allSelected && caps().isEnabled('merge-apply');
+    const baseApplyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
+    // 해결을 쓰고 담는 동안은 눌린 채 스피너를 돌린다. 그동안은 막혀 있어 클릭 존(라벨 폭 기준,
+    // renderBody 뒤쪽)이 스피너 두 칸만큼 짧아도 상관없다.
+    const applyPressed = pressedButton('merge-apply', baseApplyLabel, ui.hoveredMergeApplyButton, canApply);
+    const applyLabel = applyPressed ? applyPressed.label : baseApplyLabel;
+    const applyStyle = applyPressed ? applyPressed.style : buttonStyle(canApply, ui.hoveredMergeApplyButton,
+      colors.green + ansi.bold, colors.cursorBg + colors.green + ansi.bold + CSI + '4m');
+    lines.push(' ' + applyStyle + applyLabel + ansi.reset);
+  }
+
+  if (state.mode === 'commit') {
+    const msgLines = state.commitMsg.split('\n');
+    const cursorLineIdx = state.commitMsg.substring(0, state.commitCursor).split('\n').length - 1;
+    const cursorLineStart = state.commitMsg.lastIndexOf('\n', state.commitCursor - 1) + 1;
+    const cursorCol = state.commitCursor - cursorLineStart;
+
+    // Vertical viewport: ensure cursor line is visible
+    let topLine = Math.max(0, cursorLineIdx - maxMsgLines + 1);
+    topLine = Math.min(topLine, Math.max(0, msgLines.length - maxMsgLines));
+    ui.commitTopLine = topLine;
+    ui.commitCursorLineIdx = cursorLineIdx;
+
+    // 메시지 지우기 버튼: 첫 줄 오른쪽 끝. 지울 내용이 있을 때만 자리를 차지한다.
+    const clearLabel = t('ui.x');
+    const showClear = state.commitMsg.length > 0;  // i18n-ok: 문자 인덱스(커서·substring) — 표시 폭이 아니다
+
+    for (let i = 0; i < maxMsgLines; i++) {
+      const lineIdx = topLine + i;
+      if (lineIdx < msgLines.length) {
+        // 버튼이 얹히는 첫 줄만 폭을 양보한다 — 나머지 줄은 끝까지 쓴다.
+        const hasBtn = i === 0 && showClear;
+        const lineW = hasBtn ? Math.max(8, w - 3 - visLen(clearLabel)) : w - 2;
+        const body = lineIdx === cursorLineIdx
+          ? viewport(msgLines[lineIdx], cursorCol, lineW)
+          : truncate(msgLines[lineIdx], lineW);
+        // IME 커서는 이 폭을 기준으로 자리를 잡아야 렌더와 어긋나지 않는다.
+        if (lineIdx === cursorLineIdx) ui.commitMsgCursorMaxW = lineW;
+        let line = ' ' + colors.value + body + ansi.reset;
+        if (hasBtn) {
+          const bodyLen = visLen(stripAnsi(body));
+          const pad = Math.max(1, (w - 1 - visLen(clearLabel)) - 1 - bodyLen);
+          const clearStyle = ui.hoveredCommitClear
+            ? colors.red + ansi.bold + CSI + '4m'
+            : colors.dim;
+          line += ' '.repeat(pad) + clearStyle + clearLabel + ansi.reset;
+          ui.commitClearBtnOffset = 1 + bodyLen + pad;
+          ui.commitClearBtnLen = visLen(clearLabel);
+        }
+        lines.push(line);
+      } else {
+        lines.push('');
+      }
+    }
+  } else {
+    // \uc0c1\ud0dc \uc815\ubcf4 \ud589 (\ub2e8\ucd95\ud0a4 hint \uc5c6\uc774 staged \uac1c\uc218\ub9cc \ud45c\uc2dc)
+    const infoText = state.staged.length > 0
+      ?state.staged.length + t('ui.fileSStaged')
+      : t('ui.noFilesStaged');
+    lines.push(' ' + colors.dim + infoText + ansi.reset);
+  }
+
+  const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
+  const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
+  // amend 여부는 오른쪽 토글이 표시하므로 메인 버튼 라벨은 'Commit' 유지(중복 'Amend' 방지)
+  const baseCommitLabel = isRebaseOp ? t('ui.continueRebase2') : isMergeOp ? t('ui.commit4') + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert') : t('ui.commit2');
+  // 커밋 모드에서는 제출, 일반 모드에서는 커밋 모드 진입 — 누르면 실제로 일어나는 일과
+  // 같은 판정을 본다. input.js 의 클릭 처리도 같은 두 id 로 게이트한다.
+  const canCommit = state.mode === 'commit'
+    ? caps().isEnabled('commit-submit')
+    : caps().isEnabled('commit-enter');
+  // 커밋·리베이스 계속이 도는 동안(뒷정리 갱신 포함)은 눌린 채 스피너를 돌린다. 제출하는
+  // 순간 커밋 모드를 벗어나므로 이 줄은 일반 모드 모양으로 그려진다 — 그래도 같은 버튼이다.
+  // 클릭 존은 영어 라벨 길이로 잡혀 있지만 그동안은 막혀 있어 상관없다(renderBody 뒤쪽).
+  const commitPressed = pressedButton('commit-submit', baseCommitLabel, ui.hoveredCommitButton, canCommit);
+  const commitLabel = commitPressed ? commitPressed.label : baseCommitLabel;
+  const commitStyle = commitPressed ? commitPressed.style : buttonStyle(canCommit, ui.hoveredCommitButton,
+    colors.green + ansi.bold, colors.green + ansi.bold + CSI + '4m');
+  let btnLine = ' ' + commitStyle + commitLabel + ansi.reset;
+  // Amend 토글: 작업(merge/rebase 등) 중이 아니면 Commit 버튼 오른쪽에 항상 표시
+  if (!state.operationState) {
+    const amendLabel = (state.commitAmend ? t('ui.x2') : '[ ]') + t('ui.amendLastCommit');
+    const amendOn = caps().isEnabled('commit-amend');
+    const amendStyle = buttonStyle(amendOn, ui.hoveredCommitAmend,
+      state.commitAmend ? colors.yellow : colors.value);
+    ui.commitAmendBtnOffset = 1 + visLen(commitLabel) + 2; // 선행공백 + commitLabel + 간격(2)
+    ui.commitAmendBtnLen = visLen(amendLabel);
+    btnLine += '  ' + amendStyle + amendLabel + ansi.reset;
+  } else {
+    ui.commitAmendBtnOffset = -1;
+  }
+  lines.push(btnLine);
 
   return lines;
 }

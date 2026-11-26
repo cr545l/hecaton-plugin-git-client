@@ -639,6 +639,7 @@
   "ui.cwdLabel": "cwd: ",
   "ui.detail": "Detail",
   "ui.diff": "  Diff: ",
+  "ui.diffPanel": "Diff",
   "ui.dragBranchToFolder": "drop on a folder to move it there",
   "ui.dropToRenameBranch": "release to open the rename dialog",
   "ui.eventLabel": "Event: ",

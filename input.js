@@ -1444,7 +1444,9 @@ async function handleMouseData(data) {
         for (let i = 0; i < ui.fileHeaderZones.length; i++) {
           const zone = ui.fileHeaderZones[i];
           const visibleLineIdx = zone.lineIdx - state.scrollOffset;
-          if (visibleLineIdx === bodyRowIdx) {
+          // 뷰포트 밖으로 밀려난 헤더는 화면에 없다 — 그 자리에는 커밋 영역(차이를 접었을 때)이나
+          // 빈 줄이 있으니 그 버튼으로 판정하면 안 된다.
+          if (visibleLineIdx === bodyRowIdx && visibleLineIdx < ui.fileLineMap.length) {
             const btnScreenColStart = midStart + zone.btnColStart;
             const btnScreenColEnd = midStart + zone.btnColEnd;
             if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {
@@ -1937,6 +1939,11 @@ async function handleMouseData(data) {
               ui.middlePanelCollapsed = !ui.middlePanelCollapsed;
               render();
               handled = true;
+            } else if (zone.action === 'toggleDiffPanel') {
+              // 접으면 커밋 메시지 영역은 스테이지 아래로 옮겨 그려진다(render.buildFileListPanel).
+              ui.rightPanelCollapsed = !ui.rightPanelCollapsed;
+              render();
+              handled = true;
             } else if (zone.action === 'toggleFileTree') {
               setFileTreeView(!ui.fileTreeView);
               render();
@@ -2385,7 +2392,8 @@ async function handleMouseData(data) {
       // Click on commit input row -> enter commit mode
       // 버튼이 아니라 입력 영역이라 막혔을 때 사유를 띄우지 않는다 — 지나가는 클릭까지
       // 안내가 뜨면 잔소리가 된다. 왜 안 되는지는 바로 아래 [Commit] 버튼이 알려 준다.
-      if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= rightStart && cx < L.startCol + L.width) {
+      // 입력 줄은 커밋 영역이 그려진 패널(차이 아래 또는, 차이를 접었으면 스테이지 아래) 폭만큼이다.
+      if (ui.commitInputRow > 0 && cy === ui.commitInputRow && cx >= ui.commitInputColStart && cx <= ui.commitInputColEnd) {
         if (state.mode !== 'commit' && isEnabled('commit-enter')) {
           enterCommitMode();
         }
@@ -2412,7 +2420,8 @@ async function handleMouseData(data) {
           let headerHandled = false;
           for (const zone of ui.fileHeaderZones) {
             const visibleLineIdx = zone.lineIdx - state.scrollOffset;
-            if (visibleLineIdx === bodyRowIdx) {
+            // 화면에 보이는 헤더만 — 뷰포트 아래 줄(커밋 영역 등)을 눌러 숨은 버튼이 눌리면 안 된다.
+            if (visibleLineIdx === bodyRowIdx && visibleLineIdx < ui.fileLineMap.length) {
               const btnScreenColStart = midStart + zone.btnColStart;
               const btnScreenColEnd = midStart + zone.btnColEnd;
               if (cx >= btnScreenColStart && cx <= btnScreenColEnd) {

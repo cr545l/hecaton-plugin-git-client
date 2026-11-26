@@ -639,6 +639,7 @@
   "ui.cwdLabel": "경로: ",
   "ui.detail": "상세",
   "ui.diff": "  차이: ",
+  "ui.diffPanel": "차이",
   "ui.dragBranchToFolder": "폴더 위에 놓으면 그 폴더로 옮깁니다",
   "ui.dropToRenameBranch": "놓으면 이름 변경 창이 열립니다",
   "ui.eventLabel": "이벤트: ",
