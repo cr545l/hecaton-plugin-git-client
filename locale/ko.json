@@ -730,6 +730,8 @@
   "ui.selectFileViewDiff": " 차이를 보려면 파일을 고르세요",
   "ui.selectItemViewDetails": " 자세히 보려면 항목을 고르세요",
   "ui.selected": "개 선택됨",
+  "ui.selectionFilter": "  선택 필터: ",
+  "ui.selectionFilterClearHint": "'선택 필터'를 끄거나 Esc 로 브랜치 선택을 해제하세요",
   "ui.setUpVersionControlEvenWhen": "폴더에 파일이 아직 없어도 버전 관리를 시작할 수 있습니다.",
   "ui.skip": " 건너뛰기 ",
   "ui.sort": "  정렬: ",

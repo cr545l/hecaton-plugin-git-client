@@ -730,6 +730,8 @@
   "ui.selectFileViewDiff": " Select a file to view diff",
   "ui.selectItemViewDetails": " Select an item to view details",
   "ui.selected": " selected",
+  "ui.selectionFilter": "  Selected only: ",
+  "ui.selectionFilterClearHint": "Turn off 'Selected only' or press Esc to clear the branch selection",
   "ui.setUpVersionControlEvenWhen": "Set up version control even when this folder has no files yet.",
   "ui.skip": " Skip ",
   "ui.sort": "  Sort: ",

@@ -92,3 +92,21 @@ test('highlight preference survives a new session', async () => {
   await session.persist.flushNow();
   assert.equal(repoEntry().logHighlight, false);
 });
+
+test('선택 필터 토글도 리포별로 다음 세션에 되살아난다', async () => {
+  storedFile = null;
+  let session = newSession();
+  await session.persist.load();
+  session.persist.attachRepo(REPO);
+  assert.equal(session.ui.logSelectionFilter, false, '기본값은 꺼짐');
+  session.ui.logSelectionFilter = true;
+  await session.persist.flushNow();
+  assert.equal(repoEntry().logSelectionFilter, true);
+  session = newSession();
+  await session.persist.load();
+  session.persist.attachRepo(REPO);
+  assert.equal(session.ui.logSelectionFilter, true);
+  session.ui.logSelectionFilter = false;
+  await session.persist.flushNow();
+  assert.equal(repoEntry().logSelectionFilter, false);
+});

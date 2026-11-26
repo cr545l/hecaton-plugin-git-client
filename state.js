@@ -213,6 +213,10 @@ const ui = {
   // 걸러내고 조회는 그대로 두므로, 다시 켤 때 git 재조회 없이 즉시 되살아난다.
   logShowRecovery: true,
   logHighlight: false,
+  // 선택 필터 — 켜 두면 지금 고른 브랜치(selectedBranchRefs)가 곧 히스토리 Filter 다. 우클릭 Filter 와
+  // 달리 그 브랜치를 머지한 위쪽 히스토리까지 보인다. 고른 것이 없으면 우클릭 메뉴로 건 Filter/Hide 가
+  // 그대로 적용된다(refresh.js activeRefFilter). 리포별 영속.
+  logSelectionFilter: false,
   remoteRecentBranchUsage: {},
   scrollPct: { status: -1, files: -1, diff: -1, history: -1, detail: -1 },
   lastClickTime: 0,

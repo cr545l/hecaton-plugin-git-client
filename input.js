@@ -26,7 +26,7 @@ const CHECKOUT_SCOPES = [INDEX, WORKTREE, REFS];
 const WORKTREE_SCOPES = [INDEX, WORKTREE];
 const COMMIT_SCOPES = [INDEX, REFS];
 const PULL_SCOPES = [INDEX, WORKTREE, REFS, REMOTE];
-const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, selectLogHead, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
+const { buildFileList, selectedItem, sectionRangeAt, setFileTreeView, toggleFileDir, selectedLogRef, selectLogHead, refreshAsync, refreshLog, loadMoreLog, rebuildLogGraphRows, syncLogSelectionFilter, logCacheHasRecovery, updateLogDetail, updateDiff, FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail, refreshInBackground, refreshTouchedInBackground, applyStageToState, applyUnstageToState, touchUserRefreshTime, invalidateCommitterCache } = require('./refresh');
 const { render, requestRender, revealBranch, logBranchRefAt } = require('./render');
 const { buildHistoryContextMenuItems, buildStashContextMenuItems, buildFileContextMenuItems, buildDirContextMenuItems, buildRemotesContextMenuItems, buildPushRemoteMenuItems, buildBranchesContextMenuItems, buildTabContextMenuItems, buildWorktreeContextMenuItems, handleContextMenuAction, runCreateBranch } = require('./context-menu');
 const { takeCommitDraft } = require('./persist');
@@ -589,6 +589,7 @@ async function handleKey(key) {
   if (key === ESC && ui.selectedBranchRefs.size > 0) {
     branchSelection.reset();
     ui.leftPanelActiveBranch = null;
+    applySelectionFilter();
     render();
     return;
   }
@@ -1716,6 +1717,7 @@ async function handleMouseData(data) {
       const row = cy - bodyTop;
       const inLeft = !ui.leftPanelCollapsed && cx >= L.startCol && cx < L.startCol + L.leftW;
       if (inLeft && branchSelection.select(ui.leftPanelClickMap[row], cb === 16 ? 'toggle' : 'range')) {
+        applySelectionFilter();
         render();
         continue;
       }
@@ -1903,6 +1905,12 @@ async function handleMouseData(data) {
               handled = true;
             } else if (zone.action === 'toggleLogHighlight') {
               ui.logHighlight = !ui.logHighlight;
+              render();
+              handled = true;
+            } else if (zone.action === 'toggleLogSelectionFilter') {
+              ui.logSelectionFilter = !ui.logSelectionFilter;
+              // 고른 브랜치가 없으면 그래프는 그대로다(평소 Filter/Hide) — 다를 때만 다시 그린다.
+              applySelectionFilter();
               render();
               handled = true;
             } else if (zone.action === 'toggleLogRecovery') {
@@ -2163,6 +2171,9 @@ async function handleMouseData(data) {
               const gotoHead = entry.action === 'goto-head';
               if (!gotoHead) {
                 branchSelection.select(entry);
+                // 선택 필터가 켜져 있으면 고른 브랜치로 그래프부터 다시 거른다 — 아래에서 그 브랜치 팁을
+                // 찾아 커서를 옮기므로 그보다 먼저여야 한다.
+                applySelectionFilter();
                 if (branchSelection.entryRef(entry).startsWith('refs/remotes/')) {
                   ui.remoteRecentBranchUsage[entry.branch] = Date.now();
                 }
@@ -2638,6 +2649,7 @@ function handleContextMenuRequest(col, row) {
       const entry = ui.leftPanelClickMap[bodyRowIdx];
       if (entry && entry.action === 'goto-branch') {
         const target = branchSelection.capture(entry);
+        applySelectionFilter();
         ui.contextMenuBranch = entry.branch;
         ui.contextMenuRemoteBranch = entry.branch;
         ui.contextMenuWorktree = null;
@@ -2699,6 +2711,7 @@ function handleContextMenuRequest(col, row) {
     if (branchHit) {
       const entry = { action: 'goto-branch', branch: branchHit.branch, refKey: branchHit.refKey };
       const target = branchSelection.capture(entry);
+      applySelectionFilter();
       revealBranch(branchHit.branch, branchHit.refKey);
       ui.contextMenuBranch = entry.branch;
       ui.contextMenuRemoteBranch = entry.branch;
@@ -2778,7 +2791,17 @@ function selectHistoryBranch(hit, mode) {
   if (!branchSelection.select(entry, mode)) return null;
   if (hit.refKey.startsWith('refs/remotes/')) ui.remoteRecentBranchUsage[hit.branch] = Date.now();
   if (ui.selectedBranchRefs.has(hit.refKey)) revealBranch(hit.branch, hit.refKey);
+  applySelectionFilter();
   return entry;
+}
+
+// 선택 필터가 켜져 있으면 브랜치 선택이 곧 히스토리 Filter 다. 선택을 바꾼 자리마다 불러 그래프를
+// 맞춘다 — 그래프에 걸린 선택과 같으면(필터가 꺼져 있으면 늘) 아무것도 하지 않는다.
+// 다시 그렸으면 커서가 다른 커밋으로 밀렸을 수 있어 상세도 따라 바꾼다.
+function applySelectionFilter() {
+  if (!syncLogSelectionFilter()) return false;
+  if (state.rightView === 'log') updateLogDetail();
+  return true;
 }
 
 function isRemoteMenuTarget(entry) {

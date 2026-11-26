@@ -87,6 +87,7 @@ function applyLayout(src) {
   ui.logSortMode = pickEnum(src.logSortMode, ['date', 'branch'], ui.logSortMode);
   if (typeof src.logShowRecovery === 'boolean') ui.logShowRecovery = src.logShowRecovery;
   if (typeof src.logHighlight === 'boolean') ui.logHighlight = src.logHighlight;
+  if (typeof src.logSelectionFilter === 'boolean') ui.logSelectionFilter = src.logSelectionFilter;
   if (typeof src.fileTreeView === 'boolean') ui.fileTreeView = src.fileTreeView;
   if (isPlainObject(src.panels)) {
     if (typeof src.panels.left === 'boolean') ui.leftPanelCollapsed = src.panels.left;
@@ -109,6 +110,7 @@ function captureLayout() {
     logSortMode: ui.logSortMode,
     logShowRecovery: ui.logShowRecovery,
     logHighlight: ui.logHighlight,
+    logSelectionFilter: ui.logSelectionFilter,
     fileTreeView: ui.fileTreeView,
     panels: {
       left: ui.leftPanelCollapsed,

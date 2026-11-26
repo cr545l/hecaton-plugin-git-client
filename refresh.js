@@ -2255,6 +2255,32 @@ function refKeysOfDecoration(deco, localNames, remoteNames) {
   return keys;
 }
 
+// 지금 그래프에 걸어야 할 Filter/Hide.
+//
+// 선택 필터(헤더 토글)가 켜져 있고 고른 브랜치가 있으면 그 선택이 화이트리스트를 통째로 대신한다 —
+// "고른 브랜치만 보기"라서 우클릭으로 건 Filter 와 섞지 않는다. Hide 도 함께 비운다: 화이트리스트
+// 에서는 지정 밖 ref 가 어차피 루트가 아니니 Hide 가 남아 영향을 주는 곳은 "골라 놓은 브랜치"뿐인데,
+// 직접 고른 브랜치를 숨겨 빈 목록을 보이는 건 고른 뜻과 반대다. 우클릭 Filter 와 달리 고른 브랜치를
+// 머지한 위쪽 히스토리까지 보인다(withDescendants) — 브랜치가 어디로 들어갔는지까지가 궁금한 것이다.
+// 고른 것이 없으면(Esc 로 풀었거나 아직 안 골랐으면) 평소의 Filter/Hide 로 돌아간다.
+//
+// selectionKey 는 그래프를 만들 때 쓴 선택의 지문이다. 선택이 바뀔 때마다 이것과 비교해 다시
+// 그릴지 정한다(syncLogSelectionFilter). 선택 필터가 꺼져 있으면 늘 '' 라 선택을 바꿔도 다시
+// 그리지 않는다.
+let _appliedSelectionKey = '';
+function activeRefFilter() {
+  const selected = ui.logSelectionFilter && ui.branchSelectionCwd === state.cwd && ui.selectedBranchRefs
+    ? [...ui.selectedBranchRefs].sort() : [];
+  if (selected.length > 0) return { filterList: selected, hiddenList: [], selectionKey: selected.join('\n'), withDescendants: true };
+  return { filterList: ui.filteredRefs || [], hiddenList: ui.hiddenRefs || [], selectionKey: '', withDescendants: false };
+}
+
+// 지금 그래프가 선택 필터로 걸러 낸 것인지 — 빈 목록 안내가 되돌리는 길을 다르게 적는다. 지금
+// 선택이 아니라 그래프를 만들 때 쓴 선택으로 본다: 안내는 그려진 목록이 왜 비었는지를 말해야 한다.
+function selectionFilterActive() {
+  return _appliedSelectionKey !== '';
+}
+
 // 히스토리 Filter/Hide 적용 — 그래프에 남길 커밋을 ref 도달성으로 고른다.
 //
 // 루트 = (Filter 가 있으면 그 ref 들, 없으면 로그에 등장한 모든 ref) − Hide 한 ref.
@@ -2265,8 +2291,10 @@ function refKeysOfDecoration(deco, localNames, remoteNames) {
 // 태그나 detached HEAD 처럼 for-each-ref 로 따로 받지 않는 ref 도 같은 자리에 들어 있다.
 // 팁이 max-count 밖으로 밀려난 브랜치는 애초에 그릴 커밋이 없으니 루트로 세울 일도 없다.
 function applyRefFilters(commits, stashFullHashes) {
-  const filterList = ui.filteredRefs || [];
-  const hiddenList = ui.hiddenRefs || [];
+  const active = activeRefFilter();
+  _appliedSelectionKey = active.selectionKey;
+  const filterList = active.filterList;
+  const hiddenList = active.hiddenList;
   if (filterList.length === 0 && hiddenList.length === 0) return commits;
 
   const localNames = new Set(state.branches.map(b => b.name));
@@ -2299,6 +2327,9 @@ function applyRefFilters(commits, stashFullHashes) {
     }
   }
 
+  // 루트는 위 루프에서만 들어간다(아직 아무것도 내려가지 않았다) — 지금 keep 이 곧 루트 목록이다.
+  const roots = [...keep];
+
   while (stack.length > 0) {
     const commit = byHash.get(stack.pop());
     if (!commit) continue;
@@ -2309,7 +2340,43 @@ function applyRefFilters(commits, stashFullHashes) {
     }
   }
 
-  return commits.filter(c => keep.has(c.hash));
+  if (!active.withDescendants) return commits.filter(c => keep.has(c.hash));
+  return withDescendants(commits, byHash, roots, keep);
+}
+
+// 선택 필터는 고른 브랜치의 팁을 품은 위쪽 히스토리도 남긴다 — 그 브랜치를 머지한 커밋과 그 위,
+// 팁에서 새로 딴 브랜치, 아직 받지 않은 리모트 쪽 커밋. 팁(루트)에서만 자식 쪽으로 올라간다:
+// 팁 아래 조상에서 올라가면 그 조상에서 갈라진 남의 브랜치가 전부 딸려 온다.
+//
+// 올라가며 붙인 커밋에는 걸러 낸 부모가 남는다(머지 커밋의 첫 부모 = 머지 받은 쪽의 이전 히스토리).
+// 그래프는 목록에 없는 부모에도 레인을 잡아 두어 그 줄이 목록 바닥까지 늘어지므로, 받아 둔 로그
+// 안에 있는데 걸러 낸 부모만 뗀다. 로그 밖(max-count 너머) 부모는 예전처럼 둔다 — 아래로 더 있다는 표시다.
+function withDescendants(commits, byHash, roots, keep) {
+  const children = new Map();
+  for (const c of commits) {
+    for (const p of c.parents) {
+      if (!children.has(p)) children.set(p, []);
+      children.get(p).push(c.hash);
+    }
+  }
+  // keep 과 따로 센다 — 다른 루트의 조상이라 이미 남긴 커밋에서도 위로는 더 올라가야 한다.
+  const seen = new Set(roots);
+  const up = roots.slice();
+  while (up.length > 0) {
+    for (const child of children.get(up.pop()) || []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      keep.add(child);
+      up.push(child);
+    }
+  }
+  const out = [];
+  for (const c of commits) {
+    if (!keep.has(c.hash)) continue;
+    const parents = c.parents.filter(p => keep.has(p) || !byHash.has(p));
+    out.push(parents.length === c.parents.length ? c : { ...c, parents });
+  }
+  return out;
 }
 
 // 정렬 모드 토글 시 git 재조회 없이 그래프만 다시 만들기 위한 마지막 입력 캐시
@@ -2406,6 +2473,14 @@ function rebuildLogGraphRows(options = {}) {
     if (found >= 0) state.logCursor = found;
   }
   return true;
+}
+
+// 브랜치 선택을 바꾼 자리에서 부른다. 선택 필터가 그래프에 건 선택과 지금 선택이 다를 때만 캐시된
+// 커밋으로 다시 그린다 — git 은 부르지 않는다(Filter/Hide 와 같은 그리기 단계 처리).
+// 캐시가 아직 없으면 false: 다음에 로그를 읽을 때 지금 선택으로 만들어진다.
+function syncLogSelectionFilter() {
+  if (activeRefFilter().selectionKey === _appliedSelectionKey) return false;
+  return rebuildLogGraphRows();
 }
 
 const logRowKey = row => (row && row.type === 'commit' && row.hash) ? row.hash : null;
@@ -3194,7 +3269,7 @@ function updateFreshDetail() {
 module.exports = {
   buildFileList, selectedItem, clampCursor,
   expandFileTargets, stageAllPaths, sectionRangeAt, setFileTreeView, toggleFileDir,
-  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, cancelSlowReads, invalidateDiffCache, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, logCacheHasRecovery, selectedLogRef, selectLogHead, updateLogDetail, updateDiff,
+  refreshAsync, refreshLog, loadMoreLog, cancelLogLoad, cancelSlowReads, invalidateDiffCache, logLoadElapsedSeconds, buildLogGraphRows, rebuildLogGraphRows, syncLogSelectionFilter, selectionFilterActive, logCacheHasRecovery, selectedLogRef, selectLogHead, updateLogDetail, updateDiff,
   formatDateTime,
   FRESH_TIME_WINDOWS, refreshFresh, updateFreshDetail,
   refreshInBackground,

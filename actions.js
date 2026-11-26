@@ -435,7 +435,7 @@ const READ_ONLY_ACTIONS = new Set([
   // 화면 전환/패널 토글 (타이틀 행 버튼)
   'tab-local', 'tab-commits', 'tab-fresh',
   'toggleStatus', 'toggleHistory', 'toggleDetail', 'toggleFiles',
-  'toggleDiff', 'toggleLogSort', 'toggleLogRecovery', 'toggleLogHighlight', 'toggleIgnored', 'toggleFileTree',
+  'toggleDiff', 'toggleLogSort', 'toggleLogRecovery', 'toggleLogHighlight', 'toggleLogSelectionFilter', 'toggleIgnored', 'toggleFileTree',
   // 커밋 입력 편집 — 저장소가 아니라 입력창만 건드린다
   'commit-clear',
 ]);

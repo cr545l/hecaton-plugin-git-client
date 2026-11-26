@@ -528,6 +528,17 @@ function renderBody() {
     // 폴딩 묶음과 옵션 묶음 사이에 세울 구분선(' │')의 폭까지 미리 세어야 오른쪽 끝에 맞는다.
     const diffWrap = state.rightView === 'diff' && state.diffView === 'side' ? state.sideDiffWrap : state.diffWrap;
     if (state.rightView !== 'fresh') rightParts.push({ label: t('ui.diffWrap'), value: diffWrap ? 'on' : 'off', action: 'toggleDiffWrap', collapsed: !diffWrap, group: 'option' });
+    // 선택 필터 — 켜면 고른 브랜치(와 그 브랜치를 머지한 위쪽)만 히스토리에 그린다. 우클릭 메뉴의 Filter 를 고를 때마다 다시 거는
+    // 수고를 버튼 하나로 줄인다. 히스토리 전용이라 Commits 탭에서만 낸다.
+    if (state.rightView === 'log') {
+      rightParts.push({
+        label: t('ui.selectionFilter'),
+        value: ui.logSelectionFilter ? 'on' : 'off',
+        action: 'toggleLogSelectionFilter',
+        collapsed: !ui.logSelectionFilter,
+        group: 'option',
+      });
+    }
     const rightGroupBreaks = rightParts.filter((p, i) => i > 0 && p.group !== rightParts[i - 1].group).length;
     let rightTotalW = rightGroupBreaks * 2;
     for (const p of rightParts) rightTotalW += visLen(p.label) + visLen(p.value || '');
@@ -2550,11 +2561,13 @@ function buildLogPanel(w, h) {
     }
     // Filter/Hide 때문에 비었으면 "커밋이 없다"가 아니다. 그대로 두면 저장소가 텅 빈 것처럼
     // 보이고, 지정을 걸어 둔 걸 잊었을 때 왜 이렇게 됐는지 알 길이 없다 — 되돌리는 길까지 적는다.
-    if (ui.filteredRefs.length > 0 || ui.hiddenRefs.length > 0) {
+    // 선택 필터로 비었으면 우클릭 메뉴의 "필터 모두 지우기"로는 풀리지 않는다 — 그 길을 따로 적는다.
+    const bySelection = require('./refresh').selectionFilterActive();
+    if (bySelection || ui.filteredRefs.length > 0 || ui.hiddenRefs.length > 0) {
       return [
         colors.dim + ' ' + truncate(t('ui.noCommitsMatchBranchFilter'), w - 1) + ansi.reset,
         '',
-        colors.dim + ' ' + truncate(t('ui.rightClickBranchClearAllFilters'), w - 1) + ansi.reset,
+        colors.dim + ' ' + truncate(t(bySelection ? 'ui.selectionFilterClearHint' : 'ui.rightClickBranchClearAllFilters'), w - 1) + ansi.reset,
       ];
     }
     return [colors.dim + t('ui.noCommitsYet') + ansi.reset];
