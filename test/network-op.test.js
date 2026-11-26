@@ -112,9 +112,22 @@ test('pull도 남의 결과로 대체하지 않는다', async () => {
   assert.equal(gitArgsOf(execCalls[0]), 'pull');
 });
 
+test('전체 재시작으로 사라진 창의 fetch 기록에 120초씩 묶이지 않는다', async () => {
+  // 2026-11-26 실제 기록 모양: 시작 10초 뒤 heartbeat 한 번을 남기고 창이 사라졌다.
+  reset();
+  const now = Date.now();
+  files.set(NETOP, JSON.stringify({ op: 'fetch-all', owner: '43804-3nc0os', startedAt: now - 70000, finishedAt: 0, ok: false, heartbeatAt: now - 61000 }));
+  const started = Date.now();
+  const err = await git.gitFetchAsync(CWD);
+  assert.equal(err, null, '"다른 네트워크 작업이 진행 중" 으로 실패하면 안 된다');
+  assert.equal(execCalls.length, 1);
+  assert.ok(Date.now() - started < 5000, '죽은 창을 기다리면 안 된다');
+  assert.equal(netop().ok, true);
+});
+
 test('멈춘 인스턴스의 기록에 발이 묶이지 않는다', async () => {
   reset();
-  // 네트워크 실행 상한(30분)을 확실히 넘긴 기록이어야 죽은 것으로 판정된다.
+  // heartbeatAt 이 없는 옛 버전 기록은 네트워크 실행 상한(30분)을 확실히 넘겨야 죽은 것으로 판정된다.
   // 그 미만이면 진행 중으로 보고 기다리는 것이 옳은 동작이라 이 테스트의 대상이 아니다.
   files.set(NETOP, JSON.stringify({ op: 'fetch-all', owner: 'dead', startedAt: Date.now() - 31 * 60000, finishedAt: 0, ok: false }));
   const err = await git.gitFetchAsync(CWD);

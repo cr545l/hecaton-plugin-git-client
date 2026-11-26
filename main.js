@@ -215,6 +215,12 @@ async function main() {
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   process.stdin.on('end', shutdown);
+  // 위 신호들이 올 때는 RPC 채널이 이미 닫혀 있어 공유 파일을 쓸 수 없다(호스트
+  // plugin_runner/runner_core.js 의 onShutdown 설명). 다른 창이 기다리는 진행 기록은 종료
+  // 예고의 유예 안에서 닫는다 — 안 닫으면 전체 재시작 직후 다른 창의 fetch 가 막힌다.
+  if (typeof hecaton.onShutdown === 'function') {
+    hecaton.onShutdown(() => coordinate.abandonNetworkOp().catch(() => null), { graceMs: 2000 });
+  }
 }
 
 async function primeInitialBranchFromDisk() {

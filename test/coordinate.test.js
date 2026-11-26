@@ -135,9 +135,8 @@ test('다른 인스턴스가 진행 중이면 기다린다', async () => {
   await coordinate.endNetworkOp('fetch', true);
 });
 
-// 아래에서 "오래된" 기록을 흉내낼 때 쓰는 나이. 네트워크 실행 제한(30분)을
-// 확실히 넘겨야 죽은 것으로 판정된다 — 그 미만이면 진행 중으로 보고 기다리는 것이 옳은
-// 동작이라 이 테스트들의 대상이 아니다.
+// 아래 두 테스트의 기록에는 heartbeatAt 이 없다 — heartbeat 를 쓰지 않던 옛 버전 창의 기록이다.
+// 그런 기록은 시작 시각부터 네트워크 실행 제한(30분)을 확실히 넘겨야 죽은 것으로 판정된다.
 test('멈춘 지 오래된 진행 기록은 무시하고 직접 실행한다', async () => {
   reset();
   writeRaw('netop.json', { op: 'fetch', owner: 'dead-instance', startedAt: Date.now() - 31 * 60000, finishedAt: 0, ok: false });
@@ -221,6 +220,73 @@ test('fresh heartbeat keeps an old remote operation in flight', async () => {
   assert.equal(await coordinate.isNetworkOpInFlight(), true);
   assert.equal(await coordinate.beginNetworkOp('push', 0), 'inflight');
   await coordinate.endNetworkOp('push', false);
+});
+
+// 2026-11-26 사고: 플러그인 전체 재시작으로 fetch 중이던 창이 사라져 완료 기록이 남지 않았고,
+// 만료가 30분이라 다른 창의 fetch 가 전부 "다른 네트워크 작업이 진행 중" 으로 실패했다.
+test('heartbeat 가 1분 넘게 끊긴 남의 작업은 죽은 것으로 보고 직접 실행한다', async () => {
+  reset();
+  const now = Date.now();
+  writeRaw('netop.json', { op: 'fetch-all', owner: 'dead', startedAt: now - 75000, heartbeatAt: now - 65000, finishedAt: 0, ok: false });
+  assert.equal(await coordinate.isNetworkOpInFlight(), false);
+  assert.equal(await coordinate.beginNetworkOp('fetch-all', 3000), 'run');
+  assert.equal(readRaw('netop.json').owner, coordinate.INSTANCE_ID);
+  await coordinate.endNetworkOp('fetch-all', true);
+});
+
+test('heartbeat 가 잠깐 밀린 정도(30초)면 살아 있는 작업으로 보고 기다린다', async () => {
+  reset();
+  const now = Date.now();
+  writeRaw('netop.json', { op: 'fetch-all', owner: 'other', startedAt: now - 10 * 60000, heartbeatAt: now - 30000, finishedAt: 0, ok: false });
+  assert.equal(await coordinate.beginNetworkOp('fetch-all', 3000), 'inflight');
+  await coordinate.endNetworkOp('fetch-all', false);
+});
+
+test('진행 기록은 첫 heartbeat 전부터 heartbeatAt 을 가진다', async () => {
+  // 없으면 시작 10초 안에 죽은 기록이 옛 버전 기록으로 판정되어 30분을 막는다.
+  reset();
+  await coordinate.beginNetworkOp('fetch-all', 3000);
+  const rec = readRaw('netop.json');
+  assert.ok(rec.heartbeatAt >= rec.startedAt);
+  await coordinate.endNetworkOp('fetch-all', true);
+  reset();
+  await coordinate.claimNetworkOp('push');
+  assert.ok(readRaw('netop.json').heartbeatAt > 0);
+  await coordinate.endNetworkOp('push', false);
+});
+
+test('창이 닫히면 내 진행 기록을 실패로 닫고 heartbeat 가 되살리지 못한다', async t => {
+  reset();
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  assert.equal(await coordinate.beginNetworkOp('fetch-all', 3000), 'run');
+  coordinate.keepNetworkOpAlive();
+  await coordinate.abandonNetworkOp();
+  t.mock.timers.tick(30000);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  const rec = readRaw('netop.json');
+  assert.ok(rec.finishedAt >= rec.startedAt);
+  assert.equal(rec.ok, false, '중단된 fetch 를 성공으로 재사용하면 안 된다');
+  // 다른 창 입장: 같은 기록의 주인만 닫힌 창으로 바꿔 보면 기다리지도, 재사용하지도 않고 바로 실행한다.
+  writeRaw('netop.json', { ...rec, owner: 'closed-window' });
+  assert.equal(await coordinate.isNetworkOpInFlight(), false);
+  assert.equal(await coordinate.beginNetworkOp('fetch-all', 3000), 'run');
+  await coordinate.endNetworkOp('fetch-all', true);
+});
+
+test('남의 작업을 기다리던 창이 닫혀도 그 기록은 건드리지 않는다', async () => {
+  reset();
+  writeRaw('netop.json', { op: 'fetch-all', owner: 'other', startedAt: Date.now(), heartbeatAt: Date.now(), finishedAt: 0, ok: false });
+  assert.equal(await coordinate.beginNetworkOp('fetch-all', 3000), 'inflight');
+  await coordinate.abandonNetworkOp();
+  const rec = readRaw('netop.json');
+  assert.equal(rec.owner, 'other');
+  assert.equal(rec.finishedAt, 0);
+});
+
+test('닫을 작업이 없으면 창이 닫혀도 아무것도 쓰지 않는다', async () => {
+  reset();
+  await coordinate.abandonNetworkOp();
+  assert.equal(readRaw('netop.json'), null);
 });
 
 test('heartbeat refreshes while running and cannot overwrite completion', async t => {

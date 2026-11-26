@@ -320,8 +320,28 @@ async function publishSharedSnapshot(kind, value, opts) {
 // 갱신하는 편이 빠르다.
 
 const NETOP_KIND = 'netop';
-// Shared records expire by heartbeat, not by total operation duration.
-const NETOP_STALE_MS = 30 * 60 * 1000 + 30000;
+// 진행 기록은 전체 소요 시간이 아니라 heartbeat 로 만료된다. 작업 중인 창은 NETOP_HEARTBEAT_MS
+// 마다 heartbeatAt 을 새로 쓰므로, 오래 걸리는 전송도 살아 있는 한 만료되지 않는다.
+const NETOP_HEARTBEAT_MS = 10000;
+// heartbeat 가 이만큼 끊기면 주인 창이 죽은 것이다. 플러그인 전체 재시작처럼 작업 도중 창이
+// 사라지면 완료 기록이 영영 찍히지 않는다 — 2026-11-26 이 값이 30분이어서 재시작 직후 다른 창의
+// fetch 가 모두 "다른 네트워크 작업이 진행 중" 으로 120초씩 기다리다 실패했다. QuickJS 가 바빠
+// 타이머가 밀리는 구간(수십 초)은 견뎌야 하므로 heartbeat 몇 번 분량을 둔다.
+const NETOP_HEARTBEAT_STALE_MS = 60000;
+// heartbeatAt 이 없는 기록은 heartbeat 를 쓰지 않던 옛 버전 창이 쓴 것이다. 그쪽은 살아 있어도
+// heartbeat 가 없으니 예전처럼 시작 시각부터 잰다(네트워크 실행 상한 30분 + 여유).
+const NETOP_LEGACY_STALE_MS = 30 * 60 * 1000 + 30000;
+
+function isNetOpRecordFresh(data, now) {
+  if (typeof data.heartbeatAt === 'number' && data.heartbeatAt > 0) {
+    return (now - data.heartbeatAt) < NETOP_HEARTBEAT_STALE_MS;
+  }
+  return (now - data.startedAt) < NETOP_LEGACY_STALE_MS;
+}
+
+// 지금 도는 heartbeat 의 정지 함수. 창이 닫힐 때(abandonNetworkOp) 완료 기록보다 먼저 멈춰야
+// 늦게 끝난 heartbeat 쓰기가 완료 기록을 덮지 않는다.
+let _stopNetOpHeartbeat = null;
 
 function keepNetworkOpAlive() {
   const target = isEnabled() ? sharedPath(NETOP_KIND, false) : '';
@@ -334,14 +354,17 @@ function keepNetworkOpAlive() {
       data.heartbeatAt = Date.now();
       await writeJson(target, data);
     }).catch(() => {});
-  }, 10000) : null;
+  }, NETOP_HEARTBEAT_MS) : null;
   if (timer && timer.unref) timer.unref();
-  return async () => {
+  const stop = async () => {
     stopped = true;
     clearInterval(timer);
+    if (_stopNetOpHeartbeat === stop) _stopNetOpHeartbeat = null;
     // Drain the heartbeat before publishing completion.
     await pending;
   };
+  _stopNetOpHeartbeat = stop;
+  return stop;
 }
 
 async function readNetOp() {
@@ -356,7 +379,7 @@ async function isRemoteNetworkOpInFlight() {
   if (!data || typeof data.startedAt !== 'number') return false;
   if (data.owner === INSTANCE_ID) return false;
   if (data.finishedAt && data.finishedAt >= data.startedAt) return false;
-  return (Date.now() - (data.heartbeatAt || data.startedAt)) < NETOP_STALE_MS;
+  return isNetOpRecordFresh(data, Date.now());
 }
 
 // 이 저장소에서 네트워크 작업이 도는 중인지. 폴링 억제 판단에 쓴다.
@@ -379,7 +402,7 @@ async function beginNetworkOp(op, reuseWindowMs) {
   const now = Date.now();
   if (data && typeof data.startedAt === 'number') {
     const running = (!data.finishedAt || data.finishedAt < data.startedAt)
-      && (now - (data.heartbeatAt || data.startedAt)) < NETOP_STALE_MS
+      && isNetOpRecordFresh(data, now)
       && data.owner !== INSTANCE_ID;
     if (running) return 'inflight';
     const reusable = reuseWindowMs > 0
@@ -390,8 +413,10 @@ async function beginNetworkOp(op, reuseWindowMs) {
       && (now - data.finishedAt) < reuseWindowMs;
     if (reusable) return 'reuse';
   }
+  // heartbeatAt 을 처음부터 남긴다 — 없으면 첫 heartbeat(10초 뒤) 전에 죽은 기록이 옛 버전 기록으로
+  // 판정되어 30분 동안 다른 창을 막는다.
   await writeJson(sharedPath(NETOP_KIND, false), {
-    op, owner: INSTANCE_ID, startedAt: now, finishedAt: 0, ok: false,
+    op, owner: INSTANCE_ID, startedAt: now, heartbeatAt: now, finishedAt: 0, ok: false,
   });
   return 'run';
 }
@@ -402,8 +427,9 @@ async function beginNetworkOp(op, reuseWindowMs) {
 async function claimNetworkOp(op) {
   _localNetworkOp = { op, startedAt: Date.now() };
   if (!isEnabled() || !await ensureDir()) return;
+  const now = Date.now();
   await writeJson(sharedPath(NETOP_KIND, false), {
-    op, owner: INSTANCE_ID, startedAt: Date.now(), finishedAt: 0, ok: false,
+    op, owner: INSTANCE_ID, startedAt: now, heartbeatAt: now, finishedAt: 0, ok: false,
   });
 }
 
@@ -417,6 +443,16 @@ async function endNetworkOp(op, ok) {
   data.finishedAt = Date.now();
   data.ok = !!ok;
   await writeJson(sharedPath(NETOP_KIND, false), data);
+}
+
+// 창이 닫힐 때(플러그인 전체 재시작 포함) 내가 돌리던 네트워크 작업 기록을 실패로 닫는다.
+// 닫지 않고 사라지면 다른 창들은 heartbeat 만료(NETOP_HEARTBEAT_STALE_MS)까지 이 기록을 기다린다.
+// 남의 작업을 기다리던 중이면 그 기록은 건드리지 않는다(endNetworkOp 가 주인을 확인한다).
+async function abandonNetworkOp() {
+  const local = _localNetworkOp;
+  if (!local) return;
+  if (_stopNetOpHeartbeat) await _stopNetOpHeartbeat();
+  await endNetworkOp(local.op, false);
 }
 
 // 진행 중인 남의 작업이 끝날 때까지 기다린다. 끝났으면 true.
@@ -445,6 +481,7 @@ module.exports = {
   beginNetworkOp,
   claimNetworkOp,
   endNetworkOp,
+  abandonNetworkOp,
   isNetworkOpInFlight,
   waitForNetworkOp,
   writeTimingLog,
