@@ -1,7 +1,7 @@
 const { t } = require('./i18n');
 const { CSI, ansi, colors, seriePalette } = require('./ansi');
 const { SIXEL_ENABLED, SIXEL_PALETTE, SCROLLBAR_PALETTE, SCROLLBAR_HOVER_PALETTE, SCROLLBAR_ACTIVE_PALETTE, renderScrollbarPixels, renderCombinedGraphPixels, cropPixelColumns, encodeSixel, encodeSixelClear } = require('./sixel');
-const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine } = require('./text');
+const { visLen, padRight, truncate, viewport, sliceByWidth, stripAnsi, expandTabs, isDiffFileHeaderLine, isWide } = require('./text');
 const { state, ui, isPinnedBranch, localRefKey, remoteRefKey, isFilteredRef, isHiddenRef } = require('./state');
 const { buildFileList, selectedItem, selectedLogRef, FRESH_TIME_WINDOWS, currentBranchRemote, branchRemoteFor, formatDateTime } = require('./refresh');
 const { highlightCode, getLanguage } = require('./highlighter');
@@ -9,7 +9,8 @@ const hostScroll = require('./scroll');
 const tooltip = require('./tooltip');
 const persist = require('./persist');
 const { highlightedRows } = require('./log-highlight');
-const { panelLoadingLabel } = require('./spinner');
+const { panelLoadingLabel, isButtonBusy, isAnyButtonBusy } = require('./spinner');
+const { BRAILLE_FRAMES } = require('./title');
 const actions = require('./actions');
 const queue = require('./queue');
 const { lineKeys, anchorOffset } = require('./scroll-anchor');
@@ -53,6 +54,130 @@ function actionStyle(action, hovered, enabledStyle, hoverStyle) {
 // 클릭존에 실을 값 — 예약으로 받아지는 버튼은 클릭을 계속 받아야 한다.
 function actionClickable(action) {
   return caps().isActionable(action) || queue.hasFor(action);
+}
+
+// ── 시킨 작업이 도는 버튼: 눌린 모양 ──
+// 처리상태는 창 타이틀에 스피너와 함께 나오지만, 세로 탭으로 쓰면 타이틀이 눈에 들어오지
+// 않는다. 그래서 작업을 시키는 버튼(Fetch·Commit·Stage All·hunk …)은 자기 작업이 끝날 때까지
+// (뒷정리 갱신 포함) 반전해 눌린 채로 두고 라벨 앞에서 스피너를 돌린다. 어느 작업이 어느
+// 버튼인지는 작업 등록부의 button 이 정한다(spinner.beginOp).
+// 색은 진행 중 라벨(Rebasing…)과 같은 노랑이다. 반전 cyan 은 지금 보고 있는 탭과 겹친다.
+const PRESSED_BUTTON_STYLE = colors.yellow + ansi.bold + ansi.inverse;
+
+function spinnerGlyph() {
+  return BRAILLE_FRAMES[state.spinnerFrame % BRAILLE_FRAMES.length];
+}
+
+// ── 스피너 칸 표식 ──
+// 스피너는 칸 하나만 다시 써서 돌린다(repaintButtonSpinners). 그러려면 그 칸의 화면 좌표가
+// 필요한데, 패널 안 버튼은 패널 기준 문자열로 만들어져 나중에 화면에 놓이므로 그리는 자리에서는
+// 좌표를 모른다. 그래서 스피너 글자 바로 앞에 이 표식을 심어 두고, 프레임을 다 만든 뒤
+// 내보내기 직전에 표식 위치를 화면 좌표로 읽어 낸 다음 지운다(collectSpinnerCells).
+// 자리마다 좌표 계산을 따로 두면 레이아웃이 바뀔 때 어긋난다 — 실제로 내보낸 프레임이 답이다.
+//
+// SGR 꼴이라 visLen·truncate·padRight·sliceLine 이 폭 0 으로 지나간다. 파라미터는 터미널이
+// 모르는 값(9999, 1000+n)이라 혹시 지우지 못하고 나가도 아무 효과가 없다.
+const SPIN_MARK_PREFIX = '\x1b[9999;';
+let _frameSpinStyles = [];
+
+// 버튼 id 의 작업이 도는 중이면 눌린 라벨과 스타일을, 아니면 null 을 준다. 호출부는 null 이면
+// 원래 그리던 대로 그린다. 눌린 라벨은 스피너 자리만큼 두 칸 넓다 — 폭 계산(정렬·클릭 존)은
+// 돌려받은 라벨로 해야 한다. 라벨을 줄이면 무슨 버튼인지가 흐려진다.
+// 눌린 채로도 클릭을 받는 경우(Fetch 는 도는 중에 다시 누르면 한 번 더 예약된다)는 hover
+// 밑줄만 얹는다 — 반전을 풀면 작업이 끝난 것처럼 보인다.
+function pressedButton(button, label, hovered, clickable) {
+  if (!isButtonBusy(button)) return null;
+  const style = PRESSED_BUTTON_STYLE + (hovered && clickable ? CSI + '4m' : '');
+  const idx = _frameSpinStyles.length;
+  _frameSpinStyles.push(style);
+  const spin = SPIN_MARK_PREFIX + (1000 + idx) + 'm' + spinnerGlyph();
+  // ' Abort ' 처럼 양옆을 비워 둔 라벨은 그 여백 안쪽에, 아니면 라벨 앞에 붙인다.
+  return { label: label.startsWith(' ') ? ' ' + spin + label : spin + ' ' + label, style };
+}
+
+const BRAILLE_FIRST = 0x2800, BRAILLE_LAST = 0x28FF;
+
+// 프레임 조각들에서 스피너 표식을 찾아 화면 좌표로 적고 표식은 지운다. 조각 안의 커서 위치는
+// 커서 이동(CSI row;col H)과 글자 폭(visLen 과 같은 규칙)으로 따라간다. 모든 줄 조각은 커서
+// 이동으로 시작하므로 앞 조각의 내용까지 볼 필요는 없다 — 위치를 모르는 채로 만난 표식은
+// 지우기만 한다. 표식 바로 다음 글자가 스피너가 아니면(잘라 낸 라벨 등) 칸으로 적지 않는다 —
+// 거기에 덮어 쓰면 엉뚱한 글자를 망친다.
+function collectSpinnerCells(buf, screenRows, screenCols) {
+  const cells = [];
+  for (let b = 0; b < buf.length; b++) {
+    const s = buf[b];
+    if (typeof s !== 'string' || s.indexOf(SPIN_MARK_PREFIX) < 0) continue;
+    let out = '';
+    let row = 0, col = 0;          // 0 = 아직 모름
+    let pending = -1;               // 표식을 지나 스피너 글자를 기다리는 중이면 그 번호
+    let i = 0;
+    while (i < s.length) {
+      const ch = s.charCodeAt(i);
+      if (ch === 0x1b) {
+        const next = s[i + 1];
+        if (next === '[') {
+          let j = i + 2;
+          while (j < s.length && (s.charCodeAt(j) < 0x40 || s.charCodeAt(j) > 0x7e)) j++;
+          const seq = s.substring(i, j + 1);
+          const final = s[j];
+          if (seq.startsWith(SPIN_MARK_PREFIX) && final === 'm') {
+            pending = parseInt(seq.substring(SPIN_MARK_PREFIX.length), 10) - 1000;
+            i = j + 1;
+            continue;              // 표식은 내보내지 않는다
+          }
+          if (final === 'H' || final === 'f') {
+            const params = seq.substring(2, seq.length - 1).split(';');
+            row = parseInt(params[0], 10) || 1;
+            col = parseInt(params[1], 10) || 1;
+          }
+          out += seq;
+          i = j + 1;
+          continue;
+        }
+        if (next === 'P' || next === ']' || next === '_') {
+          // DCS(sixel)·OSC 는 끝(ST 또는 BEL)까지 통째로 넘긴다 — 화면 칸을 차지하지 않는다.
+          let j = i + 2;
+          while (j < s.length && s[j] !== '\x07' && !(s[j] === '\x1b' && s[j + 1] === '\\')) j++;
+          const end = s[j] === '\x07' ? j + 1 : j + 2;
+          out += s.substring(i, end);
+          i = end;
+          continue;
+        }
+        out += s.substring(i, i + 2);
+        i += 2;
+        continue;
+      }
+      const cp = s.codePointAt(i);
+      const len = cp > 0xFFFF ? 2 : 1;
+      if (pending >= 0) {
+        if (cp >= BRAILLE_FIRST && cp <= BRAILLE_LAST && row >= 1 && row <= screenRows
+            && col >= 1 && col <= screenCols && _frameSpinStyles[pending] !== undefined) {
+          cells.push({ row, col, style: _frameSpinStyles[pending] });
+        }
+        pending = -1;
+      }
+      if (col > 0) col += isWide(cp) ? 2 : 1;
+      out += s.substring(i, i + len);
+      i += len;
+    }
+    buf[b] = out;
+  }
+  return cells;
+}
+
+// 스피너 타이머가 80ms 마다 부른다. 화면 전체를 다시 그리지 않고, 지난 프레임이 적어 둔
+// 스피너 칸(ui.buttonSpinnerCells)에 다음 글자만 덮어 쓴다 — 작업이 수 초씩 걸리는 동안
+// 큰 저장소에서 매 틱 전체를 그리면 입력이 밀린다(spinner.acquireSpinner 참고).
+// 칸 목록은 매 프레임 새로 적으므로, 버튼이 사라지거나 옮겨 가면 다음 그리기에서 함께 바뀐다.
+function repaintButtonSpinners() {
+  const cells = ui.buttonSpinnerCells;
+  if (state.minimized || !cells || cells.length === 0) return;
+  const glyph = spinnerGlyph();
+  let out = '';
+  for (const cell of cells) out += ansi.moveTo(cell.row, cell.col) + cell.style + glyph + ansi.reset;
+  // 커밋 메시지를 쓰는 중이면 IME 조합 위치가 커서를 따라간다 — 제자리로 돌려놓는다.
+  if (ui.imeCursor) out += ansi.moveTo(ui.imeCursor.row, ui.imeCursor.col);
+  process.stdout.write(out);
 }
 
 // 목록의 선택 줄 배경. 포커스가 diff/detail 쪽으로 가도 선택 자체는 그대로 두고 흐리게만
@@ -99,12 +224,16 @@ function buildCommitterHint(maxWidth) {
 
   // 이름/이메일 편집과 초기화는 git config 를 고치는 쓰기 동작이다 — 다른 작업이 도는
   // 동안에는 다른 버튼과 같은 규칙으로 흐려지고 hover 에도 반응하지 않아야 한다.
+  // 이름/이메일을 바꾸거나 초기화하는 동안은 그 자리가 눌린 채 스피너를 돌린다(pressedButton).
   function appendZone(label, action, normalStyle, hoverStyle) {
-    const labelWidth = visLen(label);
     const on = caps().isEnabled(action);
-    const style = buttonStyle(on, ui.hoveredCommitterAction === action, normalStyle, hoverStyle);
+    const hovered = ui.hoveredCommitterAction === action;
+    const pressed = pressedButton(action, label, hovered, on);
+    const shown = pressed ? pressed.label : label;
+    const labelWidth = visLen(shown);
+    const style = pressed ? pressed.style : buttonStyle(on, hovered, normalStyle, hoverStyle);
     zones.push({ offset, width: labelWidth, action, enabled: on });
-    content += style + label + ansi.reset;
+    content += style + shown + ansi.reset;
     offset += labelWidth;
   }
 
@@ -335,6 +464,11 @@ function render() {
 }
 
 function renderBody() {
+  // 이번 프레임이 그린 것으로 다시 적는다 — 버튼이 없는 프레임(최소화, 진행 중 rebase …)에서
+  // 지난 자리에 스피너를 덮어 쓰지 않게.
+  ui.buttonSpinnerCells = [];
+  ui.imeCursor = null;
+  _frameSpinStyles = [];
   if (state.minimized) {
     const clearBuf = [];
     appendLogSixelClear(clearBuf);
@@ -466,20 +600,22 @@ function renderBody() {
         { label: t('ui.cloneRepository'), action: 'tab_clone' },
       ];
       for (const item of setupActions) {
-        if (col + visLen(item.label) > startCol + width) break;
         const idx = zoneIdx++;
         const on = caps().isEnabled(item.action);
+        const pressed = pressedButton(item.action, item.label, idx === ui.hoveredTitleZoneIndex, on);
+        const label = pressed ? pressed.label : item.label;
+        if (col + visLen(label) > startCol + width) break;
         ui.titleClickZones.push({
           row: startRow,
           colStart: col,
-          colEnd: col + visLen(item.label) - 1,
+          colEnd: col + visLen(label) - 1,
           action: item.action,
           enabled: on,
         });
-        row += buttonStyle(on, idx === ui.hoveredTitleZoneIndex,
-          colors.value, colors.cursorBg + colors.value + ansi.bold + CSI + '4m')
-          + item.label + ansi.reset;
-        col += visLen(item.label);
+        row += (pressed ? pressed.style : buttonStyle(on, idx === ui.hoveredTitleZoneIndex,
+          colors.value, colors.cursorBg + colors.value + ansi.bold + CSI + '4m'))
+          + label + ansi.reset;
+        col += visLen(label);
       }
       return row + ' '.repeat(Math.max(0, startCol + width - col));
     }
@@ -614,22 +750,24 @@ function renderBody() {
         col1 += visLen(progressLabel);
 
         // Abort button (모든 작업)
-        const abortLabel = t('ui.abort');
         const abortIdx = zoneIdx++;
         const abortOn = caps().isEnabled('op-abort');
+        const abortPressed = pressedButton('op-abort', t('ui.abort'), abortIdx === ui.hoveredTitleZoneIndex, abortOn);
+        const abortLabel = abortPressed ? abortPressed.label : t('ui.abort');
         ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(abortLabel) - 1, action: 'op-abort', enabled: abortOn });
-        const abortStyle = buttonStyle(abortOn, abortIdx === ui.hoveredTitleZoneIndex,
+        const abortStyle = abortPressed ? abortPressed.style : buttonStyle(abortOn, abortIdx === ui.hoveredTitleZoneIndex,
           colors.red + ansi.bold, colors.cursorBg + colors.red + ansi.bold + CSI + '4m');
         row1 += abortStyle + abortLabel + ansi.reset;
         col1 += visLen(abortLabel);
 
         // Skip button (merge는 skip이 없으므로 제외)
         if (op.type !== 'merge') {
-          const skipLabel = t('ui.skip');
           const skipIdx = zoneIdx++;
           const skipOn = caps().isEnabled('op-skip');
+          const skipPressed = pressedButton('op-skip', t('ui.skip'), skipIdx === ui.hoveredTitleZoneIndex, skipOn);
+          const skipLabel = skipPressed ? skipPressed.label : t('ui.skip');
           ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(skipLabel) - 1, action: 'op-skip', enabled: skipOn });
-          const skipStyle = buttonStyle(skipOn, skipIdx === ui.hoveredTitleZoneIndex,
+          const skipStyle = skipPressed ? skipPressed.style : buttonStyle(skipOn, skipIdx === ui.hoveredTitleZoneIndex,
             colors.orange, colors.cursorBg + colors.orange + ansi.bold + CSI + '4m');
           row1 += skipStyle + skipLabel + ansi.reset;
           col1 += visLen(skipLabel);
@@ -645,14 +783,23 @@ function renderBody() {
         ];
         for (let i = 0; i < actionBtns.length; i++) {
           const btn = actionBtns[i];
-          const label = ' ' + btn.label + ' ';
           const si = zoneIdx++;
-          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action, enabled: actionClickable(btn.action) });
-          const hasCount = (btn.action === 'git-pull' && state.behind > 0)
-            || (btn.action === 'git-push' && state.ahead > 0);
-          const style = actionStyle(btn.action, si === ui.hoveredTitleZoneIndex,
-            hasCount ? colors.orange + ansi.bold : colors.value,
-            colors.cursorBg + colors.value + ansi.bold + CSI + '4m');
+          const hovered = si === ui.hoveredTitleZoneIndex;
+          const clickable = actionClickable(btn.action);
+          // 이 버튼이 시킨 작업이 도는 중이면 눌린 모양 + 스피너(pressedButton 참고).
+          const pressed = pressedButton(btn.action, ' ' + btn.label + ' ', hovered, clickable);
+          const label = pressed ? pressed.label : ' ' + btn.label + ' ';
+          ui.titleClickZones.push({ row: startRow, colStart: col1, colEnd: col1 + visLen(label) - 1, action: btn.action, enabled: clickable });
+          let style;
+          if (pressed) {
+            style = pressed.style;
+          } else {
+            const hasCount = (btn.action === 'git-pull' && state.behind > 0)
+              || (btn.action === 'git-push' && state.ahead > 0);
+            style = actionStyle(btn.action, hovered,
+              hasCount ? colors.orange + ansi.bold : colors.value,
+              colors.cursorBg + colors.value + ansi.bold + CSI + '4m');
+          }
           row1 += style + label + ansi.reset;
           col1 += visLen(label);
         }
@@ -788,10 +935,11 @@ function renderBody() {
       const entry = entries[i];
       const row = top + 6 + i;
       if (row >= lines.length) break;
-      const shown = truncate(entry.label, Math.max(1, w - 2));
-      const col = Math.max(0, Math.floor((w - visLen(shown)) / 2));
       const on = caps().isEnabled(entry.action);
-      const style = buttonStyle(on, ui.hoveredRepoSetupAction === entry.action,
+      const pressed = pressedButton(entry.action, entry.label, ui.hoveredRepoSetupAction === entry.action, on);
+      const shown = truncate(pressed ? pressed.label : entry.label, Math.max(1, w - 2));
+      const col = Math.max(0, Math.floor((w - visLen(shown)) / 2));
+      const style = pressed ? pressed.style : buttonStyle(on, ui.hoveredRepoSetupAction === entry.action,
         colors.value, colors.cursorBg + colors.value + ansi.bold + CSI + '4m');
       lines[row] = ' '.repeat(col) + style + shown + ansi.reset;
       zones.push({ lineIdx: row, colStart: col, colEnd: col + visLen(shown) - 1, action: entry.action, enabled: on });
@@ -1268,6 +1416,8 @@ function renderBody() {
     }
   }
 
+  // 눌린 버튼이 심어 둔 스피너 표식을 화면 좌표로 바꾸고 지운다(collectSpinnerCells 참고).
+  if (_frameSpinStyles.length > 0) ui.buttonSpinnerCells = collectSpinnerCells(buf, height, width);
   process.stdout.write(buf.join(''));
   if (hostScrollDefs) hostScroll.syncRegions(hostScrollDefs);
 
@@ -1375,6 +1525,8 @@ function renderBody() {
     const showLeftEllipsis = scrollOff > 0;
     const cursorCol = rpStartCol + 1 + (showLeftEllipsis ? 1 : 0) + (beforeVis - scrollOff);
     process.stdout.write(ansi.moveTo(cursorRow, cursorCol));
+    // 버튼 스피너만 다시 쓰는 틱(repaintButtonSpinners)이 커서를 이 자리로 돌려놓는다.
+    ui.imeCursor = { row: cursorRow, col: cursorCol };
   }
 }
 
@@ -1978,9 +2130,21 @@ function buildFileListPanel(w, h) {
   const unstagedCount = state.unstaged.length + state.untracked.length;
   {
     const headerLabel = t('ui.unstaged') + unstagedCount + ')';
-    const unlockLabel = state.indexLocked ? t('ui.unlock') : '';
-    const allBtnLabel = t('ui.stageAllBtn');
-    const btnLabel = t('menu.stage');
+    // 버튼 셋의 hover 판정은 zone 번호로 한다 — 순서는 아래 push 순서(Unlock, 모두, 선택)와 같다.
+    const unlockZoneIdx = ui.fileHeaderZones.length;
+    const unlockOn = state.indexLocked && caps().isEnabled('unlockIndex');
+    const unlockPressed = state.indexLocked
+      ? pressedButton('unlockIndex', t('ui.unlock'), ui.hoveredFileHeaderIdx === unlockZoneIdx, unlockOn) : null;
+    const unlockLabel = !state.indexLocked ? '' : unlockPressed ? unlockPressed.label : t('ui.unlock');
+    const allZoneIdx = ui.fileHeaderZones.length + (unlockLabel ? 1 : 0);
+    const zoneIdx = allZoneIdx + 1;
+    const allOn = actionClickable('stageAll');
+    const selOn = actionClickable('stageSelected');
+    // 눌린 버튼은 스피너 자리만큼 넓어진다 — 폭 계산 전에 라벨을 정한다(pressedButton 참고).
+    const allPressed = pressedButton('stageAll', t('ui.stageAllBtn'), ui.hoveredFileHeaderIdx === allZoneIdx, allOn);
+    const selPressed = pressedButton('stageSelected', t('menu.stage'), ui.hoveredFileHeaderIdx === zoneIdx, selOn);
+    const allBtnLabel = allPressed ? allPressed.label : t('ui.stageAllBtn');
+    const btnLabel = selPressed ? selPressed.label : t('menu.stage');
     const unlockLen = unlockLabel ? visLen(unlockLabel) + 1 : 0;
     const totalBtnLen = unlockLen + visLen(allBtnLabel) + 1 + visLen(btnLabel);
     const headerLabelLen = visLen(headerLabel);
@@ -1989,21 +2153,15 @@ function buildFileListPanel(w, h) {
     let cursorCol = headerLabelLen + gap;
     let unlockSeg = '';
     if (unlockLabel) {
-      const unlockZoneIdx = ui.fileHeaderZones.length;
-      const unlockOn = caps().isEnabled('unlockIndex');
-      const unlockStyle = buttonStyle(unlockOn, ui.hoveredFileHeaderIdx === unlockZoneIdx, colors.red + ansi.bold);
+      const unlockStyle = unlockPressed ? unlockPressed.style
+        : buttonStyle(unlockOn, ui.hoveredFileHeaderIdx === unlockZoneIdx, colors.red + ansi.bold);
       ui.fileHeaderZones.push({ lineIdx: lines.length, btnColStart: cursorCol, btnColEnd: cursorCol + visLen(unlockLabel) - 1, action: 'unlockIndex', enabled: unlockOn });
       unlockSeg = unlockStyle + unlockLabel + ansi.reset + ' ';
       cursorCol += visLen(unlockLabel) + 1;
     }
 
-    const allZoneIdx = ui.fileHeaderZones.length;
-    const allOn = actionClickable('stageAll');
-    const allBtnStyle = actionStyle('stageAll', ui.hoveredFileHeaderIdx === allZoneIdx);
-
-    const zoneIdx = ui.fileHeaderZones.length + 1;
-    const selOn = actionClickable('stageSelected');
-    const btnStyle = actionStyle('stageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
+    const allBtnStyle = allPressed ? allPressed.style : actionStyle('stageAll', ui.hoveredFileHeaderIdx === allZoneIdx);
+    const btnStyle = selPressed ? selPressed.style : actionStyle('stageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = cursorCol;
     const btnStart = allBtnStart + visLen(allBtnLabel) + 1;
@@ -2021,19 +2179,20 @@ function buildFileListPanel(w, h) {
   // Staged
   {
     const headerLabel = t('ui.staged2') + state.staged.length + ')';
-    const allBtnLabel = t('ui.unstageAll');
-    const btnLabel = t('menu.unstage');
+    const allZoneIdx = ui.fileHeaderZones.length;
+    const allOn = actionClickable('unstageAll');
+    const zoneIdx = ui.fileHeaderZones.length + 1;
+    const selOn = actionClickable('unstageSelected');
+    const allPressed = pressedButton('unstageAll', t('ui.unstageAll'), ui.hoveredFileHeaderIdx === allZoneIdx, allOn);
+    const selPressed = pressedButton('unstageSelected', t('menu.unstage'), ui.hoveredFileHeaderIdx === zoneIdx, selOn);
+    const allBtnLabel = allPressed ? allPressed.label : t('ui.unstageAll');
+    const btnLabel = selPressed ? selPressed.label : t('menu.unstage');
     const totalBtnLen = visLen(allBtnLabel) + 1 + visLen(btnLabel);
     const headerLabelLen = visLen(headerLabel);
     const gap = Math.max(1, innerW - headerLabelLen - totalBtnLen - 1);
 
-    const allZoneIdx = ui.fileHeaderZones.length;
-    const allOn = actionClickable('unstageAll');
-    const allBtnStyle = actionStyle('unstageAll', ui.hoveredFileHeaderIdx === allZoneIdx);
-
-    const zoneIdx = ui.fileHeaderZones.length + 1;
-    const selOn = actionClickable('unstageSelected');
-    const btnStyle = actionStyle('unstageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
+    const allBtnStyle = allPressed ? allPressed.style : actionStyle('unstageAll', ui.hoveredFileHeaderIdx === allZoneIdx);
+    const btnStyle = selPressed ? selPressed.style : actionStyle('unstageSelected', ui.hoveredFileHeaderIdx === zoneIdx);
 
     const allBtnStart = headerLabelLen + gap;
     const btnStart = allBtnStart + visLen(allBtnLabel) + 1;
@@ -2190,12 +2349,22 @@ function buildDiffCommitPanel(w, h) {
   ui.diffHunkZones = [];
   const canHunk = !isConflictView && diffItem && (diffItem.type === 'staged' || diffItem.type === 'unstaged') && state.diffLines.length > 0;
   const hunkBtnLabel = canHunk ? (diffItem.type === 'staged' ? t('ui.unstageHunk') : t('ui.stageHunk')) : '';
-  const hunkAvail = hunkBtnLabel ? Math.max(8, canvasW - visLen(hunkBtnLabel) - 2) : 0;
+  // 버튼 id 는 어느 diff 의 몇 번째 hunk 인지까지 담는다 — 누른 그 hunk 만 눌려 보여야 한다
+  // (input.applyHunkAction 이 같은 꼴로 등록한다).
+  const hunkButtonPrefix = canHunk ? actions.hunkButtonId(diffItem, '') : '';
+  // 하나라도 눌려 있으면 모든 hunk 버튼 자리를 스피너 폭(2칸)만큼 넓혀 둔다 — 눌린 버튼만
+  // 넓어지면 캔버스 오른쪽 끝을 넘어 잘린다. 나머지는 앞을 비워 오른쪽 끝을 맞춘다.
+  const hunkReserve = canHunk && isAnyButtonBusy(hunkButtonPrefix) ? 2 : 0;
+  const hunkBtnW = hunkBtnLabel ? visLen(hunkBtnLabel) + hunkReserve : 0;
+  const hunkAvail = hunkBtnLabel ? Math.max(8, canvasW - hunkBtnW - 2) : 0;
   const hunkOn = canHunk && caps().isEnabled('hunk-apply');
   const renderHunkButton = (hunkIdx) => {
-    const style = buttonStyle(hunkOn, ui.hoveredDiffHunkIdx === hunkIdx,
+    const hovered = ui.hoveredDiffHunkIdx === hunkIdx;
+    const pressed = pressedButton(hunkButtonPrefix + hunkIdx, hunkBtnLabel, hovered, hunkOn);
+    if (pressed) return pressed.style + pressed.label + ansi.reset;
+    const style = buttonStyle(hunkOn, hovered,
       colors.value, colors.green + ansi.bold + CSI + '4m');
-    return style + hunkBtnLabel + ansi.reset;
+    return ' '.repeat(hunkReserve) + style + hunkBtnLabel + ansi.reset;
   };
 
   // Host-owned scroll: the diff area (rows 0..diffH) is one region; renderRow
@@ -2288,7 +2457,7 @@ function buildDiffCommitPanel(w, h) {
           for (let vi = 0; vi < visible.length; vi++) {
             const absIdx = state.diffScrollOffset + vi;
             if (sideHunkIdxByRow.has(absIdx)) {
-              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1 - state.diffScrollX, colEnd: hunkAvail + visLen(hunkBtnLabel) - state.diffScrollX, hunkIdx: sideHunkIdxByRow.get(absIdx) });
+              ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1 - state.diffScrollX, colEnd: hunkAvail + hunkBtnW - state.diffScrollX, hunkIdx: sideHunkIdxByRow.get(absIdx) });
             }
           }
         }
@@ -2337,7 +2506,7 @@ function buildDiffCommitPanel(w, h) {
           const absIdx = state.diffScrollOffset + vi;
           lines.push(hostScroll.sliceLine(renderUnifiedRow(visible[vi], absIdx), state.diffScrollX, innerW));
           if (hunkBtnLabel && unifiedHunkIdxByRow.has(absIdx)) {
-            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1 - state.diffScrollX, colEnd: hunkAvail + visLen(hunkBtnLabel) - state.diffScrollX, hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
+            ui.diffHunkZones.push({ lineIdx: vi, colStart: hunkAvail + 1 - state.diffScrollX, colEnd: hunkAvail + hunkBtnW - state.diffScrollX, hunkIdx: unifiedHunkIdxByRow.get(absIdx) });
           }
         }
         ui.scrollPct.diff = annotated.length > diffH ? Math.round((state.diffScrollOffset / maxScroll) * 100) : -1;
@@ -2357,8 +2526,12 @@ function buildDiffCommitPanel(w, h) {
       // 색은 지금 실제로 누를 수 있는지를 따른다 — 쓰기 작업 중이면 흐려진다.
       const allSelected = actions.allConflictChunksSelected();
       const canApply = allSelected && caps().isEnabled('merge-apply');
-      const applyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
-      const applyStyle = buttonStyle(canApply, ui.hoveredMergeApplyButton,
+      const baseApplyLabel = allSelected ? t('ui.applyResolution') : t('ui.selectEveryConflictApply');
+      // 해결을 쓰고 담는 동안은 눌린 채 스피너를 돌린다. 그동안은 막혀 있어 클릭 존(라벨 폭 기준,
+      // renderBody 뒤쪽)이 스피너 두 칸만큼 짧아도 상관없다.
+      const applyPressed = pressedButton('merge-apply', baseApplyLabel, ui.hoveredMergeApplyButton, canApply);
+      const applyLabel = applyPressed ? applyPressed.label : baseApplyLabel;
+      const applyStyle = applyPressed ? applyPressed.style : buttonStyle(canApply, ui.hoveredMergeApplyButton,
         colors.green + ansi.bold, colors.cursorBg + colors.green + ansi.bold + CSI + '4m');
       lines.push(' ' + applyStyle + applyLabel + ansi.reset);
     }
@@ -2417,13 +2590,18 @@ function buildDiffCommitPanel(w, h) {
     const isRebaseOp = state.operationState && (state.operationState.type === 'rebase-merge' || state.operationState.type === 'rebase-apply');
     const isMergeOp = state.operationState && (state.operationState.type === 'merge' || state.operationState.type === 'cherry-pick' || state.operationState.type === 'revert');
     // amend 여부는 오른쪽 토글이 표시하므로 메인 버튼 라벨은 'Commit' 유지(중복 'Amend' 방지)
-    const commitLabel = isRebaseOp ? t('ui.continueRebase2') : isMergeOp ? t('ui.commit4') + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert') : t('ui.commit2');
+    const baseCommitLabel = isRebaseOp ? t('ui.continueRebase2') : isMergeOp ? t('ui.commit4') + (state.operationState.type === 'merge' ? 'Merge' : state.operationState.type === 'cherry-pick' ? t('action.cherryPick') : 'Revert') : t('ui.commit2');
     // 커밋 모드에서는 제출, 일반 모드에서는 커밋 모드 진입 — 누르면 실제로 일어나는 일과
     // 같은 판정을 본다. input.js 의 클릭 처리도 같은 두 id 로 게이트한다.
     const canCommit = state.mode === 'commit'
       ? caps().isEnabled('commit-submit')
       : caps().isEnabled('commit-enter');
-    const commitStyle = buttonStyle(canCommit, ui.hoveredCommitButton,
+    // 커밋·리베이스 계속이 도는 동안(뒷정리 갱신 포함)은 눌린 채 스피너를 돌린다. 제출하는
+    // 순간 커밋 모드를 벗어나므로 이 줄은 일반 모드 모양으로 그려진다 — 그래도 같은 버튼이다.
+    // 클릭 존은 영어 라벨 길이로 잡혀 있지만 그동안은 막혀 있어 상관없다(renderBody 뒤쪽).
+    const commitPressed = pressedButton('commit-submit', baseCommitLabel, ui.hoveredCommitButton, canCommit);
+    const commitLabel = commitPressed ? commitPressed.label : baseCommitLabel;
+    const commitStyle = commitPressed ? commitPressed.style : buttonStyle(canCommit, ui.hoveredCommitButton,
       colors.green + ansi.bold, colors.green + ansi.bold + CSI + '4m');
     let btnLine = ' ' + commitStyle + commitLabel + ansi.reset;
     // Amend 토글: 작업(merge/rebase 등) 중이 아니면 Commit 버튼 오른쪽에 항상 표시
@@ -4339,4 +4517,4 @@ function renderMinimized() {
   process.stdout.write(ansi.hideCursor + ansi.moveTo(1, 1) + line + ansi.reset);
 }
 
-module.exports = { render, requestRender, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, logBranchRefAt, buildDecoTokens, decoPlainText, colorizeDecoration };
+module.exports = { render, requestRender, repaintButtonSpinners, hintButtons, buildLeftPanel, buildFileListPanel, revealBranch, logBranchRefAt, buildDecoTokens, decoPlainText, colorizeDecoration };

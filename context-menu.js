@@ -1058,7 +1058,7 @@ untrackedCount + t('menu.untracked'),
   }
 
   if (actionId === 'tab_init') {
-    const initOp = startSpinner(t('menu.initializingRepository'));
+    const initOp = startSpinner(t('menu.initializingRepository'), undefined, 'tab_init');
     const err = await gitInit(state.cwd);
     if (err) {
       stopSpinner(initOp);
@@ -1091,7 +1091,8 @@ untrackedCount + t('menu.untracked'),
       showError(t('menu.noBranchPush'));
       return;
     }
-    const pushOp = startSpinner(t('menu.pushing2') + remote + '...', [REMOTE]);
+    // 리모트가 여럿일 때 Push 버튼이 띄운 메뉴에서 온다 — 버튼을 누른 동작의 연장이다.
+    const pushOp = startSpinner(t('menu.pushing2') + remote + '...', [REMOTE], 'git-push');
     gitPushToRemoteAsync(state.cwd, remote, branchName).then(async err => {
       await afterGitOp(err, t('menu.push'), { metadataOnly: true, forceMeta: true }, pushOp);
     });
@@ -1410,7 +1411,8 @@ untrackedCount + t('menu.untracked'),
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type !== 'staged').map(item => item.file);
           if (files.length > 0) {
-            const stageOp = startSpinner(t('menu.staging'), [INDEX]);
+            // 파일 목록 헤더의 Stage 버튼과 같은 일이다 — 그 버튼을 눌린 채로 둔다.
+            const stageOp = startSpinner(t('menu.staging'), [INDEX], 'stageSelected');
             const stageFlow = require('./stage-targets');
             const fallback = files.length === 1 ? t('git.couldNotStage') + files[0]
               : t('git.couldNotStagePrefix') + files.length + t('git.selectedFilesSuffix');
@@ -1432,7 +1434,7 @@ untrackedCount + t('menu.untracked'),
         if (fileItems.length > 0) {
           const files = fileItems.filter(item => item && item.type === 'staged').map(item => item.file);
           if (files.length > 0) {
-            const unstageOp = startSpinner(t('menu.unstaging'), [INDEX]);
+            const unstageOp = startSpinner(t('menu.unstaging'), [INDEX], 'unstageSelected');
             const err = await gitUnstageMultiple(state.cwd, files);
             if (err) {
               stopSpinner(unstageOp);
@@ -1517,7 +1519,7 @@ untrackedCount + t('menu.untracked'),
       case 'file_stage_all': {
         const allFiles = [...state.unstaged.map(f => f.file), ...state.untracked.map(f => f.file)];
         if (allFiles.length === 0) break;
-        const stageAllOp = startSpinner(t('menu.stagingAll'), [INDEX]);
+        const stageAllOp = startSpinner(t('menu.stagingAll'), [INDEX], 'stageAll');
         const stageAllPaths = require('./refresh').stageAllPaths();
         const stageFlow = require('./stage-targets');
         let err = null, expandedDirs = [], touched = null;
@@ -2395,7 +2397,7 @@ async function handleDialogResultInner(params) {
 
     if (action === 'unlock-index-confirm') {
       if (buttonId === 'unlock') {
-        const unlockOp = startSpinner(t('menu.unlocking'), [INDEX]);
+        const unlockOp = startSpinner(t('menu.unlocking'), [INDEX], 'unlockIndex');
         const err = await removeIndexLock();
         stopSpinner(unlockOp);
         if (err) {
@@ -2637,7 +2639,8 @@ async function handleDialogResultInner(params) {
     // user picked which remote branch to update.
     if (action === 'push-name-mismatch') {
       if (target && (buttonId === 'push_local' || buttonId === 'push_upstream')) {
-        const mismatchPushOp = startSpinner(t('menu.pushing'), [REMOTE]);
+        // Push 버튼이 띄운 확인창이다(pushCurrentBranch) — 버튼을 누른 동작의 연장이다.
+        const mismatchPushOp = startSpinner(t('menu.pushing'), [REMOTE], 'git-push');
         const pushPromise = buttonId === 'push_local'
           ? gitPushToRemoteAsync(state.cwd, target.remote, target.local)
           : gitPushHeadToBranchAsync(state.cwd, target.remote, target.upstreamBranch);
@@ -2786,7 +2789,7 @@ async function handleDialogResultInner(params) {
           return;
         }
         const repoName = cloneUrl.replace(/\/+$/, '').split('/').pop().replace(/\.git$/, '') || 'repo';
-        const cloneOp = startSpinner(t('menu.cloning') + repoName + '...');
+        const cloneOp = startSpinner(t('menu.cloning') + repoName + '...', undefined, 'tab_clone');
         const err = await gitCloneAsync(result.path, cloneUrl, repoName);
         stopSpinner(cloneOp);
         if (err) {
@@ -2891,7 +2894,10 @@ async function handleDialogResultInner(params) {
     const menuOpLabel = buttonId === 'continue' ?opLabel + t('menu.continue')
       : buttonId === 'abort' ? t('menu.aborting') + opLabel.toLowerCase() + '...'
       :opLabel + t('menu.skip');
-    const menuOp = startSpinner(menuOpLabel, CHECKOUT_SCOPES);
+    // 화면의 같은 버튼(Continue 는 커밋 자리의 "Continue Rebase/Commit Merge", Abort·Skip 은
+    // 상단)을 눌린 채로 둔다 — 들어온 문이 달라도 같은 작업이다.
+    const menuOp = startSpinner(menuOpLabel, CHECKOUT_SCOPES,
+      buttonId === 'continue' ? 'commit-submit' : buttonId === 'abort' ? 'op-abort' : 'op-skip');
     let err;
     if (buttonId === 'continue') {
       if (isRebase) err = await gitRebaseContinue(state.cwd);
@@ -2936,7 +2942,7 @@ async function handleDialogResultInner(params) {
     const val = params.value.trim();
     if (val) {
       // .git/config.lock 을 잡는다 — 같은 CONFIG 를 쓰는 작업과 겹치면 실패한다.
-      const setOp = startSpinner(t('menu.settingCommitter'), [CONFIG]);
+      const setOp = startSpinner(t('menu.settingCommitter'), [CONFIG], field === 'name' ? 'committer-name' : 'committer-email');
       const err = await gitSetConfig(state.cwd, configKey, val);
       if (err) {
         stopSpinner(setOp);
@@ -2944,7 +2950,7 @@ async function handleDialogResultInner(params) {
       } else {
         // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
         invalidateCommitterCache();
-        refreshInBackground({}, { message: t('menu.settingCommitter'), settle: true, scopes: setOp.scopes });
+        refreshInBackground({}, { message: t('menu.settingCommitter'), settle: true, scopes: setOp.scopes, button: setOp.button });
         stopSpinner(setOp);
       }
     }
@@ -2957,7 +2963,7 @@ async function handleDialogResultInner(params) {
   if (state.pendingStash && buttonId === 'stash_confirm') {
     state.pendingStash = false;
     if (!guardDeferredAction('git-stash')) { render(); return; }
-    const stashOp = startSpinner(t('menu.stashing'), STASH_SCOPES);
+    const stashOp = startSpinner(t('menu.stashing'), STASH_SCOPES, 'git-stash');
     gitStashSaveAsync(state.cwd).then(async stashErr => {
       if (stashErr) {
         stopSpinner(stashOp);
@@ -3288,8 +3294,12 @@ async function afterGitOp(err, opName, refreshOpts = {}, op = null) {
   // "Refreshing..."만 떠서 정작 무슨 작업이었는지 알 수 없다. 후속 갱신까지가 한 동작이다.
   // settle: 이 갱신이 끝나야 목록이 작업 결과를 반영한다 — 그때까지는 새 쓰기를 받지 않는다.
   const followup = { refreshLog: !refreshOpts.statusOnly, message: opName + '...', settle: true };
-  // 뒷정리가 막을 범위는 방금 끝난 작업과 같다.
-  if (op) followup.scopes = op.scopes;
+  // 뒷정리가 막을 범위는 방금 끝난 작업과 같다. 상단 버튼이 시킨 작업이면 그 버튼도
+  // 뒷정리가 끝날 때까지 눌린 채로 이어 간다.
+  if (op) {
+    followup.scopes = op.scopes;
+    if (op.button) followup.button = op.button;
+  }
   // stopSpinner 보다 먼저 건다. 순서를 뒤집으면 스피너 참조가 잠깐 0이 되어
   // 두 표시 사이에서 제목이 한 번 맨 상태로 떨어졌다 돌아온다.
   refreshInBackground(refreshOpts, followup);

@@ -916,6 +916,15 @@ function decorateMenuItems(items, snap) {
   return items;
 }
 
+// ── diff 패널 hunk 버튼의 id ──
+// hunk 버튼은 hunk 마다 하나씩이라, 작업 등록부(spinner.beginOp 의 button)에 'hunk-apply'만
+// 적으면 어느 것을 눌렀는지 알 수 없다. 어느 diff(종류·파일)의 몇 번째 hunk 인지까지 담는다 —
+// 그사이 다른 파일로 옮겨 가도 그 파일의 같은 번호 hunk 가 눌려 보이지 않는다.
+// 실행(input.applyHunkAction)과 화면(render)이 같은 꼴을 써야 하므로 여기서만 만든다.
+function hunkButtonId(item, hunkIdx) {
+  return 'hunk-apply:' + item.type + ':' + item.file + ':' + hunkIdx;  // i18n-ok: 내부 버튼 id — 화면에 나가지 않는다
+}
+
 module.exports = {
   REASON,
   SCOPE,
@@ -944,4 +953,5 @@ module.exports = {
   unstageableTargets,
   allConflictChunksSelected,
   operationLabel,
+  hunkButtonId,
 };

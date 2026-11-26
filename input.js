@@ -17,7 +17,7 @@ const { gitStageAll, gitUnstageAll, gitStashSave, gitUnsetConfigLocal,
 const { startSpinner, updateSpinner, stopSpinner, showToast } = require('./spinner');
 // 동작 가능 여부는 actions.js 한 곳에서 판정한다 — 화면의 딤 처리와 여기의 차단이
 // 같은 규칙을 봐야 "보이는데 안 눌린다"가 생기지 않는다.
-const { guardAction, runOrQueue, isEnabled, disabledReason, stageableTargets, unstageableTargets, SCOPE } = require('./actions');
+const { guardAction, runOrQueue, isEnabled, disabledReason, stageableTargets, unstageableTargets, hunkButtonId, SCOPE } = require('./actions');
 // 이 작업이 무엇을 붙잡는지 startSpinner 에 함께 넘긴다 — 넘기지 않으면 예전처럼
 // 전부 붙잡은 것으로 보고 모든 쓰기를 막는다(보수적 기본값).
 const { INDEX, WORKTREE, REFS, REMOTE, STASH, CONFIG } = SCOPE;
@@ -108,7 +108,7 @@ async function handleCommitterAction(action) {
     // git config 는 .git/config.lock 을 잡는다 — 같은 CONFIG 를 쓰는 다른 작업
     // (브랜치 추적 설정, 리모트 편집)과 겹치면 "could not lock config file"로 실패한다.
     // 판정표에는 [CONFIG]로 적어 두고 실행이 신고하지 않으면 그 판정이 헛돈다.
-    const resetOp = startSpinner(t('input.resettingCommitter'), [CONFIG]);
+    const resetOp = startSpinner(t('input.resettingCommitter'), [CONFIG], action);
     const err = await gitUnsetConfigLocal(state.cwd, key);
     if (err) {
       stopSpinner(resetOp);
@@ -117,7 +117,7 @@ async function handleCommitterAction(action) {
     } else {
       // 방금 내가 바꾼 값이다 — TTL 을 기다리지 않고 다음 refresh 가 바로 다시 읽게 한다.
       invalidateCommitterCache();
-      refreshInBackground({}, { message: t('input.resettingCommitter'), settle: true, scopes: resetOp.scopes });
+      refreshInBackground({}, { message: t('input.resettingCommitter'), settle: true, scopes: resetOp.scopes, button: resetOp.button });
       stopSpinner(resetOp);
     }
     return true;
@@ -193,7 +193,7 @@ function pushCurrentBranch() {
     showPushNameMismatchDialog(mismatch);
     return;
   }
-  const pushOp = startSpinner(t('menu.pushing'), [REMOTE]);
+  const pushOp = startSpinner(t('menu.pushing'), [REMOTE], 'git-push');
   const pushPromise = currentBranch && !currentBranch.upstream
     ? (state.remotes.length > 0
         ? gitPushToRemoteAsync(state.cwd, state.remotes[0], currentBranch.name)
@@ -207,7 +207,7 @@ function pushCurrentBranch() {
     } else {
       // 후속 갱신까지가 "Push" 한 동작이다 — 라벨을 이어 주고, 스피너를 넘겨준 뒤 내린다
       // (afterGitOp과 같은 이유: 사이에 참조가 0이 되면 제목이 한 번 깜빡인다).
-      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: t('menu.pushing'), settle: true, scopes: pushOp.scopes });
+      refreshInBackground({ metadataOnly: true, forceMeta: true }, { refreshLog: true, refreshFresh: true, message: t('menu.pushing'), settle: true, scopes: pushOp.scopes, button: pushOp.button });
       stopSpinner(pushOp);
     }
   });
@@ -223,14 +223,14 @@ function requestPush() {
 }
 
 function runFetch() {
-  const fetchOp = startSpinner(t('input.fetching'), [REMOTE]);
+  const fetchOp = startSpinner(t('input.fetching'), [REMOTE], 'git-fetch');
   gitFetchAsync(state.cwd).then(async err => {
     if (err) {
       stopSpinner(fetchOp);
       showErrorDialog(err);
       render();
     } else {
-      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: t('input.fetching'), settle: true, scopes: fetchOp.scopes });
+      refreshInBackground({ metadataOnly: true }, { refreshLog: true, refreshFresh: true, message: t('input.fetching'), settle: true, scopes: fetchOp.scopes, button: fetchOp.button });
       stopSpinner(fetchOp);
     }
   });
@@ -241,14 +241,14 @@ function requestFetch() {
 }
 
 function runPull() {
-  const pullOp = startSpinner(t('menu.pulling'), PULL_SCOPES);
+  const pullOp = startSpinner(t('menu.pulling'), PULL_SCOPES, 'git-pull');
   gitPullAsync(state.cwd).then(async err => {
     if (err) {
       stopSpinner(pullOp);
       showErrorDialog(err);
       render();
     } else {
-      refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: t('menu.pulling'), settle: true, scopes: pullOp.scopes });
+      refreshInBackground({}, { refreshLog: true, refreshFresh: true, message: t('menu.pulling'), settle: true, scopes: pullOp.scopes, button: pullOp.button });
       stopSpinner(pullOp);
     }
   });
@@ -397,7 +397,8 @@ function enterAmendCommitMode() {
 // 읽으면 그때는 이미 다른 파일이 골라져 있다(requestStageSelection 참고).
 async function runStageSelection(isStage, files) {
   if (!files || files.length === 0) return;
-  const op = startSpinner(isStage ? t('menu.staging') : t('menu.unstaging'), [INDEX]);
+  const op = startSpinner(isStage ? t('menu.staging') : t('menu.unstaging'), [INDEX],
+    isStage ? 'stageSelected' : 'unstageSelected');
   if (!isStage) {
     finishStageOp(false, files, await gitUnstageMultiple(state.cwd, files), op, { paths: files });
     return;
@@ -439,7 +440,8 @@ async function runStageAll(isStage) {
     .map(item => item.file);
   if (files.length === 0) return;
   state.selectedFiles.clear();
-  const op = startSpinner(isStage ? t('menu.stagingAll') : t('input.unstagingAll'), [INDEX]);
+  const op = startSpinner(isStage ? t('menu.stagingAll') : t('input.unstagingAll'), [INDEX],
+    isStage ? 'stageAll' : 'unstageAll');
   if (!isStage) {
     finishStageOp(false, files, await gitUnstageAll(state.cwd), op, { paths: files });
     return;
@@ -490,7 +492,9 @@ async function applyHunkAction(hunkIdx) {
     return;
   }
   const isStagedView = item.type === 'staged';
-  const hunkOp = startSpinner(isStagedView ? t('input.unstagingHunk') : t('input.stagingHunk'), [INDEX]);
+  // 누른 그 hunk 의 버튼만 눌린 채로 둔다 — id 는 render 와 같은 꼴(actions.hunkButtonId).
+  const hunkOp = startSpinner(isStagedView ? t('input.unstagingHunk') : t('input.stagingHunk'), [INDEX],
+    hunkButtonId(item, hunkIdx));
   const err = await gitApplyPatchText(state.cwd, patch, { cached: true, reverse: isStagedView });
   if (err) {
     stopSpinner(hunkOp);
@@ -515,7 +519,7 @@ async function applyConflictSelections() {
     return;
   }
 
-  const resolveOp = startSpinner(t('input.applyingResolution'), WORKTREE_SCOPES);
+  const resolveOp = startSpinner(t('input.applyingResolution'), WORKTREE_SCOPES, 'merge-apply');
   const writeErr = await gitWriteConflictResolution(state.cwd, sel.file, resolved.content);
   if (writeErr) {
     stopSpinner(resolveOp);
@@ -987,7 +991,7 @@ function handleCommitInput(key) {
     state.mode = 'normal';
     if (isRebaseOp) {
       // Fork-style: write message to rebase message file, then rebase --continue
-      const contOp = startSpinner(t('input.rebaseContinue'), CHECKOUT_SCOPES);
+      const contOp = startSpinner(t('input.rebaseContinue'), CHECKOUT_SCOPES, 'commit-submit');
       (async () => {
         try {
           const writeErr = await gitWriteRebaseMessage(state.cwd, state.commitMsg, state.operationState.type);
@@ -1020,7 +1024,7 @@ function handleCommitInput(key) {
         }
       })();
     } else {
-      const commitOp = startSpinner(isAmendCommit ? t('input.amending') : t('input.committing'), COMMIT_SCOPES);
+      const commitOp = startSpinner(isAmendCommit ? t('input.amending') : t('input.committing'), COMMIT_SCOPES, 'commit-submit');
       const commitPromise = isAmendCommit
         ? gitCommitAmendAsync(state.cwd, state.commitMsg)
         : gitCommitAsync(state.cwd, state.commitMsg);
@@ -1039,7 +1043,7 @@ function handleCommitInput(key) {
         refreshInBackground({}, {
           refreshLog: true, refreshFresh: true,
           message: isAmendCommit ? t('input.amending') : t('input.committing'),
-          settle: true, scopes: commitOp.scopes,
+          settle: true, scopes: commitOp.scopes, button: commitOp.button,
         });
         stopSpinner(commitOp);
       });
@@ -1154,7 +1158,9 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'c') {
     state.mode = 'normal';
-    const menuContOp = startSpinner(t('input.rebaseContinue'), CHECKOUT_SCOPES);
+    // 'b' 메뉴의 continue/abort/skip 도 화면의 같은 버튼을 눌린 채로 둔다(커밋 자리의
+    // "Continue Rebase", 상단 Abort·Skip).
+    const menuContOp = startSpinner(t('input.rebaseContinue'), CHECKOUT_SCOPES, 'commit-submit');
     gitRebaseContinueAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
@@ -1166,7 +1172,7 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 'a') {
     state.mode = 'normal';
-    const menuAbortOp = startSpinner(t('input.abortingRebase'), CHECKOUT_SCOPES);
+    const menuAbortOp = startSpinner(t('input.abortingRebase'), CHECKOUT_SCOPES, 'op-abort');
     gitRebaseAbortAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
@@ -1178,7 +1184,7 @@ function handleRebaseMenuInput(key) {
   }
   if (key === 's') {
     state.mode = 'normal';
-    const menuSkipOp = startSpinner(t('input.rebaseSkip'), CHECKOUT_SCOPES);
+    const menuSkipOp = startSpinner(t('input.rebaseSkip'), CHECKOUT_SCOPES, 'op-skip');
     gitRebaseSkipAsync(state.cwd).then(async err => {
       await refreshAsync();
       if (state.rightView === 'log') refreshLog();
@@ -2010,7 +2016,7 @@ async function handleMouseData(data) {
                 : opType === 'cherry-pick' ? () => gitCherryPickAbort(state.cwd)
                 : opType === 'revert' ? () => gitRevertAbort(state.cwd)
                 : () => gitRebaseAbortAsync(state.cwd);
-              const abortOp = startSpinner(t('menu.aborting') + opLabel + '...', CHECKOUT_SCOPES);
+              const abortOp = startSpinner(t('menu.aborting') + opLabel + '...', CHECKOUT_SCOPES, 'op-abort');
               Promise.resolve(abortFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();
@@ -2026,7 +2032,7 @@ async function handleMouseData(data) {
               const skipFn = opType === 'cherry-pick' ? () => gitCherryPickSkip(state.cwd)
                 : opType === 'revert' ? () => gitRevertSkip(state.cwd)
                 : () => gitRebaseSkipAsync(state.cwd);
-              const skipOp = startSpinner(t('input.skipping'), CHECKOUT_SCOPES);
+              const skipOp = startSpinner(t('input.skipping'), CHECKOUT_SCOPES, 'op-skip');
               Promise.resolve(skipFn()).then(async err => {
                 await refreshAsync();
                 if (state.rightView === 'log') refreshLog();

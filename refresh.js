@@ -389,9 +389,11 @@ function refreshInBackground(options = {}, followup = {}) {
   // 막을 범위는 원래 작업이 붙잡던 자원 그대로다 — 낡는 것은 그 작업이 바꾼 부분뿐이다.
   // 리네임 뒷정리 중의 파일 목록은 낡지 않았으므로 스테이징은 그대로 열려 있어야 한다.
   // scopes 를 따로 넘기지 않으면 아직 살아 있는 원래 작업의 것을 물려받는다.
+  // followup.button 은 원래 작업을 시킨 상단 버튼이다 — 뒷정리가 끝날 때까지 그 버튼을
+  // 눌린 채로 둔다(spinner.startSettleOp 참고).
   let settleOp = null;
   if (followup.settle) {
-    settleOp = startSettleOp(followup.message || state.refreshMessage, followup.scopes);
+    settleOp = startSettleOp(followup.message || state.refreshMessage, followup.scopes, followup.button);
   }
   acquireSpinner();
   renderNow();

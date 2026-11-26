@@ -19,7 +19,13 @@ function acquireSpinner() {
       updateTitle();
       // 패널 안에 그린 스피너는 화면을 다시 그려야 돈다. 떠 있는 동안에만 켜지므로
       // 백그라운드 refresh 내내 재그리기를 피한다는 위 원칙은 그대로다.
+      // 눌린 버튼의 스피너(Fetch·Commit·Stage …)는 화면 전체를 다시 그리지 않는다 —
+      // 그 작업은 수 초씩 걸리고(credential helper 만 8초대, 커밋 뒤 status 7초대), 큰
+      // 저장소에서는 한 번 그리는 데도 시간이 걸려 80ms 마다 돌리면 입력이 밀린다. 지난
+      // 프레임이 적어 둔 그 칸에만 다음 글자를 덮어 쓴다. 전체 재그리기가 도는 틱이면
+      // 그쪽이 버튼도 함께 그린다.
       if (panelRefCount > 0) require('./render').render();
+      else if (_ops.some(o => o.button)) require('./render').repaintButtonSpinners();
     }, 80);
   }
 }
@@ -62,8 +68,16 @@ let _ops = [];
 
 // 읽기 작업(히스토리 조회, diff 로드, 백그라운드 refresh)은 이 등록부를 쓰지 않고
 // state.refreshing / logLoading 계열로만 표시해, 진행 중에도 화면 탐색을 막지 않는다.
-function beginOp(label, scopes, phase) {
-  const op = { label: label || '', scopes: scopes || null, phase: phase || 'running', startedAt: Date.now() };
+//
+// button 은 이 작업을 하는 화면 버튼의 id 다(대개 그 버튼의 action — 'git-fetch',
+// 'commit-submit', 'stageAll' …). 그 버튼은 작업이 끝날 때까지 눌린 모양으로 스피너를
+// 돌린다 — 처리상태는 창 타이틀에 나오지만, 세로 탭으로 쓰면 타이틀이 눈에 들어오지 않아
+// 지금 무엇이 도는지 화면에서 알 수 없었다.
+// 단축키·우클릭 메뉴로 시작했어도 버튼과 똑같은 일을 하면 넘긴다(같은 동작이 돌고 있다는
+// 뜻이다). 대상이 달라질 수 있는 작업(다른 브랜치의 Pull/Push 등)은 넘기지 않는다 —
+// 버튼이 눌리면 버튼이 가리키는 대상에 대한 작업으로 읽힌다.
+function beginOp(label, scopes, phase, button) {
+  const op = { label: label || '', scopes: scopes || null, phase: phase || 'running', startedAt: Date.now(), button: button || null };
   _ops.push(op);
   syncOpState(false);
   require('./timing').record('op-begin', { label: op.label, phase: op.phase, scopes: op.scopes || 'all' });
@@ -111,8 +125,9 @@ function currentOpScopes() {
 // 쓰기 작업의 시작. scopes 는 이 작업이 붙잡는 자원(actions.SCOPE 값들)이며,
 // 넘기지 않으면 전부 붙잡는 것으로 취급된다 — 즉 예전과 같은 전면 차단이다.
 // 반환값을 stopSpinner 에 넘기면 겹쳐 도는 작업 중 자기 것만 정확히 끝낼 수 있다.
-function startSpinner(msg, scopes) {
-  const op = beginOp(msg, scopes, 'running');
+// button 은 beginOp 참고 — 화면 버튼과 같은 일을 하는 작업만 넘긴다.
+function startSpinner(msg, scopes, button) {
+  const op = beginOp(msg, scopes, 'running', button);
   acquireSpinner();
   // 동기 블로킹 작업 전에 스피너를 즉시 화면에 표시
   const { render } = require('./render');
@@ -123,8 +138,23 @@ function startSpinner(msg, scopes) {
 // 뒷정리 갱신을 원래 작업과 같은 자원을 쥔 채로 이어 등록한다. scopes 를 넘기지
 // 않으면 아직 살아 있는 running 작업의 것을 물려받는다 — refreshInBackground 가
 // stopSpinner 보다 먼저 불리므로(afterGitOp 순서) 그 시점엔 원래 작업이 남아 있다.
-function startSettleOp(label, scopes) {
-  return beginOp(label, scopes !== undefined ? scopes : currentOpScopes(), 'settling');
+// button 은 원래 작업의 것을 호출부가 그대로 넘긴다. 뒷정리 갱신까지가 한 동작이므로
+// (타이틀도 그동안 "Fetching..."을 이어 낸다) 버튼도 그때까지 눌려 있어야 한다.
+// scopes 처럼 "가장 나중의 running 작업"에서 물려받지 않는 이유: 그사이 겹쳐 시작된
+// 다른 버튼의 작업이 있으면 엉뚱한 버튼이 눌린다.
+function startSettleOp(label, scopes, button) {
+  return beginOp(label, scopes !== undefined ? scopes : currentOpScopes(), 'settling', button);
+}
+
+// 이 버튼이 시킨 작업이 아직 도는가 — 뒷정리 갱신까지 포함한다.
+function isButtonBusy(button) {
+  return !!button && _ops.some(o => o.button === button);
+}
+
+// 같은 종류의 버튼 중 하나라도 눌려 있는가 — 버튼 id 가 대상까지 담는 경우(hunk 버튼은
+// 'hunk-apply:<종류>:<파일>:<번호>')에 그 종류 전체의 배치를 맞추는 데 쓴다.
+function isAnyButtonBusy(prefix) {
+  return _ops.some(o => typeof o.button === 'string' && o.button.startsWith(prefix));
 }
 
 function endSettleOp(op) {
@@ -267,7 +297,7 @@ function resetOps() {
 
 module.exports = {
   BRAILLE_FRAMES, startSpinner, updateSpinner, stopSpinner,
-  startSettleOp, endSettleOp, currentOpScopes, resetOps,
+  startSettleOp, endSettleOp, currentOpScopes, resetOps, isButtonBusy, isAnyButtonBusy,
   acquireSpinner, releaseSpinner, isSpinning, isWriteOpActive, guardWriteOp,
   flashBusy, showToast, beginPanelLoading, endPanelLoading, panelLoadingLabel,
 };

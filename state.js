@@ -152,6 +152,10 @@ const ui = {
   middlePanelCollapsed: false,
   rightPanelCollapsed: false,
   titleClickZones: [],
+  // 눌린 상단 버튼의 스피너 칸 { row, col, style } — 스피너 틱이 화면 전체 대신 이 칸만 다시 쓴다
+  // (render.repaintButtonSpinners). 매 프레임 새로 적는다.
+  buttonSpinnerCells: [],
+  imeCursor: null,               // 커밋 메시지 입력 중의 커서 자리 { row, col } — 위 덮어쓰기 뒤에 돌려놓는다
   repoSetupClickZones: [],       // 비저장소 첫 화면의 Init/Open/Clone 버튼
   hoveredRepoSetupAction: null,
   leftTabZones: [],
